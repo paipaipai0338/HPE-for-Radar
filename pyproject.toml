@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "huawei-mmwave"
+version = "0.1.0"
+description = "Editable local package for Huawei mmWave pose project."
+requires-python = ">=3.8"
+
+[tool.setuptools.packages.find]
+where = ["."]
+namespaces = true
+include = [
+    "data2datasets*",
+    "experiments*",
+    "losses*",
+    "metrics*",
+    "models*",
+    "preprocess*",
+    "run*",
+    "utils*",
+]

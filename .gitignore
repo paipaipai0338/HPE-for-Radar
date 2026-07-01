@@ -1,0 +1,64 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging and build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Logs and process output
+*.log
+nohup.out
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Experiment outputs and model artifacts
+experiments/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# Data and generated media
+data/
+datasets/
+outputs/
+results/
+temp/
+tmp/
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.avi

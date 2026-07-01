@@ -1,0 +1,56 @@
+experiment:
+  description: P4Transformer baseline using high radar point cloud
+  output_path: /home/pai/Huawei/experiments
+
+data:
+    root_path: /mnt/huawei
+    base_source: radar_high_pc
+    ratio: 0.7
+    T: 8
+    split_method: group
+    max_points: 300
+    max_people: 4
+    num_workers: 8
+    preload_cache: true
+    sensor_config:
+        lidar: false
+        radar_low_bin: false
+        radar_high_bin: false
+        radar_low_pc: false
+        radar_high_pc: true
+        gt: true
+        realsense: false
+
+model:
+    name: P4Transformer
+
+task:
+    stage: val
+    input: radar_high_pc
+    output: gt_for_high
+    device: 1
+    seed: 42
+    batch_size: 64
+    train:
+        epoch: 500
+        init_lr: 0.001
+        warmup_epoch: 10
+        resume:
+          enabled: false
+          checkpoint_path: null
+        metrics: 
+            MPJPE: 1
+            PAMPJPE: 0
+            BCE: 1
+            Bone_Length: 0
+        best_metric: MPJPE
+            
+        shuffle: true
+    val:
+        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260627_235419/checkpoint/best.pth
+        shuffle: false
+        metrics: 
+            MPJPE: 1
+            PAMPJPE: 0
+            BCE: 1
+            Bone_Length: 0
