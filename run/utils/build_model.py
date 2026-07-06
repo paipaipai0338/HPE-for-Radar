@@ -7,6 +7,7 @@ from run.utils.load_config import load_config
 def build_model(model_name):
     model_dirs = {
         'P4Transformer': 'models/P4Transformer',
+        'RPM2': 'models/RPM2'
     }
 
     if model_name not in model_dirs:

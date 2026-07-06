@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from utils.COCO import COCO_SKELETON
 
-def get_BCE(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-12) -> torch.tensor:
+def get_bce(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-12) -> torch.tensor:
     '''由于模型人数不定，预先给出最大估计人数 max_people，人数需要依赖模型输出的confidence判决'''
     if confidence.shape != gt_mask.shape:
         raise ValueError(
@@ -26,7 +26,28 @@ def get_BCE(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-12) -
     confidence = torch.clamp(confidence, eps, 1 - eps)
     BCE = F.binary_cross_entropy(confidence, gt_mask, reduction='none')
     return BCE
+
+def get_detection_metric(confidence: torch.tensor, gt_mask: torch.tensor, ratio: float=0.5, eps: float=1e-12) -> torch.tensor:
+    '''判断模型识别人体存在的准确率'''
+    # B, T, K
+    confidence = confidence.float()
+    gt_mask = gt_mask.float()
     
+    pred_mask = (confidence >= ratio).float()
+    
+    TP = torch.sum((pred_mask == 1) & (gt_mask == 1)).float()  # 预测有人，实际有人
+    FP = torch.sum((pred_mask == 1) & (gt_mask == 0)).float()  # 预测有人，实际无人（误检）
+    FN = torch.sum((pred_mask == 0) & (gt_mask == 1)).float()  # 预测无人，实际有人（漏检） -> 补全这里
+    TN = torch.sum((pred_mask == 0) & (gt_mask == 0)).float()  # 预测无人，实际无人（虽然少用，但一并算出）
+    
+    total = TP + FP + FN + TN
+    
+    accuracy = (TP + TN) / (total + eps)
+    precision = TP / (TP + FP + eps)
+    recall = TP / (TP + FN + eps)
+    f1 = 2 * (precision * recall) / (precision + recall + eps)
+
+    return accuracy, precision, recall, f1
 
 def get_mpjpe(pre: torch.tensor, gt:torch.tensor, type:str) -> torch.tensor:
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
@@ -110,6 +131,6 @@ if __name__ == '__main__':
     print('pampjpe', pampjpe.shape)
     bone_length = get_bone_length(pre, gt, type='COco')
     print('bone_length', bone_length.shape)
-    bce = get_BCE(confidence, gt_mask)
+    bce = get_bce(confidence, gt_mask)
     print('bce', bce.shape)
 

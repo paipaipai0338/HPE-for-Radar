@@ -1,5 +1,5 @@
 import torch
-from metrics.pose import get_mpjpe, get_pampjpe, get_bone_length, get_BCE
+from metrics.pose import get_mpjpe, get_pampjpe, get_bone_length, get_bce
 
 
 def _masked_mean_over_people(metric, mask):
@@ -26,7 +26,7 @@ class Metric:
             'mpjpe': get_mpjpe,
             'pampjpe': get_pampjpe,
             'bone_length': get_bone_length,
-            'bce': get_BCE,
+            'bce': get_bce,
         }
         # 获取当前配置指标与权重
         self.cfg_metrics = {

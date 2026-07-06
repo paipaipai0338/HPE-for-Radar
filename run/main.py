@@ -188,10 +188,12 @@ def main():
         pose_gt = []
         pose_confidence = []
         gt_valid = []
+        pc = []
+        pc_valid = []
 
         model.eval()
         with torch.no_grad():
-            for samples in tqdm(dataloader['train'], total=len(dataloader['train'])):
+            for samples in tqdm(dataloader['val'], total=len(dataloader['val'])):
                 input_key = cfg_task['input']
                 model_input = {}
                 if 'pc' in input_key:
@@ -208,17 +210,139 @@ def main():
 
                 pre = model(model_input)
 
-                pose_pre.append(pre['pose'].detach().cpu().numpy())
-                pose_confidence.append(pre['confidence'].detach().cpu().numpy())
-                pose_gt.append(gt['padded'].detach().cpu().numpy())
-                gt_valid.append(gt['mask'].detach().cpu().numpy())
-        pose_pre = np.concatenate(pose_pre, axis=0)
-        pose_confidence = np.concatenate(pose_confidence, axis=0)
-        pose_gt = np.concatenate(pose_gt, axis=0)
-        gt_valid = np.concatenate(gt_valid, axis=0)
+                pc.append(model_input['input'].detach().cpu())
+                pc_valid.append(model_input['mask'].detach().cpu())
+                pose_pre.append(pre['pose'].detach().cpu())
+                pose_confidence.append(pre['confidence'].detach().cpu())
+                pose_gt.append(gt['padded'].detach().cpu())
+                gt_valid.append(gt['mask'].detach().cpu())
+        pc = torch.concatenate(pc, dim=0)
+        pc_valid = torch.concatenate(pc_valid, dim=0)
+        pose_pre = torch.concatenate(pose_pre, dim=0)
+        pose_confidence = torch.concatenate(pose_confidence, dim=0)
+        pose_gt = torch.concatenate(pose_gt, dim=0)
+        gt_valid = torch.concatenate(gt_valid, dim=0)
 
-        mpjpe = np.mean(np.linalg.norm((pose_pre - pose_gt)*gt_valid[..., None, None], axis=-1), axis=-1)
-        print(mpjpe.sum() / gt_valid.sum())
+        from metrics.pose import get_bce, get_detection_metric, get_mpjpe, get_pampjpe
+        ratio = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        bce = get_bce(pose_confidence, gt_valid).mean()
+        mpjpe = get_mpjpe(pose_pre, pose_gt, type='coco')
+        pampjpe = get_pampjpe(pose_pre, pose_gt, type='coco')
+        gt_mask = gt_valid.bool()
+        gt_num = int(gt_mask.sum().item())
+        if gt_num > 0:
+            mpjpe_gt = mpjpe.masked_select(gt_mask).mean().item()
+            pampjpe_gt = pampjpe.masked_select(gt_mask).mean().item()
+        else:
+            mpjpe_gt = float('nan')
+            pampjpe_gt = float('nan')
+
+        print(f"val bce: {bce.item():.6f}")
+        print(f"val mpjpe(gt): {mpjpe_gt:.6f}")
+        print(f"val pampjpe(gt): {pampjpe_gt:.6f}")
+        print("ratio | acc | precision | recall | f1 | mpjpe@success | pampjpe@success | success_num")
+        for r in ratio + [1.0]:
+            acc, precision, recall, f1 = get_detection_metric(pose_confidence, gt_valid, ratio=r)
+            success_mask = (pose_confidence >= r) & gt_valid.bool()
+            success_num = int(success_mask.sum().item())
+
+            if success_num > 0:
+                mpjpe_success = mpjpe.masked_select(success_mask).mean().item()
+                pampjpe_success = pampjpe.masked_select(success_mask).mean().item()
+                mpjpe_text = f"{mpjpe_success:.6f}"
+                pampjpe_text = f"{pampjpe_success:.6f}"
+            else:
+                mpjpe_text = "nan"
+                pampjpe_text = "nan"
+
+            print(
+                f"{r:.1f} | "
+                f"{acc.item():.6f} | "
+                f"{precision.item():.6f} | "
+                f"{recall.item():.6f} | "
+                f"{f1.item():.6f} | "
+                f"{mpjpe_text} | "
+                f"{pampjpe_text} | "
+                f"{success_num}"
+            )
+
+        '''temp 测试使用'''
+        from matplotlib import pyplot as plt
+        from utils.COCO import COCO_SKELETON
+        frame_mask = gt_valid.sum(dim=-1).bool()
+        pc_frame = pc[frame_mask]
+        pc_valid_frame = pc_valid[frame_mask]
+        pose_gt_frame = pose_gt[frame_mask]
+        pose_pre_frame = pose_pre[frame_mask]
+        gt_valid_frame = gt_valid[frame_mask]
+        mpjpe_frame = mpjpe[frame_mask]
+        pose_confidence_frame = pose_confidence[frame_mask]
+
+        for k in range(pose_gt_frame.shape[0]):
+            pc_xyz = pc_frame[k][pc_valid_frame[k]][:, :3]
+            pc_xyz = pc_xyz[torch.isfinite(pc_xyz).all(dim=-1)]
+            person_mask = gt_valid_frame[k].bool()
+            pose_gt_valid = pose_gt_frame[k][person_mask]
+            pose_pre_valid = pose_pre_frame[k][person_mask]
+            mpjpe_valid = mpjpe_frame[k][person_mask]
+            pose_confidence_valid = pose_confidence_frame[k][person_mask]
+
+            fig = plt.figure()
+            ax = plt.subplot(111, projection='3d')
+            if pc_xyz.shape[0] > 0:
+                ax.scatter(
+                    pc_xyz[:, 0], pc_xyz[:, 1], pc_xyz[:, 2], s=2,
+                    c='green', label='PC'
+                )
+
+            for person_idx in range(pose_gt_valid.shape[0]):
+                gt_person = pose_gt_valid[person_idx]
+                pre_person = pose_pre_valid[person_idx]
+                gt_label = 'GT' if person_idx == 0 else None
+                pre_label = 'PRE' if person_idx == 0 else None
+
+                ax.scatter(
+                    gt_person[:, 0], gt_person[:, 1], gt_person[:, 2], s=5,
+                    c='red', label=gt_label
+                )
+                for joint_a, joint_b in COCO_SKELETON:
+                    ax.plot(
+                        [gt_person[joint_a, 0], gt_person[joint_b, 0]],
+                        [gt_person[joint_a, 1], gt_person[joint_b, 1]],
+                        [gt_person[joint_a, 2], gt_person[joint_b, 2]],
+                        color='red',
+                        linewidth=1.5,
+                    )
+
+                ax.scatter(
+                    pre_person[:, 0], pre_person[:, 1], pre_person[:, 2], s=5,
+                    c='blue', label=pre_label
+                )
+                for joint_a, joint_b in COCO_SKELETON:
+                    ax.plot(
+                        [pre_person[joint_a, 0], pre_person[joint_b, 0]],
+                        [pre_person[joint_a, 1], pre_person[joint_b, 1]],
+                        [pre_person[joint_a, 2], pre_person[joint_b, 2]],
+                        color='blue',
+                        linewidth=1.5,
+                    )
+
+            ax.set_xlim(0.0, 6.0)
+            ax.set_ylim(-3.0, 3.0)
+            ax.set_zlim(-3.0, 3.0)
+            ax.set_xlabel('X (m)')
+            ax.set_ylabel('Y (m)')
+            ax.set_zlabel('Z (m)')
+            mpjpe_text = ', '.join([f'{value.item():.4f}' for value in mpjpe_valid])
+            confidence_text = ', '.join([f'{value.item():.4f}' for value in pose_confidence_valid])
+            ax.set_title(f"Frame:{k} People:{pose_gt_valid.shape[0]}\nMPJPE:{mpjpe_text}\nConfidence:{confidence_text}")
+            ax.legend()
+
+            fig.tight_layout()
+            fig.savefig('/home/pai/Huawei/temp.png', dpi=400)
+            plt.show(block=False)
+            plt.pause(0.1)
+            plt.close(fig)
     else:
         raise ValueError(f"cfg_task['stage'] dismatched, got {cfg_task['stage']}")
 
