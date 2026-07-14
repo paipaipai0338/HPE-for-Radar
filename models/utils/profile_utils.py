@@ -76,10 +76,12 @@ def profile_model(model_name, model, x, warmup=20, repeat=100):
     try:
         from thop import profile
 
-        flops, params = profile(model, inputs=(x,), verbose=False)
-        flops_m = flops / 1000 ** 2
+        macs, params = profile(model, inputs=(x,), verbose=False)
+        macs_m = macs / 1000 ** 2
+        flops_m = 2 * macs_m
         params_m = params / 1000 ** 2
     except Exception as exc:
+        macs_m = None
         flops_m = None
         params_m = sum(p.numel() for p in model.parameters()) / 1000 ** 2
         print(f"THOP_ERROR = {type(exc).__name__}: {exc}")
@@ -90,6 +92,7 @@ def profile_model(model_name, model, x, warmup=20, repeat=100):
     print(f"Input shape = {_output_shape(x)}")
     print(f"Output shape = {_output_shape(output)}")
     print(f"FLOPs = {'N/A' if flops_m is None else f'{flops_m:.6f}'} M")
+    print(f"MACs = {'N/A' if macs_m is None else f'{macs_m:.6f}'} M")
     print(f"Params = {params_m:.6f} M")
     print(f"Inference time = {infer_ms:.6f} ms/sample")
     if peak_allocated_mb is None:

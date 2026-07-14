@@ -46,9 +46,9 @@ class HPE_Dataset(Dataset):
         # 定义传感器，是否选取该传感器
         self.sensor_config = {
             'lidar': False,
-            'radar_low_bin': True,
+            'radar_low_bin': False,
             'radar_high_bin': True,
-            'radar_low_pc': True,
+            'radar_low_pc': False,
             'radar_high_pc': True,
             'gt': True,
             'realsense': False,
@@ -74,27 +74,41 @@ class HPE_Dataset(Dataset):
         # 更新 meta_info
         self._build_aligned_data()
         
-        # 数据划分 TODO：person, sequence
+        # 数据划分 TODO：sequence
         self.meta_info_splited = {'train': copy.deepcopy(self.meta_info), 'val': copy.deepcopy(self.meta_info)}
         if split_method == 'person':
             # 按人来划分
-            pass
+            train_person_ids = {'0', '1', '2', '3', '5'}
+            val_person_ids = {'4'}
+
+            self.meta_info_splited['train'] = {
+                person_id: person_data
+                for person_id, person_data in self.meta_info.items()
+                if person_id in train_person_ids
+            }
+            self.meta_info_splited['val'] = {
+                person_id: person_data
+                for person_id, person_data in self.meta_info.items()
+                if person_id in val_person_ids
+            } 
+
         elif split_method == 'group':
             # 按照组来划分
+            rng = random.Random(42)
             for person, person_data in self.meta_info.items():
                 for idx, entry in enumerate(person_data):
-                    valid_group = entry['valid_group']
-
-                    self.meta_info_splited['train'][person][idx]['valid_group'] = self.meta_info_splited['train'][person][idx]['valid_group'][:int(ratio*len(valid_group))]
+                    valid_group = entry['valid_group'].copy()
+                    rng.shuffle(valid_group)
+                    self.meta_info_splited['train'][person][idx]['valid_group'] = valid_group[:int(ratio*len(valid_group))]
                     self.meta_info_splited['train'][person][idx]['group_data_path'] = {k: self.meta_info_splited['train'][person][idx]['group_data_path'][k] for k in self.meta_info_splited['train'][person][idx]['valid_group']}
-                    self.meta_info_splited['val'][person][idx]['valid_group'] = self.meta_info_splited['val'][person][idx]['valid_group'][int(ratio*len(valid_group)):]
+                    self.meta_info_splited['val'][person][idx]['valid_group'] = valid_group[int(ratio*len(valid_group)):]
                     self.meta_info_splited['val'][person][idx]['group_data_path'] = {k: self.meta_info_splited['val'][person][idx]['group_data_path'][k] for k in self.meta_info_splited['val'][person][idx]['valid_group']}
         elif split_method == 'sequence':
             # 按照序列来划分
             pass
         self._display_meta_info(self.meta_info)
-        self._display_meta_info(self.meta_info_splited['train'])
-        self._display_meta_info(self.meta_info_splited['val'])
+        # self._display_meta_info(self.meta_info_splited['train'])
+        # self._display_meta_info(self.meta_info_splited['val'])
 
         # meta_info 展平按 T 划分
         self.mode_meta_info = self.meta_info_splited[mode]
@@ -200,7 +214,6 @@ class HPE_Dataset(Dataset):
         self.npy_valid_cache[file_path] = valid
 
         return valid
-
 
     def _is_valid_window(
         self,
@@ -979,18 +992,29 @@ class HPE_Dataset(Dataset):
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
-    from preprocess.radarprocess import Radar_Config, get_radar_res
+    from matplotlib.patches import Rectangle
+    from preprocess.gtprocess import get_gt_detection_targets
+    from preprocess.radarprocess import Radar_Config, get_radar_res, range_cube_to_doppler_cube
     from preprocess.radarprocess_RPM2 import SingleRadarProjectionConfig, range_cube_to_rpm_projection_maps, power_to_db
 
     root_path = '/mnt/huawei'
     T = 4
-    b, t = 0, 1
-    clutter_mode = 'frame_difference'
-    xy_x_limits = (0.1, 5.0)
+    b = 0
+    projection_t_to_plot = 0
+    clutter_mode = 'chirp_mean'
+    # 因此对应 raw_t=1；其他模式的投影与原始帧同索引。
+    projection_time_start = 1 if clutter_mode == 'frame_difference' else 0
+    t = projection_t_to_plot + projection_time_start
+    if not 0 <= t < T:
+        raise IndexError(
+            f'待绘制投影帧超出时间范围：projection_t={projection_t_to_plot}, '
+            f'raw_t={t}, T={T}'
+        )
+    xy_x_limits = (0, 5.0)
     xy_y_limits = (-2.0, 2.0)
-    xz_x_limits = (0.1, 5.0)
+    xz_x_limits = (0, 5.0)
     xz_z_limits = (-1.5, 1.5)
-    range_plot_limits = (0.1, 5.0)
+    range_plot_limits = (0, 5.0)
     pc_3d_x_limits = (0.0, 6.0)
     pc_3d_y_limits = (-3.0, 3.0)
     pc_3d_z_limits = (-3.0, 3.0)
@@ -1025,68 +1049,51 @@ if __name__ == '__main__':
         # =========================================================
 
         # Range FFT cube
-        range_cube_low = samples['radar_low_bin']
+        # range_cube_low = samples['radar_low_bin']
         range_cube_high = samples['radar_high_bin']
 
         # 点云
-        pc_low_mask = samples['radar_low_pc']['mask'][b, t].bool()
+        # pc_low_mask = samples['radar_low_pc']['mask'][b, t].bool()
         pc_high_mask = samples['radar_high_pc']['mask'][b, t].bool()
 
-        pc_low_valid = samples['radar_low_pc']['padded'][b, t][pc_low_mask]
+        # pc_low_valid = samples['radar_low_pc']['padded'][b, t][pc_low_mask]
         pc_high_valid = samples['radar_high_pc']['padded'][b, t][pc_high_mask]
 
         # GT
-        gt_low_mask = samples['gt_for_low']['mask'][b, t].bool()
+        # gt_low_mask = samples['gt_for_low']['mask'][b, t].bool()
         gt_high_mask = samples['gt_for_high']['mask'][b, t].bool()
 
-        gt_low = samples['gt_for_low']['padded'][b, t][gt_low_mask]
+        # gt_low = samples['gt_for_low']['padded'][b, t][gt_low_mask]
         gt_high = samples['gt_for_high']['padded'][b, t][gt_high_mask]
 
+        target_kwargs = {
+            'heatmap_shape': (64, 64),
+            'xy_limits': (xy_x_limits, xy_y_limits),
+        }
+        high_targets = get_gt_detection_targets(
+            samples['gt_for_high']['padded'][b:b + 1, t:t + 1],
+            samples['gt_for_high']['mask'][b:b + 1, t:t + 1],
+            **target_kwargs,
+        )
+
+        center_heatmap_high = high_targets[0][0, 0, 0].detach().cpu().numpy()
+        center_indices_high = high_targets[1][0, 0].detach().cpu().numpy()
+        center_offsets_high = high_targets[2][0, 0].detach().cpu().numpy()
+        box_sizes_high = high_targets[3][0, 0].detach().cpu().numpy()
+        detection_mask_high = high_targets[4][0, 0].detach().cpu().numpy()
+
         # 转为 numpy
-        pc_low_valid = pc_low_valid.detach().cpu().numpy()
         pc_high_valid = pc_high_valid.detach().cpu().numpy()
-        gt_low = gt_low.detach().cpu().numpy()
         gt_high = gt_high.detach().cpu().numpy()
 
         # 只保留点云 xyz，并删除 NaN/Inf
-        pc_low_valid_xyz = pc_low_valid[:, :3]
         pc_high_valid_xyz = pc_high_valid[:, :3]
 
-        pc_low_valid_xyz = pc_low_valid_xyz[np.isfinite(pc_low_valid_xyz).all(axis=1)]
         pc_high_valid_xyz = pc_high_valid_xyz[np.isfinite(pc_high_valid_xyz).all(axis=1)]
 
         # =========================================================
         # 点云绘制范围过滤
         # =========================================================
-
-        # 低位雷达水平 x-y 投影范围
-        pc_low_xy_mask = (
-            (pc_low_valid_xyz[:, 0] >= xy_x_limits[0])
-            & (pc_low_valid_xyz[:, 0] <= xy_x_limits[1])
-            & (pc_low_valid_xyz[:, 1] >= xy_y_limits[0])
-            & (pc_low_valid_xyz[:, 1] <= xy_y_limits[1])
-        )
-        pc_low_xy = pc_low_valid_xyz[pc_low_xy_mask]
-
-        # 低位雷达垂直 x-z 投影范围
-        pc_low_xz_mask = (
-            (pc_low_valid_xyz[:, 0] >= xz_x_limits[0])
-            & (pc_low_valid_xyz[:, 0] <= xz_x_limits[1])
-            & (pc_low_valid_xyz[:, 2] >= xz_z_limits[0])
-            & (pc_low_valid_xyz[:, 2] <= xz_z_limits[1])
-        )
-        pc_low_xz = pc_low_valid_xyz[pc_low_xz_mask]
-
-        # 低位雷达三维显示范围
-        pc_low_3d_mask = (
-            (pc_low_valid_xyz[:, 0] >= pc_3d_x_limits[0])
-            & (pc_low_valid_xyz[:, 0] <= pc_3d_x_limits[1])
-            & (pc_low_valid_xyz[:, 1] >= pc_3d_y_limits[0])
-            & (pc_low_valid_xyz[:, 1] <= pc_3d_y_limits[1])
-            & (pc_low_valid_xyz[:, 2] >= pc_3d_z_limits[0])
-            & (pc_low_valid_xyz[:, 2] <= pc_3d_z_limits[1])
-        )
-        pc_low_3d = pc_low_valid_xyz[pc_low_3d_mask]
 
         # 高位雷达水平 x-y 投影范围
         pc_high_xy_mask = (
@@ -1120,16 +1127,9 @@ if __name__ == '__main__':
         # =========================================================
         # Range axis
         # =========================================================
-        _, _, R_low, _, _ = range_cube_low.shape
         _, _, R_high, _, _ = range_cube_high.shape
 
         range_res, _, _, _ = get_radar_res(radar_config)
-
-        range_axis_low = torch.arange(
-            R_low,
-            device=range_cube_low.device,
-            dtype=torch.float32,
-        ) * range_res
 
         range_axis_high = torch.arange(
             R_high,
@@ -1140,18 +1140,6 @@ if __name__ == '__main__':
         # =========================================================
         # RPM 投影
         # =========================================================
-        projection_low = range_cube_to_rpm_projection_maps(
-            range_cube=range_cube_low,
-            range_axis=range_axis_low,
-            wavelength=radar_config.lam,
-            projection_config=projection_config,
-            xy_limits=(xy_x_limits, xy_y_limits),
-            xz_limits=(xz_x_limits, xz_z_limits),
-            xy_size=(256, 256),
-            xz_size=(256, 256),
-            clutter_mode=clutter_mode,
-        )
-
         projection_high = range_cube_to_rpm_projection_maps(
             range_cube=range_cube_high,
             range_axis=range_axis_high,
@@ -1167,14 +1155,13 @@ if __name__ == '__main__':
         # =========================================================
         # 投影时间索引
         # =========================================================
-        projection_t_low = t - projection_low.time_start_index
         projection_t_high = t - projection_high.time_start_index
 
-        if not 0 <= projection_t_low < projection_low.horizontal_xy_power.shape[1]:
-            raise IndexError(
-                f'低位雷达时间索引错误：raw_t={t}, '
-                f'projection_t={projection_t_low}, '
-                f'time_start_index={projection_low.time_start_index}'
+        if projection_t_high != projection_t_to_plot:
+            raise RuntimeError(
+                f'高位雷达投影时间起点与 clutter_mode 不匹配：'
+                f'expected={projection_time_start}, '
+                f'actual={projection_high.time_start_index}'
             )
 
         if not 0 <= projection_t_high < projection_high.horizontal_xy_power.shape[1]:
@@ -1187,11 +1174,6 @@ if __name__ == '__main__':
         # =========================================================
         # 投影功率转相对 dB
         # =========================================================
-        horizontal_xy_db_low = power_to_db(projection_low.horizontal_xy_power[b, projection_t_low])
-        vertical_xz_db_low = power_to_db(projection_low.vertical_xz_power[b, projection_t_low])
-        range_azimuth_db_low = power_to_db(projection_low.range_azimuth_power[b, projection_t_low])
-        range_elevation_db_low = power_to_db(projection_low.range_elevation_power[b, projection_t_low])
-
         horizontal_xy_db_high = power_to_db(projection_high.horizontal_xy_power[b, projection_t_high])
         vertical_xz_db_high = power_to_db(projection_high.vertical_xz_power[b, projection_t_high])
         range_azimuth_db_high = power_to_db(projection_high.range_azimuth_power[b, projection_t_high])
@@ -1207,11 +1189,6 @@ if __name__ == '__main__':
         # range_azimuth_db_high = range_azimuth_db_high - range_azimuth_db_high.max()
         # range_elevation_db_high = range_elevation_db_high - range_elevation_db_high.max()
 
-        horizontal_xy_db_low = horizontal_xy_db_low.detach().cpu().numpy()
-        vertical_xz_db_low = vertical_xz_db_low.detach().cpu().numpy()
-        range_azimuth_db_low = range_azimuth_db_low.detach().cpu().numpy()
-        range_elevation_db_low = range_elevation_db_low.detach().cpu().numpy()
-
         horizontal_xy_db_high = horizontal_xy_db_high.detach().cpu().numpy()
         vertical_xz_db_high = vertical_xz_db_high.detach().cpu().numpy()
         range_azimuth_db_high = range_azimuth_db_high.detach().cpu().numpy()
@@ -1220,14 +1197,6 @@ if __name__ == '__main__':
         # =========================================================
         # 投影坐标轴
         # =========================================================
-        x_axis_xy_low = projection_low.horizontal_x_axis.detach().cpu().numpy()
-        y_axis_low = projection_low.horizontal_y_axis.detach().cpu().numpy()
-        x_axis_xz_low = projection_low.vertical_x_axis.detach().cpu().numpy()
-        z_axis_low = projection_low.vertical_z_axis.detach().cpu().numpy()
-        range_axis_low_np = projection_low.range_axis.detach().cpu().numpy()
-        azimuth_axis_deg_low = np.rad2deg(projection_low.azimuth_axis_rad.detach().cpu().numpy())
-        elevation_axis_deg_low = np.rad2deg(projection_low.elevation_axis_rad.detach().cpu().numpy())
-
         x_axis_xy_high = projection_high.horizontal_x_axis.detach().cpu().numpy()
         y_axis_high = projection_high.horizontal_y_axis.detach().cpu().numpy()
         x_axis_xz_high = projection_high.vertical_x_axis.detach().cpu().numpy()
@@ -1239,26 +1208,6 @@ if __name__ == '__main__':
         # =========================================================
         # 点云转换到 Range-Azimuth / Range-Elevation 坐标
         # =========================================================
-        pc_low_range = np.linalg.norm(pc_low_valid_xyz, axis=1)
-        pc_low_angle_mask = pc_low_range > 1e-6
-        pc_low_angle_xyz = pc_low_valid_xyz[pc_low_angle_mask]
-        pc_low_range = pc_low_range[pc_low_angle_mask]
-        pc_low_azimuth_deg = np.rad2deg(np.arcsin(np.clip(pc_low_angle_xyz[:, 1] / pc_low_range, -1.0, 1.0)))
-        pc_low_elevation_deg = np.rad2deg(np.arcsin(np.clip(pc_low_angle_xyz[:, 2] / pc_low_range, -1.0, 1.0)))
-
-        pc_low_ra_mask = (
-            (pc_low_range >= range_plot_limits[0])
-            & (pc_low_range <= range_plot_limits[1])
-            & (pc_low_azimuth_deg >= azimuth_axis_deg_low[0])
-            & (pc_low_azimuth_deg <= azimuth_axis_deg_low[-1])
-        )
-        pc_low_re_mask = (
-            (pc_low_range >= range_plot_limits[0])
-            & (pc_low_range <= range_plot_limits[1])
-            & (pc_low_elevation_deg >= elevation_axis_deg_low[0])
-            & (pc_low_elevation_deg <= elevation_axis_deg_low[-1])
-        )
-
         pc_high_range = np.linalg.norm(pc_high_valid_xyz, axis=1)
         pc_high_angle_mask = pc_high_range > 1e-6
         pc_high_angle_xyz = pc_high_valid_xyz[pc_high_angle_mask]
@@ -1287,39 +1236,26 @@ if __name__ == '__main__':
         print("="*50)
         
         # Range cube shape
-        print(f"range_cube_low shape: {range_cube_low.shape}")  # [B, T, R, Az, El]
         print(f"range_cube_high shape: {range_cube_high.shape}")
         
         # Point cloud shape
-        print(f"pc_low_valid shape: {pc_low_valid.shape}")  # [N, 4+]
         print(f"pc_high_valid shape: {pc_high_valid.shape}")
-        print(f"pc_low_valid_xyz shape: {pc_low_valid_xyz.shape}")  # [N, 3]
         print(f"pc_high_valid_xyz shape: {pc_high_valid_xyz.shape}")
         
         # GT shape
-        print(f"gt_low shape: {gt_low.shape}")  # [P, J, 3]
         print(f"gt_high shape: {gt_high.shape}")
         
         # 过滤后的点云shape
-        print(f"pc_low_xy shape: {pc_low_xy.shape}")
-        print(f"pc_low_xz shape: {pc_low_xz.shape}")
         print(f"pc_high_xy shape: {pc_high_xy.shape}")
         print(f"pc_high_xz shape: {pc_high_xz.shape}")
         
         # Projection shapes
-        print(f"horizontal_xy_db_low shape: {horizontal_xy_db_low.shape}")  # [H, W]
-        print(f"vertical_xz_db_low shape: {vertical_xz_db_low.shape}")
-        print(f"range_azimuth_db_low shape: {range_azimuth_db_low.shape}")
-        print(f"range_elevation_db_low shape: {range_elevation_db_low.shape}")
         print(f"horizontal_xy_db_high shape: {horizontal_xy_db_high.shape}")
         print(f"vertical_xz_db_high shape: {vertical_xz_db_high.shape}")
         print(f"range_azimuth_db_high shape: {range_azimuth_db_high.shape}")
         print(f"range_elevation_db_high shape: {range_elevation_db_high.shape}")
         
         # PC in range-azimuth/elevation space
-        print(f"pc_low_range shape: {pc_low_range.shape}")
-        print(f"pc_low_azimuth_deg shape: {pc_low_azimuth_deg.shape}")
-        print(f"pc_low_elevation_deg shape: {pc_low_elevation_deg.shape}")
         print(f"pc_high_range shape: {pc_high_range.shape}")
         print(f"pc_high_azimuth_deg shape: {pc_high_azimuth_deg.shape}")
         print(f"pc_high_elevation_deg shape: {pc_high_elevation_deg.shape}")
@@ -1328,28 +1264,65 @@ if __name__ == '__main__':
         # =========================================================
         # 创建画布
         # =========================================================
-        fig = plt.figure(figsize=(40, 11))
+        fig = plt.figure(figsize=(48, 6))
 
-        ax1 = fig.add_subplot(2, 5, 1)
-        ax2 = fig.add_subplot(2, 5, 2)
-        ax3 = fig.add_subplot(2, 5, 3)
-        ax4 = fig.add_subplot(2, 5, 4)
-        ax5 = fig.add_subplot(2, 5, 5, projection='3d')
+        ax12 = fig.add_subplot(1, 6, 1)
+        ax6 = fig.add_subplot(1, 6, 2)
+        ax7 = fig.add_subplot(1, 6, 3)
+        ax8 = fig.add_subplot(1, 6, 4)
+        ax9 = fig.add_subplot(1, 6, 5)
+        ax10 = fig.add_subplot(1, 6, 6, projection='3d')
 
-        ax6 = fig.add_subplot(2, 5, 6)
-        ax7 = fig.add_subplot(2, 5, 7)
-        ax8 = fig.add_subplot(2, 5, 8)
-        ax9 = fig.add_subplot(2, 5, 9)
-        ax10 = fig.add_subplot(2, 5, 10, projection='3d')
+        def plot_detection_target(ax, heatmap, indices, offsets, box_sizes, mask, title):
+            image = ax.imshow(
+                heatmap,
+                origin='lower',
+                aspect='auto',
+                cmap='hot',
+                vmin=0,
+                vmax=max(1.0, float(heatmap.max())),
+            )
+            for person_idx in np.flatnonzero(mask):
+                row, col = indices[person_idx]
+                d_col, d_row = offsets[person_idx]
+                left, top, right, bottom = box_sizes[person_idx]
+                center_col = col + d_col
+                center_row = row + d_row
+                ax.add_patch(Rectangle(
+                    (center_col - left, center_row - top),
+                    left + right,
+                    top + bottom,
+                    fill=False,
+                    edgecolor='cyan',
+                    linewidth=1.5,
+                ))
+                ax.scatter(center_col, center_row, c='lime', marker='x', s=30)
+                ax.text(center_col, center_row, str(person_idx), color='white', fontsize=8)
+            ax.set_title(title)
+            ax.set_xlabel('Heatmap X / column')
+            ax.set_ylabel('Heatmap Y / row')
+            fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label='Center target')
+
+        """Low-radar visualization is temporarily disabled.
+        plot_detection_target(
+            ax11, center_heatmap_low, center_indices_low, center_offsets_low,
+            box_sizes_low, detection_mask_low, 'radar low detection targets',
+        )
+        """
+        plot_detection_target(
+            ax12, center_heatmap_high, center_indices_high, center_offsets_high,
+            box_sizes_high, detection_mask_high, 'radar high detection targets',
+        )
 
         # =========================================================
         # 低位雷达：水平 x-y 投影（增强散点可见性）
         # =========================================================
+        """Low-radar visualization is temporarily disabled.
         image1 = ax1.imshow(
             horizontal_xy_db_low,
             origin='lower',
             aspect='auto',
-            extent=[float(y_axis_low[0]), float(y_axis_low[-1]), float(x_axis_xy_low[0]), float(x_axis_xy_low[-1])],
+            extent=[float(x_axis_xy_low[0]), float(x_axis_xy_low[-1]), float(y_axis_low[0]), float(y_axis_low[-1])],
             cmap='viridis',
             vmin=-40,
             vmax=40,
@@ -1357,8 +1330,8 @@ if __name__ == '__main__':
 
         if len(pc_low_xy) > 0:
             ax1.scatter(
-                pc_low_xy[:, 1], 
                 pc_low_xy[:, 0], 
+                pc_low_xy[:, 1], 
                 s=8,                    # 增大点尺寸
                 c='yellow', 
                 alpha=0.7,              # 提高不透明度
@@ -1381,8 +1354,8 @@ if __name__ == '__main__':
                 continue
 
             ax1.scatter(
-                joints_xy[:, 1],
                 joints_xy[:, 0],
+                joints_xy[:, 1],
                 s=30,                   # GT点明显增大
                 marker='x',
                 c='red',               # 改为更亮的颜色
@@ -1392,11 +1365,10 @@ if __name__ == '__main__':
             )
 
         ax1.set_title('radar low horizontal x-y projection')
-        ax1.set_xlabel('Y (m, left positive)')
-        ax1.set_ylabel('X (m, forward)')
-        ax1.set_xlim(xy_y_limits)
-        ax1.set_ylim(xy_x_limits)
-        ax1.invert_xaxis()
+        ax1.set_xlabel('X (m, forward)')
+        ax1.set_ylabel('Y (m, left positive)')
+        ax1.set_xlim(xy_x_limits)
+        ax1.set_ylim(xy_y_limits)
         ax1.legend(fontsize=8)          # 添加图例
         fig.colorbar(image1, ax=ax1, fraction=0.046, pad=0.04, label='Normalized power (dB)')
 
@@ -1645,6 +1617,7 @@ if __name__ == '__main__':
         ax5.set_ylabel('Y (m)')
         ax5.set_zlabel('Z (m)')
         ax5.legend(fontsize=7)
+        """
 
         # =========================================================
         # 高位雷达：水平 x-y 投影（增强散点可见性）
@@ -1653,7 +1626,7 @@ if __name__ == '__main__':
             horizontal_xy_db_high,
             origin='lower',
             aspect='auto',
-            extent=[float(y_axis_high[0]), float(y_axis_high[-1]), float(x_axis_xy_high[0]), float(x_axis_xy_high[-1])],
+            extent=[float(x_axis_xy_high[0]), float(x_axis_xy_high[-1]), float(y_axis_high[0]), float(y_axis_high[-1])],
             cmap='viridis',
             vmin=-40,
             vmax=40,
@@ -1661,8 +1634,8 @@ if __name__ == '__main__':
 
         if len(pc_high_xy) > 0:
             ax6.scatter(
-                pc_high_xy[:, 1], 
                 pc_high_xy[:, 0], 
+                pc_high_xy[:, 1], 
                 s=8,                    # 增大点尺寸
                 c='yellow', 
                 alpha=0.7,              # 提高不透明度
@@ -1685,8 +1658,8 @@ if __name__ == '__main__':
                 continue
 
             ax6.scatter(
-                joints_xy[:, 1],
                 joints_xy[:, 0],
+                joints_xy[:, 1],
                 s=30,                   # GT点明显增大
                 marker='x',
                 c='red',               # 改为更亮的颜色
@@ -1696,11 +1669,10 @@ if __name__ == '__main__':
             )
 
         ax6.set_title('radar high horizontal x-y projection')
-        ax6.set_xlabel('Y (m, left positive)')
-        ax6.set_ylabel('X (m, forward)')
-        ax6.set_xlim(xy_y_limits)
-        ax6.set_ylim(xy_x_limits)
-        ax6.invert_xaxis()
+        ax6.set_xlabel('X (m, forward)')
+        ax6.set_ylabel('Y (m, left positive)')
+        ax6.set_xlim(xy_x_limits)
+        ax6.set_ylim(xy_y_limits)
         ax6.legend(fontsize=8)
         fig.colorbar(image6, ax=ax6, fraction=0.046, pad=0.04, label='Normalized power (dB)')
 
@@ -1954,11 +1926,11 @@ if __name__ == '__main__':
         # 保存
         # =========================================================
         fig.suptitle(
-            f'batch {batch_idx}, sample {b}, time {t}, clutter {clutter_mode}'
+            f'radar high, batch {batch_idx}, sample {b}, time {t}, clutter {clutter_mode}'
         )
         fig.tight_layout()
 
-        save_path = 'temp.png'
+        save_path = '/home/pai/Huawei/temp.png'
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
 
@@ -2141,7 +2113,7 @@ if __name__ == '__main__':
 
         # fig.suptitle(f'batch {batch_idx}, sample {b}, time {t}')
         # fig.tight_layout()
-        # save_path = 'temp.png'
+        # save_path = '/home/pai/Huawei/temp.png'
         # fig.savefig(save_path, dpi=150, bbox_inches='tight')
         # plt.close(fig)
 

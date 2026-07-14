@@ -209,8 +209,8 @@ class RPMProjectionOutput:
             [B,T_out,R,K_ele]
 
         horizontal_xy_power:
-            [B,T_out,H_x,W_y]
-            行方向为前向 x，列方向为侧向 y。
+            [B,T_out,H_y,W_x]
+            行方向为侧向 y，列方向为前向 x。
 
         vertical_xz_power:
             [B,T_out,H_z,W_x]
@@ -655,7 +655,7 @@ def range_cube_to_rpm_projection_maps(
         "none",
         "chirp_mean",
         "frame_difference",
-    ] = "frame_difference",
+    ] = "chirp_mean",
 ) -> RPMProjectionOutput:
     """
     从单雷达 Range FFT cube 生成 RPM 风格水平和垂直投影图。
@@ -669,8 +669,9 @@ def range_cube_to_rpm_projection_maps(
         x 为前方，z 为上方。
 
     xy_size:
-        (num_x_pixels, num_y_pixels)。
-        输出 horizontal_xy_power 为 [B,T_out,num_x,num_y]。
+        (num_y_pixels, num_x_pixels)，即标准图像 (H,W)。
+        输出 horizontal_xy_power 为 [B,T_out,num_y,num_x]，
+        其中 row 对应 y，column 对应 x。
 
     xz_size:
         (num_z_pixels, num_x_pixels)。
@@ -736,16 +737,23 @@ def range_cube_to_rpm_projection_maps(
         )
     )
 
-    # 水平图：[B,T_out,X,Y]。
-    horizontal_xy_power, horizontal_x_axis, horizontal_y_axis = (
+    # 水平图内部先生成 [B,T_out,X,Y]。
+    horizontal_xy_forward_first, horizontal_x_axis, horizontal_y_axis = (
         range_angle_to_cartesian_map(
             range_angle_power=range_azimuth_power,
             range_axis=range_axis,
             angle_axis_rad=azimuth_axis_rad,
             forward_limits=xy_limits[0],
             lateral_limits=xy_limits[1],
-            output_size=xy_size,
+            output_size=(xy_size[1], xy_size[0]),
         )
+    )
+
+    # [B,T_out,X,Y] -> [B,T_out,Y,X]，遵循图像 row=y、column=x。
+    horizontal_xy_power = (
+        horizontal_xy_forward_first
+        .transpose(-2, -1)
+        .contiguous()
     )
 
     # 垂直图内部先生成 [B,T_out,X,Z]。

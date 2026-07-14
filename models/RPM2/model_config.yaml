@@ -1,4 +1,5 @@
 inchannels: 3
+crop_size: [32, 32]
 stage2_num_modules: 1
 stage2_num_branches: 2
 stage2_block: BASIC
@@ -27,10 +28,10 @@ stage4_num_modules: 1
 stage4_num_branches: 4
 stage4_block: BASIC
 stage4_num_blocks:
-  - 4
-  - 4
-  - 4
-  - 4
+  - 2
+  - 2
+  - 2
+  - 2
 stage4_num_channels:
   - 18
   - 36

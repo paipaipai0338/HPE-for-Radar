@@ -84,7 +84,7 @@ E_{ver} \in \mathbb{R}^{128 \times H \times W}
 $
 随后 RoIAlign 利用检测中心以及检测框进行裁剪（既统一了输出维度，又避免了RoIPool的取整误差）
 
-随后利用 1D conv 和 embedding将 hor 和 ver 投影到一共共同空间中去，用三种方式聚合特征。
+随后利用 1D conv 和 embedding 将 hor 和 ver 投影到一共共同空间中去，用三种方式聚合特征。
 
 ## Spatio-Temporal Attention Network
 本质上为 transformer，但这里的输入直接断层，莫名其妙多了 J 的维度，假设是通过可学习的 J 个 joint queries 诱导出来的。

@@ -25,7 +25,7 @@ model:
     name: P4Transformer
 
 task:
-    stage: val
+    stage: train
     input: radar_high_pc
     output: gt_for_high
     device: 1
