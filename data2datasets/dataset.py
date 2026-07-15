@@ -804,6 +804,9 @@ class HPE_Dataset(Dataset):
                 f"t_high 应为 [3]，实际为 {t_high.shape}"
             )
 
+        R_hl = R_low @ R_high.T
+        t_hl = t_low - R_hl @ t_high
+
         calib = {
             'gt_to_low': {
                 'R': R_low,
@@ -812,6 +815,10 @@ class HPE_Dataset(Dataset):
             'gt_to_high': {
                 'R': R_high,
                 't': t_high,
+            },
+            'high_to_low': {
+                'R': R_hl,
+                't': t_hl,
             },
         }
 
@@ -985,6 +992,15 @@ class HPE_Dataset(Dataset):
                 t=calib['gt_to_low']['t'],
             )
         )
+
+        samples['high_to_low_R'] = [
+            calib['high_to_low']['R'].copy()
+            for _ in range(self.T)
+        ]
+        samples['high_to_low_t'] = [
+            calib['high_to_low']['t'].copy()
+            for _ in range(self.T)
+        ]
               
         return samples
 

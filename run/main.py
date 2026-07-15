@@ -190,6 +190,8 @@ def main():
         gt_valid = []
         pc = []
         pc_valid = []
+        high_to_low_R = []
+        high_to_low_t = []
 
         model.eval()
         with torch.no_grad():
@@ -216,12 +218,16 @@ def main():
                 pose_confidence.append(pre['confidence'].detach().cpu())
                 pose_gt.append(gt['padded'].detach().cpu())
                 gt_valid.append(gt['mask'].detach().cpu())
+                high_to_low_R.append(samples['high_to_low_R'].detach().cpu())
+                high_to_low_t.append(samples['high_to_low_t'].detach().cpu())
         pc = torch.concatenate(pc, dim=0)
         pc_valid = torch.concatenate(pc_valid, dim=0)
         pose_pre = torch.concatenate(pose_pre, dim=0)
         pose_confidence = torch.concatenate(pose_confidence, dim=0)
         pose_gt = torch.concatenate(pose_gt, dim=0)
         gt_valid = torch.concatenate(gt_valid, dim=0)
+        high_to_low_R = torch.concatenate(high_to_low_R, dim=0)
+        high_to_low_t = torch.concatenate(high_to_low_t, dim=0)
 
         from metrics.pose import get_bce, get_detection_metric, get_mpjpe, get_pampjpe
         ratio = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -277,6 +283,8 @@ def main():
         gt_valid_frame = gt_valid[frame_mask]
         mpjpe_frame = mpjpe[frame_mask]
         pose_confidence_frame = pose_confidence[frame_mask]
+        high_to_low_R = high_to_low_R[frame_mask]
+        high_to_low_t = high_to_low_t[frame_mask]
 
         for k in range(pose_gt_frame.shape[0]):
             pc_xyz = pc_frame[k][pc_valid_frame[k]][:, :3]
@@ -286,6 +294,10 @@ def main():
             pose_pre_valid = pose_pre_frame[k][person_mask]
             mpjpe_valid = mpjpe_frame[k][person_mask]
             pose_confidence_valid = pose_confidence_frame[k][person_mask]
+            high_to_low_R_valid = high_to_low_R[k]
+            high_to_low_t_valid = high_to_low_t[k]
+
+            pc_xyz = (high_to_low_R_valid @ pc_xyz.T + high_to_low_t_valid.reshape(3, 1)).T
 
             fig = plt.figure()
             ax = plt.subplot(111, projection='3d')
@@ -298,6 +310,10 @@ def main():
             for person_idx in range(pose_gt_valid.shape[0]):
                 gt_person = pose_gt_valid[person_idx]
                 pre_person = pose_pre_valid[person_idx]
+
+                gt_person = (high_to_low_R_valid @ gt_person.T + high_to_low_t_valid.reshape(3, 1)).T
+                pre_person = (high_to_low_R_valid @ pre_person.T + high_to_low_t_valid.reshape(3, 1)).T
+
                 gt_label = 'GT' if person_idx == 0 else None
                 pre_label = 'PRE' if person_idx == 0 else None
 
