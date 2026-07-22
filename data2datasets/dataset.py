@@ -107,8 +107,8 @@ class HPE_Dataset(Dataset):
             # 按照序列来划分
             pass
         self._display_meta_info(self.meta_info)
-        # self._display_meta_info(self.meta_info_splited['train'])
-        # self._display_meta_info(self.meta_info_splited['val'])
+        self._display_meta_info(self.meta_info_splited['train'])
+        self._display_meta_info(self.meta_info_splited['val'])
 
         # meta_info 展平按 T 划分
         self.mode_meta_info = self.meta_info_splited[mode]

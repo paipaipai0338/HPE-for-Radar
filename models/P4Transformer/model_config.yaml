@@ -1,5 +1,5 @@
 num_joints: 17
-max_people: 4
+max_people: 1
 feat_dim: 3
 radius: 0.1
 nsamples: 32

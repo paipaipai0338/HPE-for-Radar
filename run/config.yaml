@@ -9,7 +9,7 @@ data:
     T: 8
     split_method: group
     max_points: 300
-    max_people: 4
+    max_people: 1
     num_workers: 8
     preload_cache: true
     sensor_config:
@@ -25,10 +25,10 @@ model:
     name: P4Transformer
 
 task:
-    stage: val
+    stage: train
     input: radar_high_pc
     output: gt_for_high
-    device: 1
+    device: 0
     seed: 42
     batch_size: 64
     train:
@@ -37,20 +37,20 @@ task:
         warmup_epoch: 10
         resume:
           enabled: false
-          checkpoint_path: null
+          checkpoint_path: none
         metrics: 
             MPJPE: 1
             PAMPJPE: 0
-            BCE: 1
+            BCE: 0
             Bone_Length: 0
         best_metric: MPJPE
             
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260714_213834/checkpoint/best.pth
+        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260715_205732/checkpoint/best.pth
         shuffle: true
         metrics: 
             MPJPE: 1
             PAMPJPE: 0
-            BCE: 1
+            BCE: 0
             Bone_Length: 0

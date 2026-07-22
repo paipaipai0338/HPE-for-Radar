@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import List, Sequence
 import numpy as np
 import pickle
 import torch
@@ -25,6 +26,65 @@ def get_gt_boxes(gt: torch.Tensor, gt_mask: torch.Tensor, threshold: float=0.1):
     
     bbox_3d = torch.cat([min_xyz, max_xyz], dim=-1)  # [B, T, K, 6]
     return bbox_3d
+
+
+def get_gt_boxes_list(
+    gt_list: Sequence[np.ndarray],
+    threshold: float = 0.1,
+) -> List[np.ndarray]:
+    """根据逐帧、变长人数的 GT 关节点计算 3D 包围盒。
+
+    Args:
+        gt_list:
+            长度为 T 的序列。每帧 GT 的形状为 ``[P, J, 3]``，其中
+            P 可以随帧变化，也可以为 0。
+        threshold:
+            包围盒在 x、y、z 三个方向上向外扩展的距离。
+
+    Returns:
+        长度为 T 的 list。每帧元素形状为 ``[P, 6]``，最后一维依次为
+        ``[xmin, ymin, zmin, xmax, ymax, zmax]``。对于没有人的帧，返回
+        形状为 ``[0, 6]`` 的数组。
+    """
+    if threshold < 0:
+        raise ValueError(f"threshold 必须大于等于 0，当前为 {threshold}")
+
+    bbox_list = []
+
+    for frame_idx, frame_gt in enumerate(gt_list):
+        frame_gt = np.asarray(frame_gt)
+
+        if frame_gt.ndim != 3 or frame_gt.shape[-1] != 3:
+            raise ValueError(
+                "每帧 GT 必须为 [P, J, 3]，"
+                f"frame_idx={frame_idx}, actual_shape={frame_gt.shape}"
+            )
+
+        num_people, num_joints, _ = frame_gt.shape
+
+        if num_joints == 0:
+            raise ValueError(
+                f"每个人必须至少包含一个关节点，frame_idx={frame_idx}"
+            )
+
+        if num_people == 0:
+            bbox_list.append(
+                np.empty((0, 6), dtype=frame_gt.dtype)
+            )
+            continue
+
+        if not np.isfinite(frame_gt).all():
+            raise ValueError(
+                f"GT 中包含 NaN 或 Inf，frame_idx={frame_idx}"
+            )
+
+        min_xyz = frame_gt.min(axis=1) - threshold
+        max_xyz = frame_gt.max(axis=1) + threshold
+        bbox_list.append(
+            np.concatenate([min_xyz, max_xyz], axis=-1)
+        )
+
+    return bbox_list
 
 def get_gt_detection_targets(
     gt: torch.Tensor,

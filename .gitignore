@@ -23,6 +23,7 @@ dist/
 # Logs and process output
 *.log
 nohup.out
+temp/
 
 # Local config and secrets
 .env

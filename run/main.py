@@ -18,8 +18,11 @@ from run.utils.process_one_epoch import train_one_epoch, val_one_epoch
 from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint
 from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_warmup
 
-from data2datasets.dataset import HPE_Dataset
+# from data2datasets.dataset import HPE_Dataset
+from data2datasets.dataset_for_single import HPE_Dataset
 from data2datasets.utils import collate_pc_gt_fn
+
+# nohup /home/pai/miniconda3/envs/pytorch/bin/python /home/pai/Huawei/run/main.py &
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -228,6 +231,18 @@ def main():
         gt_valid = torch.concatenate(gt_valid, dim=0)
         high_to_low_R = torch.concatenate(high_to_low_R, dim=0)
         high_to_low_t = torch.concatenate(high_to_low_t, dim=0)
+
+        results = {
+            'pc': pc,
+            'pc_valid': pc_valid,
+            'pose_pre': pose_pre,
+            'pose_confidence': pose_confidence,
+            'pose_gt': pose_gt,
+            'gt_valid': gt_valid,
+            'high_to_low_R': high_to_low_R,
+            'high_to_low_t': high_to_low_t,
+        }
+        torch.save(results, '/home/pai/Huawei/temp/result.pkl')
 
         from metrics.pose import get_bce, get_detection_metric, get_mpjpe, get_pampjpe
         ratio = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]

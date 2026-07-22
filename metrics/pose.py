@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from utils.COCO import COCO_SKELETON
 
-def get_bce(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-12) -> torch.tensor:
+def get_bce(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-3) -> torch.tensor:
     '''由于模型人数不定，预先给出最大估计人数 max_people，人数需要依赖模型输出的confidence判决'''
     if confidence.shape != gt_mask.shape:
         raise ValueError(
@@ -49,7 +49,7 @@ def get_detection_metric(confidence: torch.tensor, gt_mask: torch.tensor, ratio:
 
     return accuracy, precision, recall, f1
 
-def get_mpjpe(pre: torch.tensor, gt:torch.tensor, type:str) -> torch.tensor:
+def get_mpjpe(pre: torch.tensor, gt:torch.tensor, type:str='coco') -> torch.tensor:
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
     common_shape = gt.shape
     if type.lower() == 'coco':
@@ -61,8 +61,19 @@ def get_mpjpe(pre: torch.tensor, gt:torch.tensor, type:str) -> torch.tensor:
     assert mpjpe.shape == common_shape[:-2], 'the finnal results has wrong shape' 
     return mpjpe
 
-def get_pampjpe(pre: torch.tensor, gt:torch.tensor, type:str) -> torch.tensor:
-    '''min_{s,R,t} || s*R*pre+t - gt||_{F}'''
+def get_pampjpe(
+    pre: torch.Tensor,
+    gt: torch.Tensor,
+    type: str='coco',
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """计算经过无反射相似变换对齐后的 MPJPE。
+
+    求解 ``min_{s, Q, t} ||s * pre @ Q + t - gt||_F``，其中
+    ``Q`` 是行列式为 1 的旋转矩阵。对齐参数使用 detached tensor
+    计算：这不改变前向指标，并避免 SVD 在重复奇异值或退化骨架处产生
+    NaN 梯度；梯度仍会通过最终的仿射变换传回 ``pre``。
+    """
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
     common_shape = gt.shape
     if type.lower() == 'coco':
@@ -70,25 +81,46 @@ def get_pampjpe(pre: torch.tensor, gt:torch.tensor, type:str) -> torch.tensor:
     assert pre.shape[-2:] == (num_joint, 3), 'pre has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, pre.shape)
     assert gt.shape[-2:] == (num_joint, 3), 'gt has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, gt.shape)
 
-    pre_centered = pre - pre.mean(dim=-2, keepdim=True)
-    gt_centered = gt - gt.mean(dim=-2, keepdim=True)
-    H = pre_centered.transpose(-1,-2) @ gt_centered
-    U, S, V = torch.linalg.svd(H)
-    R = V @ U.transpose(-1, -2)
-    det = torch.det(R)
-    V_corrected = V.clone()
-    V_corrected = torch.where(
-        det[..., None, None] < 0,
-        V_corrected * torch.tensor([1, 1, -1], device=V.device),
-        V_corrected
-    )
-    R = V_corrected @ U.transpose(-1, -2)
-    s = S.sum(dim=-1) / (pre_centered ** 2).sum(dim=(-1, -2))
+    if eps <= 0:
+        raise ValueError(f'eps must be positive, got {eps}')
+
+    if not torch.isfinite(pre).all() or not torch.isfinite(gt).all():
+        raise ValueError('pre and gt must contain only finite values')
+
     pre_mean = pre.mean(dim=-2, keepdim=True)
     gt_mean = gt.mean(dim=-2, keepdim=True)
-    t = gt_mean - s.unsqueeze(-1).unsqueeze(-1) * (pre_mean @ R.transpose(-1, -2))  # (..., 1, 3)
-    pre_aligned = s.unsqueeze(-1).unsqueeze(-1) * (pre @ R.transpose(-1, -2)) + t
-    
+
+    # SVD 的导数在重复奇异值处没有良好定义。最优对齐参数无需参与
+    # autograd；最终 pre_aligned 仍然保留到 pre 的梯度路径。
+    with torch.no_grad():
+        pre_centered = pre.detach() - pre_mean.detach()
+        gt_centered = gt.detach() - gt_mean.detach()
+        covariance = pre_centered.transpose(-1, -2) @ gt_centered
+
+        # torch.linalg.svd 返回 U, S, Vh，而不是 V。
+        U, singular_values, Vh = torch.linalg.svd(covariance)
+
+        # 对行向量约定，最优旋转为 Q = U @ D @ Vh。
+        # D 的最后一个元素负责排除镜像反射。
+        orientation = torch.det(U @ Vh)
+        correction = torch.ones_like(singular_values)
+        correction[..., -1] = torch.where(
+            orientation < 0,
+            -torch.ones_like(orientation),
+            torch.ones_like(orientation),
+        )
+        rotation = (U * correction.unsqueeze(-2)) @ Vh
+
+        variance = pre_centered.square().sum(dim=(-1, -2))
+        scale_numerator = (singular_values * correction).sum(dim=-1)
+        scale = torch.where(
+            variance > eps,
+            scale_numerator / variance.clamp_min(eps),
+            torch.zeros_like(variance),
+        )
+
+    scale = scale.unsqueeze(-1).unsqueeze(-1)
+    pre_aligned = scale * ((pre - pre_mean) @ rotation) + gt_mean
 
     pampjpe = get_mpjpe(pre=pre_aligned, gt=gt, type=type)
 
@@ -133,4 +165,3 @@ if __name__ == '__main__':
     print('bone_length', bone_length.shape)
     bce = get_bce(confidence, gt_mask)
     print('bce', bce.shape)
-
