@@ -1,6 +1,10 @@
 import random
 import sys
 import os
+import fcntl
+import hashlib
+import json
+import tempfile
 import torch
 import copy
 import numpy as np
@@ -20,6 +24,9 @@ from data2datasets.utils import collate_pc_gt_fn
 
 
 class HPE_Dataset(Dataset):
+
+    ALIGNMENT_CACHE_SCHEMA_VERSION = 1
+    ALIGNMENT_ALGORITHM_VERSION = 'global_dp_v1'
     
     def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_bin', split_method='group', ratio=0.7, T=8, preload_cache=False):
         super(HPE_Dataset, self).__init__()
@@ -312,11 +319,16 @@ class HPE_Dataset(Dataset):
                             ]
                     ]
         '''
+        cache_hits = 0
+        cache_builds = 0
+
         for person_id, person_data in self.meta_info.items():
             for entry in person_data:
                 date = entry['date']
                 valid_group = entry['valid_group']
                 group_data_path = {}
+                aligned_valid_groups = []
+
                 for group_name in valid_group:
                     # 构建数据目录路径
                     group_dir = self.root_path / date / 'data_collection' / group_name
@@ -327,21 +339,391 @@ class HPE_Dataset(Dataset):
                     
                     # 构建传感器路径字典
                     sensor_paths = self._build_sensor_paths(group_dir)
-                    
-                    # 执行对齐
-                    aligned_frames = self._align_multi_sensor_files(
-                        sources=sensor_paths, 
-                        base_source=self.base_source, 
-                        # time_offsets_sec={
-                        #     "gt": -0.2
-                        # },
+
+                    # 对齐结果以 group（一次采集）为最小单元持久化。
+                    # 划分 person/group/sequence 之前先完成对齐，
+                    # 保证任何划分方式都基于同一份对齐结果。
+                    aligned_frames, cache_hit = self._load_or_build_group_alignment(
+                        group_dir=group_dir,
+                        sensor_paths=sensor_paths,
+                        max_delta_sec=0.5,
+                        one_to_one=True,
+                        time_offsets_sec=None,
+                    )
+
+                    if cache_hit:
+                        cache_hits += 1
+                    else:
+                        cache_builds += 1
+
+                    frame_count = self._get_aligned_frame_count(
+                        aligned_frames=aligned_frames,
+                        expected_sensors={
+                            name
+                            for name, path in sensor_paths.items()
+                            if path is not None
+                        },
+                    )
+
+                    if frame_count is None:
+                        raise ValueError(
+                            f"{group_name} 的对齐结果结构无效"
                         )
-                    
-                    if not aligned_frames:
+
+                    if frame_count == 0:
                         print(f"{group_name} 对齐后没有数据")
                         continue
-                    group_data_path[f'{group_name}'] = aligned_frames
+
+                    group_data_path[group_name] = aligned_frames
+                    aligned_valid_groups.append(group_name)
+
+                # 目录不存在或对齐结果为空的 group 不能继续留在
+                # valid_group 中，否则后续会访问不存在的 group_data_path。
+                entry['valid_group'] = aligned_valid_groups
                 entry['group_data_path'] = group_data_path
+
+        print(
+            f"对齐缓存: 命中 {cache_hits} 个 group, "
+            f"新建或刷新 {cache_builds} 个 group"
+        )
+
+    def _get_alignment_cache_config(
+        self,
+        sensor_paths: Dict[str, Optional[Path]],
+        max_delta_sec: Optional[float],
+        one_to_one: bool,
+        time_offsets_sec: Optional[Dict[str, float]],
+    ) -> Dict[str, Any]:
+        """返回影响对齐结果的全部配置。"""
+        enabled_sensors = {
+            name: self.suffix_map[name]
+            for name, path in sorted(sensor_paths.items())
+            if path is not None
+        }
+
+        return {
+            'algorithm_version': self.ALIGNMENT_ALGORITHM_VERSION,
+            'base_source': self.base_source,
+            'max_delta_sec': max_delta_sec,
+            'one_to_one': one_to_one,
+            'time_offsets_sec': {
+                name: float(offset)
+                for name, offset in sorted((time_offsets_sec or {}).items())
+            },
+            'enabled_sensors': enabled_sensors,
+        }
+
+    def _get_alignment_cache_path(
+        self,
+        group_dir: Path,
+        config: Dict[str, Any],
+    ) -> Path:
+        config_json = json.dumps(
+            config,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        )
+        config_hash = hashlib.sha256(
+            config_json.encode('utf-8')
+        ).hexdigest()[:16]
+
+        return group_dir / 'cache' / f'alignment_{config_hash}.json'
+
+    def _get_alignment_source_signatures(
+        self,
+        group_dir: Path,
+        sensor_paths: Dict[str, Optional[Path]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        对齐仅依赖传感器目录中的文件名。
+
+        目录项新增、删除或重命名时，目录 mtime 会变化，
+        从而使旧缓存失效。不遍历每个文件可以避免网络盘上
+        缓存命中时仍产生大量 I/O。
+        """
+        signatures = {}
+
+        for name, path in sorted(sensor_paths.items()):
+            if path is None:
+                continue
+
+            relative_dir = path.relative_to(group_dir).as_posix()
+
+            try:
+                stat_result = path.stat()
+                signatures[name] = {
+                    'relative_dir': relative_dir,
+                    'exists': True,
+                    'is_dir': path.is_dir(),
+                    'mtime_ns': stat_result.st_mtime_ns,
+                }
+            except FileNotFoundError:
+                signatures[name] = {
+                    'relative_dir': relative_dir,
+                    'exists': False,
+                    'is_dir': False,
+                    'mtime_ns': None,
+                }
+
+        return signatures
+
+    def _get_aligned_frame_count(
+        self,
+        aligned_frames: Any,
+        expected_sensors: Set[str],
+    ) -> Optional[int]:
+        """检查对齐结果结构，并返回各传感器共同的帧数。"""
+        if not isinstance(aligned_frames, dict):
+            return None
+
+        if set(aligned_frames.keys()) != expected_sensors:
+            return None
+
+        frame_counts = set()
+
+        for paths in aligned_frames.values():
+            if not isinstance(paths, list):
+                return None
+
+            if not all(isinstance(path, str) for path in paths):
+                return None
+
+            frame_counts.add(len(paths))
+
+        if len(frame_counts) != 1:
+            return None
+
+        return next(iter(frame_counts))
+
+    def _load_alignment_cache(
+        self,
+        cache_path: Path,
+        group_dir: Path,
+        config: Dict[str, Any],
+        source_signatures: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, List[str]]]:
+        if not cache_path.is_file():
+            return None
+
+        try:
+            with cache_path.open('r', encoding='utf-8') as file:
+                payload = json.load(file)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"对齐缓存无法读取，将重新生成: {cache_path}, {exc}")
+            return None
+
+        if not isinstance(payload, dict):
+            print(f"对齐缓存结构无效，将重新生成: {cache_path}")
+            return None
+
+        if payload.get('schema_version') != self.ALIGNMENT_CACHE_SCHEMA_VERSION:
+            return None
+
+        if payload.get('config') != config:
+            return None
+
+        if payload.get('source_signatures') != source_signatures:
+            return None
+
+        relative_frames = payload.get('aligned_frames')
+        expected_sensors = set(config['enabled_sensors'].keys())
+        frame_count = self._get_aligned_frame_count(
+            aligned_frames=relative_frames,
+            expected_sensors=expected_sensors,
+        )
+
+        if frame_count is None or payload.get('frame_count') != frame_count:
+            print(f"对齐缓存结构无效，将重新生成: {cache_path}")
+            return None
+
+        aligned_frames = {}
+
+        for sensor_name, relative_paths in relative_frames.items():
+            absolute_paths = []
+
+            for relative_path_str in relative_paths:
+                relative_path = Path(relative_path_str)
+
+                # 缓存只允许引用当前 group 内部文件。
+                if relative_path.is_absolute() or '..' in relative_path.parts:
+                    print(f"对齐缓存包含非法路径，将重新生成: {cache_path}")
+                    return None
+
+                absolute_paths.append(str(group_dir / relative_path))
+
+            aligned_frames[sensor_name] = absolute_paths
+
+        return aligned_frames
+
+    def _save_alignment_cache(
+        self,
+        cache_path: Path,
+        group_dir: Path,
+        config: Dict[str, Any],
+        source_signatures: Dict[str, Dict[str, Any]],
+        aligned_frames: Dict[str, List[str]],
+    ) -> bool:
+        expected_sensors = set(config['enabled_sensors'].keys())
+        frame_count = self._get_aligned_frame_count(
+            aligned_frames=aligned_frames,
+            expected_sensors=expected_sensors,
+        )
+
+        if frame_count is None:
+            raise ValueError(
+                f"不能缓存结构无效的对齐结果: {group_dir}"
+            )
+
+        relative_frames = {}
+
+        for sensor_name, paths in aligned_frames.items():
+            relative_frames[sensor_name] = [
+                Path(path).relative_to(group_dir).as_posix()
+                for path in paths
+            ]
+
+        payload = {
+            'schema_version': self.ALIGNMENT_CACHE_SCHEMA_VERSION,
+            'config': config,
+            'source_signatures': source_signatures,
+            'frame_count': frame_count,
+            'aligned_frames': relative_frames,
+        }
+
+        temp_path = None
+
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                encoding='utf-8',
+                prefix=f'.{cache_path.name}.',
+                suffix='.tmp',
+                dir=cache_path.parent,
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                json.dump(
+                    payload,
+                    temp_file,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                )
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+
+            os.replace(temp_path, cache_path)
+            return True
+
+        except OSError as exc:
+            print(f"对齐缓存写入失败，本次仍使用已计算结果: {cache_path}, {exc}")
+            return False
+
+        finally:
+            if temp_path is not None and temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+
+    def _load_or_build_group_alignment(
+        self,
+        group_dir: Path,
+        sensor_paths: Dict[str, Optional[Path]],
+        max_delta_sec: Optional[float],
+        one_to_one: bool,
+        time_offsets_sec: Optional[Dict[str, float]],
+    ) -> Tuple[Dict[str, List[str]], bool]:
+        """
+        读取 group 级对齐缓存；未命中时加锁计算并原子写入。
+
+        Returns:
+            (aligned_frames, cache_hit)
+        """
+        config = self._get_alignment_cache_config(
+            sensor_paths=sensor_paths,
+            max_delta_sec=max_delta_sec,
+            one_to_one=one_to_one,
+            time_offsets_sec=time_offsets_sec,
+        )
+        cache_path = self._get_alignment_cache_path(
+            group_dir=group_dir,
+            config=config,
+        )
+        source_signatures = self._get_alignment_source_signatures(
+            group_dir=group_dir,
+            sensor_paths=sensor_paths,
+        )
+        cached_frames = self._load_alignment_cache(
+            cache_path=cache_path,
+            group_dir=group_dir,
+            config=config,
+            source_signatures=source_signatures,
+        )
+
+        if cached_frames is not None:
+            return cached_frames, True
+
+        lock_file = None
+
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = cache_path.with_suffix(cache_path.suffix + '.lock')
+            lock_file = lock_path.open('a+', encoding='utf-8')
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+        except OSError as exc:
+            if lock_file is not None:
+                lock_file.close()
+
+            # 数据集可能以只读方式挂载。这种情况下退化为
+            # 当次直接对齐，不因缓存不可写而阻断数据加载。
+            print(f"对齐缓存不可用，将直接计算: {group_dir}, {exc}")
+            aligned_frames = self._align_multi_sensor_files(
+                sources=sensor_paths,
+                max_delta_sec=max_delta_sec,
+                one_to_one=one_to_one,
+                base_source=self.base_source,
+                time_offsets_sec=time_offsets_sec,
+            )
+            return aligned_frames, False
+
+        with lock_file:
+            # 等锁期间其他进程可能已生成缓存，因此再检查一次。
+            source_signatures = self._get_alignment_source_signatures(
+                group_dir=group_dir,
+                sensor_paths=sensor_paths,
+            )
+            cached_frames = self._load_alignment_cache(
+                cache_path=cache_path,
+                group_dir=group_dir,
+                config=config,
+                source_signatures=source_signatures,
+            )
+
+            if cached_frames is not None:
+                return cached_frames, True
+
+            aligned_frames = self._align_multi_sensor_files(
+                sources=sensor_paths,
+                max_delta_sec=max_delta_sec,
+                one_to_one=one_to_one,
+                base_source=self.base_source,
+                time_offsets_sec=time_offsets_sec,
+            )
+
+            self._save_alignment_cache(
+                cache_path=cache_path,
+                group_dir=group_dir,
+                config=config,
+                source_signatures=source_signatures,
+                aligned_frames=aligned_frames,
+            )
+
+            return aligned_frames, False
     
     def _align_multi_sensor_files(
         self,
@@ -393,7 +775,7 @@ class HPE_Dataset(Dataset):
         
         def list_files(dir_path: Optional[str], suffix: str) -> Tuple[List[str], List[datetime]]:
             """列出目录中匹配后缀的文件并解析时间戳"""
-            if not dir_path or not suffix:
+            if not dir_path or not suffix or not Path(dir_path).is_dir():
                 return [], []
             files = [f for f in os.listdir(dir_path) if f.lower().endswith(suffix)]
             files.sort()

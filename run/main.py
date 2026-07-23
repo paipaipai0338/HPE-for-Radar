@@ -151,7 +151,7 @@ def main():
                 metric['val'],
                 device,
                 cfg_task,
-                if_plot=(epoch == 0),
+                if_plot=True,
                 fig_path=fig_path,
             )
 

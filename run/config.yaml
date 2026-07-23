@@ -25,7 +25,7 @@ model:
     name: P4Transformer
 
 task:
-    stage: train
+    stage: val
     input: radar_high_pc
     output: gt_for_high
     device: 0
@@ -44,11 +44,10 @@ task:
             BCE: 0
             Bone_Length: 0
         best_metric: MPJPE
-            
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260715_205732/checkpoint/best.pth
-        shuffle: true
+        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260722_093849/checkpoint/best.pth
+        shuffle: false
         metrics: 
             MPJPE: 1
             PAMPJPE: 0
