@@ -16,7 +16,7 @@ from preprocess.radarprocess import get_bin_data, get_pc_data
 from preprocess.lidarprocess import get_lidar_data
 from preprocess.realsenseprocess import get_realsense_data
 from preprocess.gtprocess import get_gt_data
-from data2datasets.utils import collate_pc_gt_fn
+from data2datasets.utils_data import collate_pc_gt_fn
 
 
 class HPE_Dataset(Dataset):

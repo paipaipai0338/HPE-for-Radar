@@ -20,7 +20,7 @@ from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_w
 
 # from data2datasets.dataset import HPE_Dataset
 from data2datasets.dataset_for_single import HPE_Dataset
-from data2datasets.utils import collate_pc_gt_fn
+from data2datasets.utils_data import collate_pc_gt_fn
 
 # nohup /home/pai/miniconda3/envs/pytorch/bin/python /home/pai/Huawei/run/main.py &
 

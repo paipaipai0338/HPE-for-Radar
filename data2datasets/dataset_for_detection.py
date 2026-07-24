@@ -19,8 +19,64 @@ from data2datasets.load_json import get_meta_info
 from preprocess.radarprocess import get_bin_data, get_pc_data
 from preprocess.lidarprocess import get_lidar_data
 from preprocess.realsenseprocess import get_realsense_data
-from preprocess.gtprocess import get_gt_boxes_list, get_gt_data
+from preprocess.gtprocess import get_gt_boxes, get_gt_data
 from data2datasets.utils_data import collate_pc_gt_fn
+
+
+def collate_detection_fn(
+    batch: List[Dict[str, Any]],
+    max_points: int = 300,
+    max_people: int = 4,
+    bbox_threshold: float = 0.1,
+) -> Dict[str, Any]:
+    """
+    对检测样本进行 padding，并生成高位雷达坐标系下的 3D 包围盒。
+
+    Returns:
+        radar_high_pc:
+            padded: [B, T, N, 6]
+            mask:   [B, T, N]
+        gt_for_high:
+            padded: [B, T, K, 17, 3]
+            mask:   [B, T, K]
+        bbox_for_high:
+            [B, T, K, 6]，无效 person 槽位填 0。
+    """
+    for sample_idx, sample in enumerate(batch):
+        gt_sequence = sample.get('gt_for_high')
+        if gt_sequence is None:
+            raise KeyError(
+                f"检测样本 {sample_idx} 缺少 gt_for_high"
+            )
+
+        for time_idx, frame_gt in enumerate(gt_sequence):
+            num_people = np.asarray(frame_gt).shape[0]
+            if num_people > max_people:
+                raise ValueError(
+                    "GT 人数超过 max_people，不能静默截断检测标注："
+                    f"sample_idx={sample_idx}, time_idx={time_idx}, "
+                    f"num_people={num_people}, max_people={max_people}"
+                )
+
+    collated = collate_pc_gt_fn(
+        batch=batch,
+        max_points=max_points,
+        max_people=max_people,
+    )
+
+    gt_for_high = collated['gt_for_high']
+    valid_person = gt_for_high['mask']
+    bbox_for_high = get_gt_boxes(
+        gt=gt_for_high['padded'],
+        gt_mask=valid_person,
+        threshold=bbox_threshold,
+    )
+    collated['bbox_for_high'] = bbox_for_high.masked_fill(
+        ~valid_person.unsqueeze(-1),
+        0.0,
+    )
+
+    return collated
 
 
 class HPE_Dataset(Dataset):
@@ -28,7 +84,7 @@ class HPE_Dataset(Dataset):
     ALIGNMENT_CACHE_SCHEMA_VERSION = 1
     ALIGNMENT_ALGORITHM_VERSION = 'global_dp_v1'
     
-    def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_bin', split_method='group', ratio=0.7, T=8, preload_cache=False):
+    def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_pc', split_method='group', ratio=0.7, T=8, preload_cache=False):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
         split_method = split_method.lower()
@@ -55,7 +111,7 @@ class HPE_Dataset(Dataset):
         self.sensor_config = {
             'lidar': False,
             'radar_low_bin': False,
-            'radar_high_bin': True,
+            'radar_high_bin': False,
             'radar_low_pc': False,
             'radar_high_pc': True,
             'gt': True,
@@ -63,7 +119,7 @@ class HPE_Dataset(Dataset):
         } if sensor_config is None else sensor_config
 
         assert self.sensor_config[base_source] is True, 'base_source in sensor_config is False'
-        assert self.sensor_config.get('gt') is True, '单人数据集必须启用 gt'
+        assert self.sensor_config.get('gt') is True, '目标检测数据集必须启用 gt'
         self.suffix_map = {
             'lidar': '.pcd',
             'radar_low_bin': '.bin',
@@ -74,11 +130,9 @@ class HPE_Dataset(Dataset):
             'realsense': '.bin',
         }
         self.cached_sensor_names = {
-            'lidar',
             'radar_low_pc',
             'radar_high_pc',
             'gt',
-            'realsense',
         }
         # 更新 meta_info
         self._build_aligned_data()
@@ -115,7 +169,7 @@ class HPE_Dataset(Dataset):
         elif split_method == 'sequence':
             # 按照序列来划分
             pass
-        self._display_meta_info(self.meta_info)
+        # self._display_meta_info(self.meta_info)
         self._display_meta_info(self.meta_info_splited['train'])
         self._display_meta_info(self.meta_info_splited['val'])
 
@@ -261,7 +315,6 @@ class HPE_Dataset(Dataset):
                         gt is not None
                         and gt.ndim == 3
                         and gt.shape[1:] == (17, 3)
-                        and gt.shape[0] == 1
                         and np.isfinite(gt).all()
                     )
                 except Exception as exc:
@@ -279,8 +332,7 @@ class HPE_Dataset(Dataset):
 
                 self.gt_valid_cache[file_path] = valid
 
-            # 当前单人版本只接收恰好包含一个人的 GT。
-            # 多人数据的拆分与选择逻辑留待后续实现。
+            # GT 文件必须存在且结构有效；人数可以为 0、1 或多人。
             if not self.gt_valid_cache[file_path]:
                 return False
 
@@ -1424,81 +1476,53 @@ class HPE_Dataset(Dataset):
                 t=calib['gt_to_high']['t'],
             )
         )
+        del samples['gt']
 
-        samples['gt_for_low'] = (
-            self._transform_gt_sequence(
-                gt_sequence=raw_gt,
-                R=calib['gt_to_low']['R'],
-                t=calib['gt_to_low']['t'],
-            )
-        )
-
-        samples['high_to_low_R'] = [
-            calib['high_to_low']['R'].copy()
-            for _ in range(self.T)
-        ]
-        samples['high_to_low_t'] = [
-            calib['high_to_low']['t'].copy()
-            for _ in range(self.T)
-        ]
-
-        # temp：单人 GT 框选高位雷达点云，并以髋部中心进行位置归一化。
-        gt_boxes = get_gt_boxes_list(
-            samples['gt_for_high'],
-            threshold=0.1,
-        )
-
-        for frame_idx in range(self.T):
-            frame_gt = samples['gt_for_high'][frame_idx]
-            frame_pc = samples['radar_high_pc'][frame_idx]
-            num_people = frame_gt.shape[0]
-
-            if num_people > 1:
-                raise ValueError(
-                    "当前版本只支持单人估计，"
-                    f"frame_idx={frame_idx}, num_people={num_people}"
-                )
-
-            # 没有 GT 时无法确定人体点云区域，因此返回空点云。
-            if num_people == 0:
-                samples['radar_high_pc'][frame_idx] = frame_pc[:0].copy()
-                continue
-
-            bbox = gt_boxes[frame_idx][0]
-            min_xyz = bbox[:3]
-            max_xyz = bbox[3:]
-
-            # 只保留落在该人 3D GT 包围盒内的雷达点。
-            xyz = frame_pc[:, :3]
-            inside = (
-                (xyz >= min_xyz[None, :])
-                & (xyz <= max_xyz[None, :])
-            ).all(axis=1)
-            selected_pc = frame_pc[inside].copy()
-
-            # 使用该人的 11、12 号关节点中点作为坐标原点。
-            offset = (
-                frame_gt[0, 11, :] + frame_gt[0, 12, :]
-            ) / 2.0
-
-            samples['gt_for_high'][frame_idx] = (
-                frame_gt - offset[None, None, :]
-            )
-            selected_pc[:, :3] -= offset[None, :]
-            samples['radar_high_pc'][frame_idx] = selected_pc
-              
+        # 检测任务保留完整的原始高位雷达点云。pose 仅转换到高位
+        # 雷达坐标系，不再依据 GT 裁剪点云或以人体髋部中心归一化。
         return samples
 
 
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection
+    from utils.COCO import COCO_SKELETON
+
+    def get_bbox_edges(bbox: np.ndarray) -> np.ndarray:
+        """将 [xmin, ymin, zmin, xmax, ymax, zmax] 转为 12 条框边。"""
+        xmin, ymin, zmin, xmax, ymax, zmax = bbox
+        corners = np.asarray(
+            [
+                [xmin, ymin, zmin],
+                [xmin, ymin, zmax],
+                [xmin, ymax, zmin],
+                [xmin, ymax, zmax],
+                [xmax, ymin, zmin],
+                [xmax, ymin, zmax],
+                [xmax, ymax, zmin],
+                [xmax, ymax, zmax],
+            ],
+            dtype=np.float32,
+        )
+        edge_indices = (
+            (0, 1), (0, 2), (0, 4),
+            (1, 3), (1, 5),
+            (2, 3), (2, 6),
+            (3, 7),
+            (4, 5), (4, 6),
+            (5, 7),
+            (6, 7),
+        )
+        return np.asarray(
+            [[corners[start], corners[end]] for start, end in edge_indices]
+        )
 
     root_path = '/mnt/huawei'
-    T = 4
+    T = 8
     batch_sample_idx = 0
     time_idx = 0
-    pc_3d_x_limits = (-3.0, 3.0)
+    pc_3d_x_limits = (0, 6.0)
     pc_3d_y_limits = (-3.0, 3.0)
     pc_3d_z_limits = (-3.0, 3.0)
 
@@ -1507,9 +1531,9 @@ if __name__ == '__main__':
         dataset,
         batch_size=8,
         collate_fn=partial(
-            collate_pc_gt_fn,
+            collate_detection_fn,
             max_points=300,
-            max_people=1,
+            max_people=4,
         ),
         shuffle=False,
         num_workers=4,
@@ -1529,6 +1553,9 @@ if __name__ == '__main__':
         gt = samples['gt_for_high']['padded'][
             batch_sample_idx, time_idx
         ][gt_mask].cpu().numpy()
+        bbox = samples['bbox_for_high'][
+            batch_sample_idx, time_idx
+        ][gt_mask].cpu().numpy()
 
         point_cloud = point_cloud[
             np.isfinite(point_cloud).all(axis=1)
@@ -1542,24 +1569,58 @@ if __name__ == '__main__':
                 point_cloud[:, 0],
                 point_cloud[:, 1],
                 point_cloud[:, 2],
-                s=5,
-                c='blue',
-                alpha=0.6,
+                s=3,
+                c='0.45',
+                alpha=0.25,
+                edgecolors='none',
                 label='Radar point cloud',
             )
 
-        if gt.shape[0] > 0:
-            joints = gt[0]
-            joints = joints[np.isfinite(joints).all(axis=1)]
+        person_colors = plt.get_cmap('tab10')
+        for person_idx, (joints, person_bbox) in enumerate(
+            zip(gt, bbox)
+        ):
+            color = person_colors(person_idx % 10)
+            joint_valid = np.isfinite(joints).all(axis=1)
+            valid_joints = joints[joint_valid]
             ax.scatter(
-                joints[:, 0],
-                joints[:, 1],
-                joints[:, 2],
-                s=30,
-                c='red',
-                marker='x',
-                linewidth=2,
-                label='GT',
+                valid_joints[:, 0],
+                valid_joints[:, 1],
+                valid_joints[:, 2],
+                s=18,
+                color=color,
+                marker='o',
+                edgecolors='white',
+                linewidths=0.5,
+                depthshade=False,
+                label=f'GT person {person_idx}',
+            )
+
+            # 使用与 plot_fig.py 相同的 COCO-17 骨架拓扑。
+            for joint_a, joint_b in COCO_SKELETON:
+                if not (
+                    joint_valid[joint_a]
+                    and joint_valid[joint_b]
+                ):
+                    continue
+
+                ax.plot(
+                    [joints[joint_a, 0], joints[joint_b, 0]],
+                    [joints[joint_a, 1], joints[joint_b, 1]],
+                    [joints[joint_a, 2], joints[joint_b, 2]],
+                    color=color,
+                    linewidth=2.2,
+                    alpha=0.95,
+                )
+
+            ax.add_collection3d(
+                Line3DCollection(
+                    get_bbox_edges(person_bbox),
+                    colors=[color],
+                    linewidths=1.2,
+                    linestyles='--',
+                    alpha=0.8,
+                )
             )
 
         ax.set_xlim(pc_3d_x_limits)
@@ -1567,16 +1628,23 @@ if __name__ == '__main__':
         ax.set_zlim(pc_3d_z_limits)
         ax.set_box_aspect((1, 1, 1))
         ax.set_title(
-            f'radar high pc and gt, batch {batch_idx}, '
-            f'sample {batch_sample_idx}, time {time_idx}'
+            f'High-radar detection sample: batch {batch_idx}, '
+            f'sample {batch_sample_idx}, time {time_idx}, '
+            f'people {int(gt_mask.sum())}'
         )
         ax.set_xlabel('X (m)')
         ax.set_ylabel('Y (m)')
         ax.set_zlabel('Z (m)')
-        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.2)
+        if ax.has_data():
+            ax.legend(
+                fontsize=8,
+                loc='upper right',
+                framealpha=0.85,
+            )
 
         fig.tight_layout()
         save_path = '/home/pai/Huawei/temp.png'
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=200, bbox_inches='tight')
         plt.close(fig)
         print(f'visualization saved to: {save_path}')
