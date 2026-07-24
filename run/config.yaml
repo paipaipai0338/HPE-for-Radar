@@ -46,7 +46,7 @@ task:
         best_metric: MPJPE
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260722_093849/checkpoint/best.pth
+        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260723_174845/checkpoint/best.pth
         shuffle: false
         metrics: 
             MPJPE: 1
