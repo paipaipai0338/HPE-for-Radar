@@ -1,6 +1,7 @@
 import torch
 from tqdm import tqdm
 
+from metrics.detection import get_hungarian_match
 from run.utils.plot_fig import plt_fig
 
 def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_task):
@@ -21,6 +22,7 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_task):
         gt = {
             'padded': samples[target_key]['padded'].to(device, non_blocking=True),
             'mask': samples[target_key]['mask'].to(device, non_blocking=True),
+            # 'bbox': samples[target_key]['bbox'].to(device, non_blocking=True)
         }
         optimizer.zero_grad(set_to_none=True)
 
@@ -45,6 +47,8 @@ def val_one_epoch(model, dataloader, metric, device, cfg_task, if_plot, fig_path
     with torch.no_grad():
         plot_pre = None
         plot_gt = None
+        plot_model_input = None
+        plot_matches = None
         for samples in tqdm(dataloader, total=len(dataloader)):
             input_key = cfg_task['input']
             model_input = {}
@@ -59,6 +63,7 @@ def val_one_epoch(model, dataloader, metric, device, cfg_task, if_plot, fig_path
             gt = {
                 'padded': samples[target_key]['padded'].to(device, non_blocking=True),
                 'mask': samples[target_key]['mask'].to(device, non_blocking=True),
+                # 'bbox': samples[target_key]['bbox'].to(device, non_blocking=True)
             }
 
             pre = model(model_input)
@@ -67,11 +72,31 @@ def val_one_epoch(model, dataloader, metric, device, cfg_task, if_plot, fig_path
             if if_plot and plot_pre is None:
                 plot_pre = pre
                 plot_gt = gt
+                plot_model_input = model_input
+                if pre.get('bbox') is not None:
+                    plot_matches = get_hungarian_match(
+                        pre['bbox'],
+                        gt['bbox'],
+                        gt['mask'],
+                        metric.point_cloud_range,
+                        bbox_l1_weight=(
+                            metric.matching_bbox_l1_weight
+                        ),
+                        bbox_iou_weight=(
+                            metric.matching_bbox_iou_weight
+                        ),
+                    )
 
             if not torch.isfinite(loss):
                 raise FloatingPointError(f'验证 loss 出现 NaN 或 Inf: {loss.item()}')
         
         epoch_metric = metric.epoch_end()
         if if_plot:
-            plt_fig(fig_path, plot_pre, plot_gt)
+            plt_fig(
+                fig_path,
+                plot_pre,
+                plot_gt,
+                plot_model_input,
+                matches=plot_matches,
+            )
     return epoch_metric, metric

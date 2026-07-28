@@ -7,7 +7,7 @@ data:
     base_source: radar_high_pc
     ratio: 0.7
     T: 8
-    split_method: group
+    split_method: person
     max_points: 300
     max_people: 1
     num_workers: 8
@@ -20,17 +20,26 @@ data:
         radar_high_pc: true
         gt: true
         realsense: false
-
+    point_cloud_range:
+        - 0.0
+        - -3.0
+        - -2.0
+        - 6
+        - 3.0
+        - 2.0
 model:
     name: P4Transformer
 
 task:
-    stage: val
+    stage: train
     input: radar_high_pc
     output: gt_for_high
     device: 0
     seed: 42
-    batch_size: 64
+    batch_size: 8
+    matching_for_hungarian:
+        bbox_l1_weight: 5.0
+        bbox_iou_weight: 2.0
     train:
         epoch: 500
         init_lr: 0.001
@@ -41,15 +50,21 @@ task:
         metrics: 
             MPJPE: 1
             PAMPJPE: 0
-            BCE: 0
             Bone_Length: 0
-        best_metric: MPJPE
+            bbox_iou: 0
+            bbox_l1: 0
+            objectness: 0
+        best_metric: loss
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260723_174845/checkpoint/best.pth
+        checkpoint_path: /home/pai/Huawei/experiments/VoxelNeXt/20260724_231418/checkpoint/best.pth
         shuffle: false
+        score_thresh: 0.1
+        iou_thresh: 0.7
         metrics: 
             MPJPE: 1
             PAMPJPE: 0
-            BCE: 0
             Bone_Length: 0
+            bbox_iou : 0
+            bbox_l1: 0
+            objectness: 0

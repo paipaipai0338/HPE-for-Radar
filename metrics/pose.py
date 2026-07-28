@@ -12,6 +12,7 @@ from utils.COCO import COCO_SKELETON
 
 def get_bce(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-3) -> torch.tensor:
     '''由于模型人数不定，预先给出最大估计人数 max_people，人数需要依赖模型输出的confidence判决'''
+    '''已抛弃'''
     if confidence.shape != gt_mask.shape:
         raise ValueError(
             f"confidence and gt_mask must have same shape, "
@@ -28,7 +29,7 @@ def get_bce(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-3) ->
     return BCE
 
 def get_detection_metric(confidence: torch.tensor, gt_mask: torch.tensor, ratio: float=0.5, eps: float=1e-12) -> torch.tensor:
-    '''判断模型识别人体存在的准确率'''
+    '''判断模型识别人体存在的准确率，仅仅为记录1 2 3服务（检测与估计耦合在一起），若要目标检测相关指标参照 metrics/detection.py'''
     # B, T, K
     confidence = confidence.float()
     gt_mask = gt_mask.float()

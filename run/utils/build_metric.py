@@ -1,6 +1,6 @@
 import torch
-from metrics.pose import get_mpjpe, get_pampjpe, get_bone_length, get_bce
-
+from metrics.pose import get_mpjpe, get_pampjpe, get_bone_length
+from metrics.detection import get_hungarian_match, get_bbox_iou, get_bbox_l1, get_objectness
 
 def _masked_mean_over_people(metric, mask):
     # metric, mask: [B, T, K]
@@ -21,12 +21,25 @@ def _masked_mean_over_people(metric, mask):
 
 
 class Metric:
-    def __init__(self, cfg_metrics):
+    def __init__(
+        self,
+        cfg_metrics,
+        point_cloud_range,
+        matching_bbox_l1_weight,
+        matching_bbox_iou_weight,
+    ):
+        self.point_cloud_range = point_cloud_range
+        self.matching_bbox_l1_weight = float(matching_bbox_l1_weight)
+        self.matching_bbox_iou_weight = float(
+            matching_bbox_iou_weight
+        )
         self.fun_call_dict = {
             'mpjpe': get_mpjpe,
             'pampjpe': get_pampjpe,
             'bone_length': get_bone_length,
-            'bce': get_bce,
+            'bbox_iou': get_bbox_iou,
+            'bbox_l1':  get_bbox_l1,
+            'objectness': get_objectness,
         }
         # 获取当前配置指标与权重
         self.cfg_metrics = {
@@ -67,38 +80,84 @@ class Metric:
         
     def calculate_batch(self, pre, gt):
         # pre = {
-        #     "pose": pose_pre,                         # [B, T, K, J, 3]
-        #     "confidence": confidence,                 # [B, T, K]
+        #     pose: pose_pre,                           # [B, T, K, J, 3]
+        #     bbox,                                     # [B, T, K，6]
+        #     objectness_logits,                        # [B, T, K]
         # }
-        # gt = {
-        #     padded torch.Size([64, 8, 4, 17, 3]),   # [B, T, K, J, 3]
-        #     mask torch.Size([64, 8, 4])               # [B, T, K]
-        # }
-        pose_pre = pre['pose']
-        pose_pre_confidence = pre['confidence']
 
-        pose_gt = gt['padded']
-        pose_gt_mask = gt['mask']
+        # gt = {
+        #     padded,                                   # [B, T, K, J, 3]
+        #     mask，                                    # [B, T, K]
+        #     bbox，                                    # [B, T, K]
+        # }
+        pose_pre = pre.get('pose', None)
+        bbox_pre = pre.get('bbox', None)
+        objectness_logits_pre = pre.get('objectness_logits', None)
+
+        pose_gt = gt.get('padded', None)
+        gt_mask = gt.get('mask', None)
+        bbox_gt = gt.get('bbox', None)
         
 
         batch_metrics = {}
         total_loss = 0.0
+        matches = None
 
         for name, weight in self.cfg_metrics.items():
             if name in ['mpjpe', 'pampjpe', 'bone_length']:
+                assert pose_pre is not None, 'pose_pre is None'
                 metric = self.fun_call_dict[name](pose_pre, pose_gt, type='coco')
                 metric_value, metric_num = _masked_mean_over_people(
                     metric,
-                    pose_gt_mask,
+                    gt_mask,
                 )
                 self.metrics_state[name]['sum'] += (
                     metric_value.detach().item() * metric_num
                 )
                 self.metrics_state[name]['num'] += metric_num
-            elif name in ['bce']:
-                metric = self.fun_call_dict[name](pose_pre_confidence, pose_gt_mask)
-                metric_value = metric.mean()
-                metric_num = metric.numel()
+            elif name in ['bbox_iou', 'bbox_l1', 'objectness']:
+                assert bbox_pre is not None, 'bbox_pre is None'
+                assert objectness_logits_pre is not None, 'objectness_logits_pre is None'
+                if matches is None:
+                    matches = get_hungarian_match(
+                        bbox_pre,
+                        bbox_gt,
+                        gt_mask,
+                        self.point_cloud_range,
+                        bbox_l1_weight=self.matching_bbox_l1_weight,
+                        bbox_iou_weight=self.matching_bbox_iou_weight,
+                    )
+
+                if name == 'bbox_iou':
+                    metric = self.fun_call_dict[name](
+                        bbox_pre,
+                        bbox_gt,
+                        matches,
+                    )
+                    metric_value, metric_num = _masked_mean_over_people(
+                        metric,
+                        gt_mask,
+                    )
+                elif name == 'bbox_l1':
+                    metric = self.fun_call_dict[name](
+                        bbox_pre,
+                        bbox_gt,
+                        matches,
+                        self.point_cloud_range,
+                    )
+                    metric_value, metric_num = _masked_mean_over_people(
+                        metric,
+                        gt_mask,
+                    )
+                elif name == 'objectness':
+                    metric = self.fun_call_dict[name](
+                        objectness_logits_pre,
+                        gt_mask,
+                        matches,
+                    )
+                    metric_value = metric.mean()
+                    metric_num = metric.numel()
+
                 self.metrics_state[name]['sum'] += (
                     metric_value.detach().item() * metric_num
                 )

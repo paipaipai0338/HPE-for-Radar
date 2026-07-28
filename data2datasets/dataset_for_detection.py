@@ -39,8 +39,7 @@ def collate_detection_fn(
         gt_for_high:
             padded: [B, T, K, 17, 3]
             mask:   [B, T, K]
-        bbox_for_high:
-            [B, T, K, 6]，无效 person 槽位填 0。
+            bbox:   [B, T, K, 6]，无效 person 槽位填 0。
     """
     for sample_idx, sample in enumerate(batch):
         gt_sequence = sample.get('gt_for_high')
@@ -71,7 +70,7 @@ def collate_detection_fn(
         gt_mask=valid_person,
         threshold=bbox_threshold,
     )
-    collated['bbox_for_high'] = bbox_for_high.masked_fill(
+    gt_for_high['bbox'] = bbox_for_high.masked_fill(
         ~valid_person.unsqueeze(-1),
         0.0,
     )
@@ -1553,7 +1552,7 @@ if __name__ == '__main__':
         gt = samples['gt_for_high']['padded'][
             batch_sample_idx, time_idx
         ][gt_mask].cpu().numpy()
-        bbox = samples['bbox_for_high'][
+        bbox = samples['gt_for_high']['bbox'][
             batch_sample_idx, time_idx
         ][gt_mask].cpu().numpy()
 

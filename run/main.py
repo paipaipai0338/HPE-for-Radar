@@ -21,6 +21,7 @@ from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_w
 # from data2datasets.dataset import HPE_Dataset
 from data2datasets.dataset_for_single import HPE_Dataset
 from data2datasets.utils_data import collate_pc_gt_fn
+# from data2datasets.dataset_for_detection import HPE_Dataset, collate_detection_fn
 
 # nohup /home/pai/miniconda3/envs/pytorch/bin/python /home/pai/Huawei/run/main.py &
 
@@ -43,6 +44,29 @@ def main():
     cfg_data = cfg['data']
     cfg_model = cfg['model']
     cfg_task = cfg['task']
+    # 判断重复值是否相等
+    model_config_path = (
+        Path(__file__).resolve().parents[1]
+        / 'models'
+        / cfg_model['name']
+        / 'model_config.yaml'
+    )
+    cfg_model_arch = load_config(model_config_path)
+    if 'max_people' in cfg_model_arch:
+        assert cfg_data['max_people'] == cfg_model_arch['max_people'], (
+            'max_people mismatch: '
+            f'data={cfg_data["max_people"]}, '
+            f'model={cfg_model_arch["max_people"]}'
+        )
+    if 'point_cloud_range' in cfg_model_arch:
+        assert (
+            cfg_data['point_cloud_range']
+            == cfg_model_arch['point_cloud_range']
+        ), (
+            'point_cloud_range mismatch: '
+            f'data={cfg_data["point_cloud_range"]}, '
+            f'model={cfg_model_arch["point_cloud_range"]}'
+        )
 
     # 固定随机种子
     set_seed(cfg_task['seed'])
@@ -57,6 +81,7 @@ def main():
         'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False)),
     }
     collate_fn = partial(collate_pc_gt_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
+    # collate_fn = partial(collate_detection_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
     dataloader = {
         'train': DataLoader(dataset['train'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['train']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
         'val': DataLoader(dataset['val'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['val']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
@@ -71,13 +96,27 @@ def main():
     if cfg_task['stage'] == 'train':
 
         # 指标构建
+        cfg_matching = cfg_task['matching_for_hungarian']
         metric = {
-            'train': Metric(cfg_task['train']['metrics']),
-            'val':  Metric(cfg_task['val']['metrics'])
+            'train': Metric(
+                cfg_task['train']['metrics'],
+                cfg_data['point_cloud_range'],
+                cfg_matching['bbox_l1_weight'],
+                cfg_matching['bbox_iou_weight'],
+            ),
+            'val': Metric(
+                cfg_task['val']['metrics'],
+                cfg_data['point_cloud_range'],
+                cfg_matching['bbox_l1_weight'],
+                cfg_matching['bbox_iou_weight'],
+            ),
         }
         best_metric_name = cfg_task['train']['best_metric'].lower()
-        if best_metric_name not in metric['val'].cfg_metrics:
-            raise ValueError(f"best_metric 不在 val metrics 中: {cfg_task['train']['best_metric']}")
+        if best_metric_name != 'loss':
+            raise ValueError(
+                "best_metric 必须设置为 loss，"
+                f"当前为: {cfg_task['train']['best_metric']}"
+            )
 
         # 优化器与学习率调度
         num_epoch = cfg_task['train']['epoch']
@@ -151,8 +190,12 @@ def main():
                 metric['val'],
                 device,
                 cfg_task,
-                if_plot=True,
+                if_plot=False,
                 fig_path=fig_path,
+            )
+            val_metrics['loss'] = sum(
+                weight * val_metrics[name]
+                for name, weight in metric['val'].cfg_metrics.items()
             )
 
             message = (
@@ -183,7 +226,8 @@ def main():
 
         
     elif cfg_task['stage'] == 'val':
-        metric = Metric(cfg_task['val']['metrics'])
+        # 只做结果保存 后续分析见 /home/pai/Huawei/run/check.py
+
         # best/last checkpoint 加载 
         load_model_checkpoint(cfg_task['val']['checkpoint_path'], model, device)
 
@@ -195,6 +239,9 @@ def main():
         pc_valid = []
         high_to_low_R = []
         high_to_low_t = []
+        bbox_pre = []
+        objectness_logits = []
+        bbox_gt = []
 
         model.eval()
         with torch.no_grad():
@@ -211,169 +258,79 @@ def main():
                 gt = {
                     'padded': samples[target_key]['padded'].to(device, non_blocking=True),
                     'mask': samples[target_key]['mask'].to(device, non_blocking=True),
+                    'bbox': samples[target_key]['bbox'].to(device, non_blocking=True)
                 }
 
                 pre = model(model_input)
 
                 pc.append(model_input['input'].detach().cpu())
                 pc_valid.append(model_input['mask'].detach().cpu())
-                pose_pre.append(pre['pose'].detach().cpu())
-                pose_confidence.append(pre['confidence'].detach().cpu())
+
+                pose = pre.get('pose')
+                if pose is not None:
+                    pose_pre.append(pose.detach().cpu())
+
+                confidence = pre.get('confidence')
+                if confidence is not None:
+                    pose_confidence.append(confidence.detach().cpu())
+
+                bbox = pre.get('bbox')
+                if bbox is not None:
+                    bbox_pre.append(bbox.detach().cpu())
+
+                logits = pre.get('objectness_logits')
+                if logits is not None:
+                    objectness_logits.append(logits.detach().cpu())
+
                 pose_gt.append(gt['padded'].detach().cpu())
+                bbox_gt.append(gt['bbox'].detach().cpu())
                 gt_valid.append(gt['mask'].detach().cpu())
-                high_to_low_R.append(samples['high_to_low_R'].detach().cpu())
-                high_to_low_t.append(samples['high_to_low_t'].detach().cpu())
+
+                transform_R = samples.get('high_to_low_R')
+                if transform_R is not None:
+                    high_to_low_R.append(transform_R.detach().cpu())
+
+                transform_t = samples.get('high_to_low_t')
+                if transform_t is not None:
+                    high_to_low_t.append(transform_t.detach().cpu())
+
         pc = torch.concatenate(pc, dim=0)
         pc_valid = torch.concatenate(pc_valid, dim=0)
-        pose_pre = torch.concatenate(pose_pre, dim=0)
-        pose_confidence = torch.concatenate(pose_confidence, dim=0)
+        pose_pre = torch.concatenate(pose_pre, dim=0) if pose_pre else None
+        pose_confidence = (
+            torch.concatenate(pose_confidence, dim=0)
+            if pose_confidence else None
+        )
         pose_gt = torch.concatenate(pose_gt, dim=0)
         gt_valid = torch.concatenate(gt_valid, dim=0)
-        high_to_low_R = torch.concatenate(high_to_low_R, dim=0)
-        high_to_low_t = torch.concatenate(high_to_low_t, dim=0)
+        high_to_low_R = (
+            torch.concatenate(high_to_low_R, dim=0)
+            if high_to_low_R else None
+        )
+        high_to_low_t = (
+            torch.concatenate(high_to_low_t, dim=0)
+            if high_to_low_t else None
+        )
+        bbox_pre = torch.concatenate(bbox_pre, dim=0) if bbox_pre else None
+        objectness_logits = (
+            torch.concatenate(objectness_logits, dim=0)
+            if objectness_logits else None
+        )
+        bbox_gt = torch.concatenate(bbox_gt, dim=0)
 
         results = {
             'pc': pc,
             'pc_valid': pc_valid,
             'pose_pre': pose_pre,
-            'pose_confidence': pose_confidence,
+            'bbox_pre': bbox_pre,
+            'objectness_logits': objectness_logits,
             'pose_gt': pose_gt,
+            'bbox_gt': bbox_gt,
             'gt_valid': gt_valid,
             'high_to_low_R': high_to_low_R,
             'high_to_low_t': high_to_low_t,
         }
-        torch.save(results, '/home/pai/Huawei/temp/result.pkl')
-
-        from metrics.pose import get_bce, get_detection_metric, get_mpjpe, get_pampjpe
-        ratio = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        bce = get_bce(pose_confidence, gt_valid).mean()
-        mpjpe = get_mpjpe(pose_pre, pose_gt, type='coco')
-        pampjpe = get_pampjpe(pose_pre, pose_gt, type='coco')
-        gt_mask = gt_valid.bool()
-        gt_num = int(gt_mask.sum().item())
-        if gt_num > 0:
-            mpjpe_gt = mpjpe.masked_select(gt_mask).mean().item()
-            pampjpe_gt = pampjpe.masked_select(gt_mask).mean().item()
-        else:
-            mpjpe_gt = float('nan')
-            pampjpe_gt = float('nan')
-
-        print(f"val bce: {bce.item():.6f}")
-        print(f"val mpjpe(gt): {mpjpe_gt:.6f}")
-        print(f"val pampjpe(gt): {pampjpe_gt:.6f}")
-        print("ratio | acc | precision | recall | f1 | mpjpe@success | pampjpe@success | success_num")
-        for r in ratio + [1.0]:
-            acc, precision, recall, f1 = get_detection_metric(pose_confidence, gt_valid, ratio=r)
-            success_mask = (pose_confidence >= r) & gt_valid.bool()
-            success_num = int(success_mask.sum().item())
-
-            if success_num > 0:
-                mpjpe_success = mpjpe.masked_select(success_mask).mean().item()
-                pampjpe_success = pampjpe.masked_select(success_mask).mean().item()
-                mpjpe_text = f"{mpjpe_success:.6f}"
-                pampjpe_text = f"{pampjpe_success:.6f}"
-            else:
-                mpjpe_text = "nan"
-                pampjpe_text = "nan"
-
-            print(
-                f"{r:.1f} | "
-                f"{acc.item():.6f} | "
-                f"{precision.item():.6f} | "
-                f"{recall.item():.6f} | "
-                f"{f1.item():.6f} | "
-                f"{mpjpe_text} | "
-                f"{pampjpe_text} | "
-                f"{success_num}"
-            )
-
-        '''temp 测试使用'''
-        from matplotlib import pyplot as plt
-        from utils.COCO import COCO_SKELETON
-        frame_mask = gt_valid.sum(dim=-1).bool()
-        pc_frame = pc[frame_mask]
-        pc_valid_frame = pc_valid[frame_mask]
-        pose_gt_frame = pose_gt[frame_mask]
-        pose_pre_frame = pose_pre[frame_mask]
-        gt_valid_frame = gt_valid[frame_mask]
-        mpjpe_frame = mpjpe[frame_mask]
-        pose_confidence_frame = pose_confidence[frame_mask]
-        high_to_low_R = high_to_low_R[frame_mask]
-        high_to_low_t = high_to_low_t[frame_mask]
-
-        for k in range(pose_gt_frame.shape[0]):
-            pc_xyz = pc_frame[k][pc_valid_frame[k]][:, :3]
-            pc_xyz = pc_xyz[torch.isfinite(pc_xyz).all(dim=-1)]
-            person_mask = gt_valid_frame[k].bool()
-            pose_gt_valid = pose_gt_frame[k][person_mask]
-            pose_pre_valid = pose_pre_frame[k][person_mask]
-            mpjpe_valid = mpjpe_frame[k][person_mask]
-            pose_confidence_valid = pose_confidence_frame[k][person_mask]
-            high_to_low_R_valid = high_to_low_R[k]
-            high_to_low_t_valid = high_to_low_t[k]
-
-            pc_xyz = (high_to_low_R_valid @ pc_xyz.T + high_to_low_t_valid.reshape(3, 1)).T
-
-            fig = plt.figure()
-            ax = plt.subplot(111, projection='3d')
-            if pc_xyz.shape[0] > 0:
-                ax.scatter(
-                    pc_xyz[:, 0], pc_xyz[:, 1], pc_xyz[:, 2], s=2,
-                    c='green', label='PC'
-                )
-
-            for person_idx in range(pose_gt_valid.shape[0]):
-                gt_person = pose_gt_valid[person_idx]
-                pre_person = pose_pre_valid[person_idx]
-
-                gt_person = (high_to_low_R_valid @ gt_person.T + high_to_low_t_valid.reshape(3, 1)).T
-                pre_person = (high_to_low_R_valid @ pre_person.T + high_to_low_t_valid.reshape(3, 1)).T
-
-                gt_label = 'GT' if person_idx == 0 else None
-                pre_label = 'PRE' if person_idx == 0 else None
-
-                ax.scatter(
-                    gt_person[:, 0], gt_person[:, 1], gt_person[:, 2], s=5,
-                    c='red', label=gt_label
-                )
-                for joint_a, joint_b in COCO_SKELETON:
-                    ax.plot(
-                        [gt_person[joint_a, 0], gt_person[joint_b, 0]],
-                        [gt_person[joint_a, 1], gt_person[joint_b, 1]],
-                        [gt_person[joint_a, 2], gt_person[joint_b, 2]],
-                        color='red',
-                        linewidth=1.5,
-                    )
-
-                ax.scatter(
-                    pre_person[:, 0], pre_person[:, 1], pre_person[:, 2], s=5,
-                    c='blue', label=pre_label
-                )
-                for joint_a, joint_b in COCO_SKELETON:
-                    ax.plot(
-                        [pre_person[joint_a, 0], pre_person[joint_b, 0]],
-                        [pre_person[joint_a, 1], pre_person[joint_b, 1]],
-                        [pre_person[joint_a, 2], pre_person[joint_b, 2]],
-                        color='blue',
-                        linewidth=1.5,
-                    )
-
-            ax.set_xlim(0.0, 6.0)
-            ax.set_ylim(-3.0, 3.0)
-            ax.set_zlim(-3.0, 3.0)
-            ax.set_xlabel('X (m)')
-            ax.set_ylabel('Y (m)')
-            ax.set_zlabel('Z (m)')
-            mpjpe_text = ', '.join([f'{value.item():.4f}' for value in mpjpe_valid])
-            confidence_text = ', '.join([f'{value.item():.4f}' for value in pose_confidence_valid])
-            ax.set_title(f"Frame:{k} People:{pose_gt_valid.shape[0]}\nMPJPE:{mpjpe_text}\nConfidence:{confidence_text}")
-            ax.legend()
-
-            fig.tight_layout()
-            fig.savefig('/home/pai/Huawei/temp.png', dpi=400)
-            plt.show(block=False)
-            plt.pause(0.1)
-            plt.close(fig)
+        torch.save(results, '/home/pai/Huawei/run/result.pkl')
     else:
         raise ValueError(f"cfg_task['stage'] dismatched, got {cfg_task['stage']}")
 

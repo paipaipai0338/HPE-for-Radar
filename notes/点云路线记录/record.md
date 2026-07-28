@@ -1,4 +1,5 @@
-# 记录一
+# 姿态估计
+## 记录一
 方法 P4
 
 [实验目录](/experiments/P4Transformer/20260627_235419/log/log.txt)
@@ -16,7 +17,7 @@
 原因分析：
 训练与验证数据存在 gap，譬如某些位置只出现某个动作，模型偏向记忆 ***记录四结果已经验证***
 
-# 记录二
+## 记录二
 方法 P4
 
 [实验目录](/experiments/P4Transformer/20260714_213834/log/log.txt)
@@ -57,7 +58,7 @@ torch.clamp(confidence, 1e-12, 1 - 1e-12)
 
 数据集的扩充对泛化具有一定程度的缓解 ***MPJPE 0.320802m -> 0.276153m***。
 
-# 记录三
+## 记录三
 方法 P4
 
 [实验目录](/experiments/P4Transformer/20260715_205732/log/log.txt)
@@ -94,7 +95,7 @@ person的划分方式与group的差异近乎接近，性能恶化到记录一的
 
 下一步应该将检测的能力剥离出P4Transformer，单纯做姿态估计。
 
-# 记录四
+## 记录四
 方法 P4
 
 [实验目录](/experiments/P4Transformer/20260722_093849/log/log.txt)
@@ -150,7 +151,7 @@ person的划分方式与group的差异近乎接近，性能恶化到记录一的
 + 对数据进行几何增广，实验验证是否泛化可进一步提升。
 + 考虑如何解决/缓解点云稀疏情况下的问题。
 
-# 记录五
+## 记录五
 方法 P4
 
 [实验目录](/experiments/P4Transformer/20260723_174845/log/log.txt)
@@ -192,3 +193,47 @@ person的划分方式与group的差异近乎接近，性能恶化到记录一的
 [额外实验](codex/analyze_severe_coverage.py)
 
 下一步 观察按照 person 划分数据是否可行。
+
+
+# 目标检测
+
+## 记录一
+方法 VoxelNeXt
+
+[实验目录](/experiments/VoxelNeXt/20260724_231418/log/log.txt)
+
+数据 0615 - 0717，不删除多人数据
+
+划分方式 group 不打乱，前 70% 后 30%
+[dataset_for_detection](/data2datasets/dataset_for_detection.py)
+
+BBox Metrics, objectness thresh 0.1, iou_thresh 0.7
+| Metric | Value |
+|--------|-------|
+| objectness | 0.212350 |
+| bbox_l1 | 0.019132 |
+| bbox_iou | 0.586919 |
+| TP | 190871 |
+| TN | 3574609 |
+| FP | 123240 |
+| FN | 480864 |
+| Precision | 0.607655 |
+| Recall | 0.284146 |
+| Accuracy | 0.861748 |
+
+分析：
+当前是按照 gt 产生的bbox，并未考虑 点云数据时候在内，当人员从下方进入时会出现框选空点云情况，
+
+当前模型是将 B T reshape 为一个维度，这直接丢失了时间维度的信息。
+
+训练极度缓慢，似乎是因为每组数据都得额外做匈牙利匹配
+
+当前只对匈牙利匹配成功的数据进行监督 bce 与 iou，匹配不成功的也做 bce 不做 iou 的隔离，这导致输出中的 bbox 很大概率重复框选但 confidence 很小，映射有些不明确，导致 loss 梯度震荡不下降？（存疑未验证）
+此外，又想到隔离不同 query 的输出 iou 使得其尽可能的低，但是多人情况会恶化。
+
+下一步首先应该考虑：
+如何加速训练；
+学习 sam3 等目标检测网络的多头表达能力（跟踪？）
+修改voxel_size: 0.025 0.025 0.1 的 0.1
+
+

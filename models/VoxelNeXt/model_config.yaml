@@ -1,0 +1,43 @@
+# The Huawei radar point-cloud tensors contain xyz plus three point features,
+# matching models/P4Transformer/model_config.yaml (feat_dim: 3).
+num_point_features: 3
+point_cloud_range:
+  - 0.0
+  - -3.0
+  - -2.0
+  - 6
+  - 3.0
+  - 2.0
+voxel_size:
+  - 0.025
+  - 0.025
+  - 0.1
+# Frames are flattened into B*T and detected independently, so no temporal
+# feature is appended inside the single-frame voxelizer.
+append_time: false
+append_xyz: false
+
+# Sparse 3D backbone size. The current implementation has five channel stages
+# and four configurable downsampling kernels.
+backbone_channels:
+  - 8
+  - 16
+  - 32
+  - 64
+  - 64
+spconv_kernel_sizes:
+  - 3
+  - 3
+  - 3
+  - 3
+backbone_out_channel: 64
+
+# Fixed person-query set head.
+head_shared_conv_channel: 64
+query_num_heads: 4
+query_num_layers: 2
+query_ffn_dim: 256
+query_dropout: 0.0
+
+# Fixed number of person queries and the K dimension of every output.
+max_people: 6
