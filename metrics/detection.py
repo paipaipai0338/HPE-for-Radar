@@ -2,14 +2,179 @@
 记录与人体检测相关的指标
 """
 
-from typing import List, Sequence, Tuple
+from collections.abc import Iterator
+from typing import List, Sequence, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
 
-MatchIndices = List[Tuple[torch.Tensor, torch.Tensor]]
+LegacyMatchIndices = List[Tuple[torch.Tensor, torch.Tensor]]
+
+
+class PackedMatchIndices:
+    """GPU 上的打包匹配索引，同时兼容原逐帧列表接口。"""
+
+    def __init__(
+        self,
+        frame_indices: torch.Tensor,
+        pred_indices: torch.Tensor,
+        gt_indices: torch.Tensor,
+        frame_offsets: Sequence[int],
+    ) -> None:
+        tensors = (frame_indices, pred_indices, gt_indices)
+        if any(tensor.ndim != 1 for tensor in tensors):
+            raise ValueError("Packed match indices must be one-dimensional")
+        if len({tensor.numel() for tensor in tensors}) != 1:
+            raise ValueError("Packed match index lengths differ")
+        if len(frame_offsets) == 0 or int(frame_offsets[0]) != 0:
+            raise ValueError("frame_offsets must start at zero")
+        if int(frame_offsets[-1]) != frame_indices.numel():
+            raise ValueError(
+                "Last frame offset must equal the packed match count"
+            )
+        if any(
+            int(frame_offsets[idx]) > int(frame_offsets[idx + 1])
+            for idx in range(len(frame_offsets) - 1)
+        ):
+            raise ValueError("frame_offsets must be non-decreasing")
+
+        self.frame_indices = frame_indices
+        self.pred_indices = pred_indices
+        self.gt_indices = gt_indices
+        self.frame_offsets = tuple(int(value) for value in frame_offsets)
+
+    def __len__(self) -> int:
+        return len(self.frame_offsets) - 1
+
+    def __getitem__(
+        self,
+        index: Union[int, slice],
+    ) -> Union[
+        Tuple[torch.Tensor, torch.Tensor],
+        LegacyMatchIndices,
+    ]:
+        if isinstance(index, slice):
+            return [
+                self[frame_idx]
+                for frame_idx in range(*index.indices(len(self)))
+            ]
+
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        start = self.frame_offsets[index]
+        end = self.frame_offsets[index + 1]
+        return (
+            self.pred_indices[start:end],
+            self.gt_indices[start:end],
+        )
+
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        for frame_idx in range(len(self)):
+            yield self[frame_idx]
+
+
+MatchIndices = Union[PackedMatchIndices, LegacyMatchIndices]
+
+
+def _get_packed_match_indices(
+    matches: MatchIndices,
+    expected_frames: int,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if len(matches) != expected_frames:
+        raise ValueError(
+            f"Expected {expected_frames} frame matches, got {len(matches)}"
+        )
+    if isinstance(matches, PackedMatchIndices):
+        packed = (
+            matches.frame_indices,
+            matches.pred_indices,
+            matches.gt_indices,
+        )
+        if any(tensor.device != device for tensor in packed):
+            raise ValueError("Packed matches and predictions must share device")
+        return packed
+
+    frame_parts = []
+    pred_parts = []
+    gt_parts = []
+    for frame_idx, (pred_idx, gt_idx) in enumerate(matches):
+        if pred_idx.numel() != gt_idx.numel():
+            raise ValueError(
+                f"Frame {frame_idx} has different prediction and GT "
+                "match counts"
+            )
+        if pred_idx.numel() == 0:
+            continue
+        pred_idx = pred_idx.to(device=device, dtype=torch.long)
+        gt_idx = gt_idx.to(device=device, dtype=torch.long)
+        frame_parts.append(
+            torch.full_like(pred_idx, frame_idx, device=device)
+        )
+        pred_parts.append(pred_idx)
+        gt_parts.append(gt_idx)
+
+    if not pred_parts:
+        empty = torch.empty(0, dtype=torch.long, device=device)
+        return empty, empty, empty
+    return (
+        torch.cat(frame_parts),
+        torch.cat(pred_parts),
+        torch.cat(gt_parts),
+    )
+
+
+def _batched_pairwise_axis_aligned_iou_3d(
+    boxes_a: torch.Tensor,
+    boxes_b: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """计算 ``[F,Q,6]`` 与 ``[F,K,6]`` 的逐帧两两 IoU。"""
+    if boxes_a.ndim != 3 or boxes_a.shape[-1] != 6:
+        raise ValueError(
+            f"boxes_a must be [F, Q, 6], got {tuple(boxes_a.shape)}"
+        )
+    if boxes_b.ndim != 3 or boxes_b.shape[-1] != 6:
+        raise ValueError(
+            f"boxes_b must be [F, K, 6], got {tuple(boxes_b.shape)}"
+        )
+    if boxes_a.shape[0] != boxes_b.shape[0]:
+        raise ValueError("boxes_a and boxes_b frame dimensions differ")
+
+    intersection_min = torch.maximum(
+        boxes_a[:, :, None, :3],
+        boxes_b[:, None, :, :3],
+    )
+    intersection_max = torch.minimum(
+        boxes_a[:, :, None, 3:],
+        boxes_b[:, None, :, 3:],
+    )
+    intersection = (
+        (intersection_max - intersection_min)
+        .clamp_min(0)
+        .prod(dim=-1)
+    )
+    volume_a = (
+        (boxes_a[..., 3:] - boxes_a[..., :3])
+        .clamp_min(0)
+        .prod(dim=-1)
+    )
+    volume_b = (
+        (boxes_b[..., 3:] - boxes_b[..., :3])
+        .clamp_min(0)
+        .prod(dim=-1)
+    )
+    union = (
+        volume_a[:, :, None]
+        + volume_b[:, None, :]
+        - intersection
+    )
+    return intersection / union.clamp_min(eps)
 
 
 def pairwise_axis_aligned_iou_3d(
@@ -98,59 +263,122 @@ def get_hungarian_match(
     bbox_l1_weight: float = 5.0,
     bbox_iou_weight: float = 2.0,
 ) -> MatchIndices:
-    """逐帧进行匈牙利匹配。
+    """批量构造代价后逐帧进行 CPU 匈牙利匹配。
 
-    返回长度为 ``B*T`` 的列表；每个元素分别是预测 query 索引和有效
-    GT 索引。索引计算不参与反向传播，匹配后的框误差仍保留梯度。
+    GPU 上一次构造 ``[B*T,Q,K]`` 代价并一次传到 CPU；CPU 完成各帧
+    Hungarian 后，将打包索引一次传回 GPU。返回对象兼容原来的逐帧
+    ``matches[frame_idx]`` 和迭代接口。
     """
-    # matches[0] = (
-    #     tensor([1, 0], device='cuda:0'),  # pred_idx: 预测索引1和0被匹配
-    #     tensor([5, 3], device='cuda:0')   # gt_idx: 对应的全局GT索引5和3
-    # )
+    if pred_bbox.ndim != 4 or pred_bbox.shape[-1] != 6:
+        raise ValueError(
+            f"pred_bbox must be [B, T, Q, 6], got {tuple(pred_bbox.shape)}"
+        )
+    if gt_bbox.ndim != 4 or gt_bbox.shape[-1] != 6:
+        raise ValueError(
+            f"gt_bbox must be [B, T, K, 6], got {tuple(gt_bbox.shape)}"
+        )
+    if gt_mask.shape != gt_bbox.shape[:-1]:
+        raise ValueError(
+            "gt_mask must match gt_bbox B,T,K dimensions, "
+            f"got {tuple(gt_mask.shape)} and {tuple(gt_bbox.shape)}"
+        )
+    if pred_bbox.shape[:2] != gt_bbox.shape[:2]:
+        raise ValueError("Prediction and GT B,T dimensions differ")
+    if pred_bbox.device != gt_bbox.device or pred_bbox.device != gt_mask.device:
+        raise ValueError("Prediction, GT boxes and GT mask must share device")
+
     flat_pred_bbox = pred_bbox.flatten(0, 1)
     flat_gt_bbox = gt_bbox.flatten(0, 1)
     flat_gt_mask = gt_mask.bool().flatten(0, 1)
-    matches: MatchIndices = []
+    num_frames, num_queries = flat_pred_bbox.shape[:2]
 
-    for frame_idx in range(flat_pred_bbox.shape[0]):
-        valid_gt_idx = flat_gt_mask[frame_idx].nonzero(as_tuple=False).flatten()
-        current_gt = flat_gt_bbox[frame_idx, valid_gt_idx]
-        if current_gt.shape[0] > flat_pred_bbox.shape[1]:
-            raise ValueError(
-                f"Frame {frame_idx} contains {current_gt.shape[0]} people, "
-                f"but only {flat_pred_bbox.shape[1]} queries are available."
-            )
-        if current_gt.numel() == 0:
-            empty = torch.empty(
-                0, dtype=torch.long, device=pred_bbox.device
-            )
-            matches.append((empty, empty))
-            continue
-
-        pred_norm = _normalize_bbox(
-            flat_pred_bbox[frame_idx], point_cloud_range
-        )
-        gt_norm = _normalize_bbox(current_gt, point_cloud_range)
-        l1_cost = torch.cdist(pred_norm, gt_norm, p=1)
-        iou_cost = 1.0 - pairwise_axis_aligned_iou_3d(
-            flat_pred_bbox[frame_idx], current_gt
+    with torch.no_grad():
+        pred_norm = _normalize_bbox(flat_pred_bbox, point_cloud_range)
+        gt_norm = _normalize_bbox(flat_gt_bbox, point_cloud_range)
+        l1_cost = (
+            pred_norm[:, :, None, :] - gt_norm[:, None, :, :]
+        ).abs().sum(dim=-1)
+        iou_cost = 1.0 - _batched_pairwise_axis_aligned_iou_3d(
+            flat_pred_bbox,
+            flat_gt_bbox,
         )
         matching_cost = (
             float(bbox_l1_weight) * l1_cost
             + float(bbox_iou_weight) * iou_cost
         )
-        pred_idx, local_gt_idx = linear_sum_assignment(
-            matching_cost.detach().cpu().numpy()
-        )
-        pred_idx = torch.as_tensor(
-            pred_idx, dtype=torch.long, device=pred_bbox.device
-        )
-        local_gt_idx = torch.as_tensor(
-            local_gt_idx, dtype=torch.long, device=pred_bbox.device
-        )
-        matches.append((pred_idx, valid_gt_idx[local_gt_idx]))
 
-    return matches
+        # 将 mask 作为最后一行一起传输，确保整个 matching 仅有一次
+        # GPU -> CPU copy/synchronization。
+        cpu_payload = torch.cat(
+            [
+                matching_cost,
+                flat_gt_mask[:, None, :].to(matching_cost.dtype),
+            ],
+            dim=1,
+        ).cpu().numpy()
+
+    cost_cpu = cpu_payload[:, :num_queries, :]
+    valid_mask_cpu = cpu_payload[:, num_queries, :] > 0.5
+    frame_offsets = [0]
+    packed_frame_indices = []
+    packed_pred_indices = []
+    packed_gt_indices = []
+
+    for frame_idx in range(num_frames):
+        valid_gt_idx = np.flatnonzero(valid_mask_cpu[frame_idx])
+        if valid_gt_idx.size > num_queries:
+            raise ValueError(
+                f"Frame {frame_idx} contains {valid_gt_idx.size} people, "
+                f"but only {num_queries} queries are available."
+            )
+        if valid_gt_idx.size == 0:
+            frame_offsets.append(frame_offsets[-1])
+            continue
+
+        frame_cost = cost_cpu[frame_idx][:, valid_gt_idx]
+        if not np.isfinite(frame_cost).all():
+            raise ValueError(
+                f"Frame {frame_idx} matching cost contains NaN or Inf"
+            )
+        pred_idx, local_gt_idx = linear_sum_assignment(
+            frame_cost
+        )
+        gt_idx = valid_gt_idx[local_gt_idx]
+        packed_frame_indices.append(
+            np.full(pred_idx.shape, frame_idx, dtype=np.int64)
+        )
+        packed_pred_indices.append(pred_idx.astype(np.int64, copy=False))
+        packed_gt_indices.append(gt_idx.astype(np.int64, copy=False))
+        frame_offsets.append(frame_offsets[-1] + pred_idx.size)
+
+    if packed_pred_indices:
+        packed_cpu = np.stack(
+            [
+                np.concatenate(packed_frame_indices),
+                np.concatenate(packed_pred_indices),
+                np.concatenate(packed_gt_indices),
+            ],
+            axis=0,
+        )
+        # 所有匹配索引一次 CPU -> GPU copy。
+        packed_gpu = torch.as_tensor(
+            packed_cpu,
+            dtype=torch.long,
+            device=pred_bbox.device,
+        )
+    else:
+        packed_gpu = torch.empty(
+            (3, 0),
+            dtype=torch.long,
+            device=pred_bbox.device,
+        )
+
+    return PackedMatchIndices(
+        frame_indices=packed_gpu[0],
+        pred_indices=packed_gpu[1],
+        gt_indices=packed_gpu[2],
+        frame_offsets=frame_offsets,
+    )
 
 
 def get_objectness(
@@ -168,13 +396,13 @@ def get_objectness(
         raise ValueError("objectness_logits and gt_mask B,T dimensions differ")
 
     flat_logits = objectness_logits.flatten(0, 1)
-    if len(matches) != flat_logits.shape[0]:
-        raise ValueError(
-            f"Expected {flat_logits.shape[0]} frame matches, got {len(matches)}"
-        )
+    frame_idx, pred_idx, _ = _get_packed_match_indices(
+        matches,
+        expected_frames=flat_logits.shape[0],
+        device=objectness_logits.device,
+    )
     target = torch.zeros_like(flat_logits)
-    for frame_idx, (pred_idx, _) in enumerate(matches):
-        target[frame_idx, pred_idx] = 1.0
+    target[frame_idx, pred_idx] = 1.0
     return F.binary_cross_entropy_with_logits(
         flat_logits, target, reduction="none"
     ).reshape_as(objectness_logits)
@@ -191,28 +419,24 @@ def get_bbox_l1(
     误差按照匹配到的 GT 槽位写回；无效 GT 槽位保持为 0，调用方应使用
     ``gt_mask`` 计算 masked mean。
     """
-    expected_matches = pred_bbox.shape[0] * pred_bbox.shape[1]
-    if len(matches) != expected_matches:
-        raise ValueError(
-            f"Expected {expected_matches} frame matches, got {len(matches)}"
-        )
-
-    bbox_l1 = pred_bbox.new_zeros(gt_bbox.shape[:-1])
-    for batch_idx in range(pred_bbox.shape[0]):
-        for time_idx in range(pred_bbox.shape[1]):
-            frame_idx = batch_idx * pred_bbox.shape[1] + time_idx
-            pred_idx, gt_idx = matches[frame_idx]
-            if pred_idx.numel() == 0:
-                continue
-            matched_pred = pred_bbox[batch_idx, time_idx, pred_idx]
-            matched_gt = gt_bbox[batch_idx, time_idx, gt_idx]
-            matched_l1 = F.l1_loss(
-                _normalize_bbox(matched_pred, point_cloud_range),
-                _normalize_bbox(matched_gt, point_cloud_range),
-                reduction="none",
-            ).mean(dim=-1)
-            bbox_l1[batch_idx, time_idx, gt_idx] = matched_l1
-    return bbox_l1
+    flat_pred_bbox = pred_bbox.flatten(0, 1)
+    flat_gt_bbox = gt_bbox.flatten(0, 1)
+    frame_idx, pred_idx, gt_idx = _get_packed_match_indices(
+        matches,
+        expected_frames=flat_pred_bbox.shape[0],
+        device=pred_bbox.device,
+    )
+    bbox_l1 = pred_bbox.new_zeros(flat_gt_bbox.shape[:-1])
+    if pred_idx.numel() > 0:
+        matched_pred = flat_pred_bbox[frame_idx, pred_idx]
+        matched_gt = flat_gt_bbox[frame_idx, gt_idx]
+        matched_l1 = F.l1_loss(
+            _normalize_bbox(matched_pred, point_cloud_range),
+            _normalize_bbox(matched_gt, point_cloud_range),
+            reduction="none",
+        ).mean(dim=-1)
+        bbox_l1[frame_idx, gt_idx] = matched_l1
+    return bbox_l1.reshape(gt_bbox.shape[:-1])
 
 
 def get_bbox_iou(
@@ -225,25 +449,21 @@ def get_bbox_iou(
     误差按照匹配到的 GT 槽位写回；无效 GT 槽位保持为 0，调用方应使用
     ``gt_mask`` 计算 masked mean。
     """
-    expected_matches = pred_bbox.shape[0] * pred_bbox.shape[1]
-    if len(matches) != expected_matches:
-        raise ValueError(
-            f"Expected {expected_matches} frame matches, got {len(matches)}"
+    flat_pred_bbox = pred_bbox.flatten(0, 1)
+    flat_gt_bbox = gt_bbox.flatten(0, 1)
+    frame_idx, pred_idx, gt_idx = _get_packed_match_indices(
+        matches,
+        expected_frames=flat_pred_bbox.shape[0],
+        device=pred_bbox.device,
+    )
+    bbox_iou_loss = pred_bbox.new_zeros(flat_gt_bbox.shape[:-1])
+    if pred_idx.numel() > 0:
+        matched_pred = flat_pred_bbox[frame_idx, pred_idx]
+        matched_gt = flat_gt_bbox[frame_idx, gt_idx]
+        bbox_iou_loss[frame_idx, gt_idx] = (
+            1.0 - paired_axis_aligned_iou_3d(matched_pred, matched_gt)
         )
-
-    bbox_iou_loss = pred_bbox.new_zeros(gt_bbox.shape[:-1])
-    for batch_idx in range(pred_bbox.shape[0]):
-        for time_idx in range(pred_bbox.shape[1]):
-            frame_idx = batch_idx * pred_bbox.shape[1] + time_idx
-            pred_idx, gt_idx = matches[frame_idx]
-            if pred_idx.numel() == 0:
-                continue
-            matched_pred = pred_bbox[batch_idx, time_idx, pred_idx]
-            matched_gt = gt_bbox[batch_idx, time_idx, gt_idx]
-            bbox_iou_loss[batch_idx, time_idx, gt_idx] = (
-                1.0 - paired_axis_aligned_iou_3d(matched_pred, matched_gt)
-            )
-    return bbox_iou_loss
+    return bbox_iou_loss.reshape(gt_bbox.shape[:-1])
 
 def get_tp_fp_fn_tn(
     objectness_logits: torch.Tensor,
