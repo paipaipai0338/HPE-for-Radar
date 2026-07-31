@@ -27,7 +27,6 @@ def get_gt_boxes(gt: torch.Tensor, gt_mask: torch.Tensor, threshold: float=0.1):
     bbox_3d = torch.cat([min_xyz, max_xyz], dim=-1)  # [B, T, K, 6]
     return bbox_3d
 
-
 def get_gt_boxes_list(
     gt_list: Sequence[np.ndarray],
     threshold: float = 0.1,
@@ -229,3 +228,4 @@ def get_gt_detection_targets(
     center_heatmap = heatmaps_per_person.sum(dim=2, keepdim=True)
 
     return center_heatmap, center_indices, center_offsets, box_sizes, inside
+

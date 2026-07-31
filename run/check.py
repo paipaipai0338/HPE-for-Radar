@@ -33,20 +33,30 @@ pc_valid = loaded['pc_valid']
 pose_pre = loaded['pose_pre']
 bbox_pre = loaded['bbox_pre']
 objectness_logits = loaded['objectness_logits']
+action_logits = loaded.get('action_logits')
 pose_gt = loaded['pose_gt']
 bbox_gt = loaded['bbox_gt']
+action_gt = loaded.get('action_gt')
+action_label = loaded.get('action_label')
 gt_valid = loaded['gt_valid']
 high_to_low_R = loaded['high_to_low_R']
 high_to_low_t = loaded['high_to_low_t']
+input_key = loaded.get('input_key')
+target_key = loaded.get('target_key')
 
 print('\nShape')
+print('input_key:', input_key)
+print('target_key:', target_key)
 print('pc:', pc.shape)
 print('pc_valid:', pc_valid.shape)
 print('pose_pre:', None if pose_pre is None else pose_pre.shape)
 print('bbox_pre:', None if bbox_pre is None else bbox_pre.shape)
 print('objectness_logits:', None if objectness_logits is None else objectness_logits.shape)
+print('action_logits:', None if action_logits is None else action_logits.shape)
 print('pose_gt:', pose_gt.shape)
 print('bbox_gt:', bbox_gt.shape)
+print('action_gt:', None if action_gt is None else action_gt.shape)
+print('action_label:', action_label)
 print('gt_valid:', gt_valid.shape)
 print('high_to_low_R:', None if high_to_low_R is None else high_to_low_R.shape,)
 print('high_to_low_t:', None if high_to_low_t is None else high_to_low_t.shape,)
@@ -54,6 +64,29 @@ print('high_to_low_t:', None if high_to_low_t is None else high_to_low_t.shape,)
 gt_mask = gt_valid.bool()
 gt_num = int(gt_mask.sum().item())
 matches = None
+
+if action_gt is not None:
+    if action_gt.shape[:-1] != gt_mask.shape or action_gt.shape[-1] != 4:
+        raise ValueError(
+            "action_gt 应为 [B,T,K,4] 且与 gt_valid 对齐，"
+            f"action_gt={tuple(action_gt.shape)}, "
+            f"gt_valid={tuple(gt_valid.shape)}"
+        )
+
+    valid_action = action_gt[gt_mask]
+    action_indices = valid_action.argmax(dim=-1)
+    labels = (
+        action_label
+        if action_label is not None
+        else ['stand', 'sit_squat', 'lie', 'other']
+    )
+
+    print('\nAction GT distribution')
+    for class_idx, class_name in enumerate(labels):
+        class_count = int(
+            (action_indices == class_idx).sum().item()
+        )
+        print(f'{class_name}: {class_count}')
 
 if bbox_pre is not None and objectness_logits is not None:
     matches = get_hungarian_match(
@@ -137,12 +170,21 @@ for sample_idx in range(pose_gt.shape[0]):
             if objectness_logits is None
             else objectness_logits[sample_idx:sample_idx + 1]
         ),
+        'action_logits': (
+            None
+            if action_logits is None
+            else action_logits[sample_idx:sample_idx + 1]
+        ),
     }
     gt = {
         'padded': pose_gt[sample_idx:sample_idx + 1],
         'bbox': bbox_gt[sample_idx:sample_idx + 1],
         'mask': gt_valid[sample_idx:sample_idx + 1],
     }
+    if action_gt is not None:
+        gt['action'] = action_gt[sample_idx:sample_idx + 1]
+    if action_label is not None:
+        gt['action_label'] = action_label
     model_input = {
         'input': pc[sample_idx:sample_idx + 1],
     }

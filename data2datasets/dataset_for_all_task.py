@@ -1,10 +1,8 @@
 import random
 import sys
 import os
-import fcntl
-import hashlib
-import json
-import tempfile
+import pickle
+import time
 import torch
 import copy
 import numpy as np
@@ -20,11 +18,11 @@ from data2datasets.load_json import get_meta_info
 from preprocess.radarprocess import get_bin_data, get_pc_data
 from preprocess.lidarprocess import get_lidar_data
 from preprocess.realsenseprocess import get_realsense_data
-from preprocess.gtprocess import get_gt_boxes_list, get_gt_data
+from preprocess.gtprocess import get_gt_boxes, get_gt_data
 
 
-def collate_fn(batch, max_points=300, max_people=4):
-    """将本 Dataset 的变长点云和多人 GT padding 成 batch Tensor。"""
+def _collate_base(batch, max_points=300, max_people=4):
+    """统一多任务 Dataset 私有的点云与 GT padding 实现。"""
     if not batch:
         raise ValueError("batch 不能为空")
     if max_points <= 0 or max_people <= 0:
@@ -103,12 +101,145 @@ def collate_fn(batch, max_points=300, max_people=4):
     return collated
 
 
+def collate_fn(
+    batch: List[Dict[str, Any]],
+    max_points: int = 300,
+    max_people: int = 4,
+    bbox_threshold: float = 0.1,
+) -> Dict[str, Any]:
+    """
+    对统一多任务样本进行 padding，并生成雷达坐标系下的 3D 包围盒。
+
+    Returns:
+        radar_low_pc / radar_high_pc:
+            padded: [B, T, max_points, 6]
+            mask:   [B, T, max_points]
+
+        gt / gt_for_high / gt_for_low:
+            padded: [B, T, max_people, 17, 3]
+            mask:   [B, T, max_people]
+
+        gt_for_high / gt_for_low 额外包含:
+            bbox: [B, T, max_people, 6]
+                最后一维为
+                [xmin, ymin, zmin, xmax, ymax, zmax]，
+                无效 person 槽位填 0。
+            action: [B, T, max_people, 4]
+                one-hot 类别顺序为
+                [stand, sit_squat, lie, other]，
+                无效 person 槽位填 0。
+    """
+    action_sequences = []
+
+    for sample_idx, sample in enumerate(batch):
+        gt_sequence = sample.get('gt_for_high')
+        if gt_sequence is None:
+            raise KeyError(
+                f"统一多任务样本 {sample_idx} 缺少 gt_for_high"
+            )
+
+        action_sequence = sample.get('action')
+        if action_sequence is None:
+            raise KeyError(
+                f"统一多任务样本 {sample_idx} 缺少 action"
+            )
+        if len(action_sequence) != len(gt_sequence):
+            raise ValueError(
+                "action 与 GT 的时间长度不一致："
+                f"sample_idx={sample_idx}, "
+                f"action_T={len(action_sequence)}, "
+                f"gt_T={len(gt_sequence)}"
+            )
+
+        for time_idx, frame_gt in enumerate(gt_sequence):
+            num_people = np.asarray(frame_gt).shape[0]
+            if num_people > max_people:
+                raise ValueError(
+                    "GT 人数超过 max_people，不能静默截断检测标注："
+                    f"sample_idx={sample_idx}, time_idx={time_idx}, "
+                    f"num_people={num_people}, max_people={max_people}"
+                )
+
+            frame_action = np.asarray(action_sequence[time_idx])
+            if frame_action.shape != (num_people, 4):
+                raise ValueError(
+                    "action 必须与 GT 人体一一对应且 shape 为 [N,4]："
+                    f"sample_idx={sample_idx}, time_idx={time_idx}, "
+                    f"gt_people={num_people}, "
+                    f"action_shape={frame_action.shape}"
+                )
+
+        action_sequences.append(action_sequence)
+
+    # action 是随人数变化的标注，由本函数单独 padding；基础 collate
+    # 只处理其余传感器和 GT 数据。
+    batch_without_action = [
+        {
+            key: value
+            for key, value in sample.items()
+            if key != 'action'
+        }
+        for sample in batch
+    ]
+
+    collated = _collate_base(
+        batch=batch_without_action,
+        max_points=max_points,
+        max_people=max_people,
+    )
+
+    B = len(batch)
+    T = len(action_sequences[0])
+    padded_action = torch.zeros(
+        B,
+        T,
+        max_people,
+        4,
+        dtype=torch.float32,
+    )
+
+    for batch_idx, action_sequence in enumerate(action_sequences):
+        for time_idx, frame_action in enumerate(action_sequence):
+            action_tensor = torch.as_tensor(
+                frame_action,
+                dtype=torch.float32,
+            )
+            num_people = action_tensor.shape[0]
+            padded_action[
+                batch_idx,
+                time_idx,
+                :num_people,
+            ] = action_tensor
+
+    for gt_key in ('gt_for_high', 'gt_for_low'):
+        if gt_key not in collated:
+            continue
+
+        gt_data = collated[gt_key]
+        valid_person = gt_data['mask']
+        bbox = get_gt_boxes(
+            gt=gt_data['padded'],
+            gt_mask=valid_person,
+            threshold=bbox_threshold,
+        )
+        gt_data['bbox'] = bbox.masked_fill(
+            ~valid_person.unsqueeze(-1),
+            0.0,
+        )
+        gt_data['action'] = padded_action.masked_fill(
+            ~valid_person.unsqueeze(-1),
+            0.0,
+        )
+
+    return collated
+
+
 class HPE_Dataset(Dataset):
 
-    ALIGNMENT_CACHE_SCHEMA_VERSION = 1
-    ALIGNMENT_ALGORITHM_VERSION = 'global_dp_v1'
+    FILE_READ_MAX_ATTEMPTS = 5
+    FILE_READ_RETRY_BASE_DELAY_SEC = 0.05
     
-    def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_bin', split_method='group', ratio=0.7, T=8, preload_cache=False):
+    def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_pc', split_method='group', ratio=0.7, T=8, preload_cache=False):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
         split_method = split_method.lower()
@@ -118,14 +249,20 @@ class HPE_Dataset(Dataset):
         self.base_source = base_source
         self.ratio = ratio
         self.T = T
+        self.action_label = [
+            'stand',
+            'sit_squat',
+            'lie',
+            'other',
+        ]
         self.preload_cache = preload_cache
         self.calib_cache = {}
         self.pointcloud_cache = {}
         self.gt_cache = {}
+        self.action_cache = {}
         self.skip_bad_samples = 0
         self.bad_files = set()
         self.npy_valid_cache = {}
-        self.gt_valid_cache = {}
 
         # 加载元信息
         json_path = self.root_path / 'data description.json'
@@ -134,8 +271,8 @@ class HPE_Dataset(Dataset):
         # 定义传感器，是否选取该传感器
         self.sensor_config = {
             'lidar': False,
+            'radar_high_bin': False,
             'radar_low_bin': False,
-            'radar_high_bin': True,
             'radar_low_pc': False,
             'radar_high_pc': True,
             'gt': True,
@@ -143,7 +280,6 @@ class HPE_Dataset(Dataset):
         } if sensor_config is None else sensor_config
 
         assert self.sensor_config[base_source] is True, 'base_source in sensor_config is False'
-        assert self.sensor_config.get('gt') is True, '单人数据集必须启用 gt'
         self.suffix_map = {
             'lidar': '.pcd',
             'radar_low_bin': '.bin',
@@ -154,11 +290,8 @@ class HPE_Dataset(Dataset):
             'realsense': '.bin',
         }
         self.cached_sensor_names = {
-            'lidar',
-            'radar_low_pc',
             'radar_high_pc',
             'gt',
-            'realsense',
         }
         # 更新 meta_info
         self._build_aligned_data()
@@ -277,33 +410,12 @@ class HPE_Dataset(Dataset):
                 mmap_mode="r",
             )
 
-            # 雷达点云必须为非空的 [N, 6]。部分文件虽然能正常读取
-            # npy header，但实际保存的是 shape=(0,) 的一维空数组，
-            # 会在 __getitem__ 中执行 frame_pc[:, :3] 时崩溃。
-            if sensor_name in {'radar_low_pc', 'radar_high_pc'}:
-                valid = (
-                    array.ndim == 2
-                    and array.shape[1] == 6
-                    and array.shape[0] > 0
-                )
-            else:
-                valid = True
-
-            if not valid:
-                if (
-                    file_path not in self.bad_files
-                    and len(self.bad_files) < 10
-                ):
-                    print(
-                        "跳过形状无效的文件: "
-                        f"sensor={sensor_name}, "
-                        f"path={file_path}, "
-                        f"shape={array.shape}, "
-                        f"dtype={array.dtype}"
-                    )
-                self.bad_files.add(file_path)
+            # 确保至少读取并解析 header
+            _ = array.shape
+            _ = array.dtype
 
             del array
+            valid = True
 
         except Exception as exc:
             valid = False
@@ -329,41 +441,6 @@ class HPE_Dataset(Dataset):
         self,
         window_by_sensor: Dict[str, List[str]],
     ) -> bool:
-        gt_files = window_by_sensor.get('gt')
-        if gt_files is None:
-            return False
-
-        for file_path in gt_files:
-            if file_path not in self.gt_valid_cache:
-                try:
-                    gt = get_gt_data(file_path)
-                    valid = (
-                        gt is not None
-                        and gt.ndim == 3
-                        and gt.shape[1:] == (17, 3)
-                        and gt.shape[0] == 1
-                        and np.isfinite(gt).all()
-                    )
-                except Exception as exc:
-                    valid = False
-                    if (
-                        file_path not in self.bad_files
-                        and len(self.bad_files) < 10
-                    ):
-                        print(
-                            "跳过无效 GT 文件: "
-                            f"path={file_path}, "
-                            f"error={type(exc).__name__}: {exc}"
-                        )
-                    self.bad_files.add(file_path)
-
-                self.gt_valid_cache[file_path] = valid
-
-            # 当前单人版本只接收恰好包含一个人的 GT。
-            # 多人数据的拆分与选择逻辑留待后续实现。
-            if not self.gt_valid_cache[file_path]:
-                return False
-
         for sensor_name, window_files in window_by_sensor.items():
             if self.suffix_map[sensor_name] != ".npy":
                 continue
@@ -395,20 +472,15 @@ class HPE_Dataset(Dataset):
                         'valid_group': List[str]
                         'group_data_path: Dict
                             Dict[
-                                'group_name: aligned_frames
+                                'group_name': aligned_frames
                             ]
                     ]
         '''
-        cache_hits = 0
-        cache_builds = 0
-
         for person_id, person_data in self.meta_info.items():
             for entry in person_data:
                 date = entry['date']
                 valid_group = entry['valid_group']
                 group_data_path = {}
-                aligned_valid_groups = []
-
                 for group_name in valid_group:
                     # 构建数据目录路径
                     group_dir = self.root_path / date / 'data_collection' / group_name
@@ -419,391 +491,21 @@ class HPE_Dataset(Dataset):
                     
                     # 构建传感器路径字典
                     sensor_paths = self._build_sensor_paths(group_dir)
-
-                    # 对齐结果以 group（一次采集）为最小单元持久化。
-                    # 划分 person/group/sequence 之前先完成对齐，
-                    # 保证任何划分方式都基于同一份对齐结果。
-                    aligned_frames, cache_hit = self._load_or_build_group_alignment(
-                        group_dir=group_dir,
-                        sensor_paths=sensor_paths,
-                        max_delta_sec=0.5,
-                        one_to_one=True,
-                        time_offsets_sec=None,
-                    )
-
-                    if cache_hit:
-                        cache_hits += 1
-                    else:
-                        cache_builds += 1
-
-                    frame_count = self._get_aligned_frame_count(
-                        aligned_frames=aligned_frames,
-                        expected_sensors={
-                            name
-                            for name, path in sensor_paths.items()
-                            if path is not None
-                        },
-                    )
-
-                    if frame_count is None:
-                        raise ValueError(
-                            f"{group_name} 的对齐结果结构无效"
+                    
+                    # 执行对齐
+                    aligned_frames = self._align_multi_sensor_files(
+                        sources=sensor_paths, 
+                        base_source=self.base_source, 
+                        # time_offsets_sec={
+                        #     "gt": -0.2
+                        # },
                         )
-
-                    if frame_count == 0:
+                    
+                    if not aligned_frames:
                         print(f"{group_name} 对齐后没有数据")
                         continue
-
-                    group_data_path[group_name] = aligned_frames
-                    aligned_valid_groups.append(group_name)
-
-                # 目录不存在或对齐结果为空的 group 不能继续留在
-                # valid_group 中，否则后续会访问不存在的 group_data_path。
-                entry['valid_group'] = aligned_valid_groups
+                    group_data_path[f'{group_name}'] = aligned_frames
                 entry['group_data_path'] = group_data_path
-
-        print(
-            f"对齐缓存: 命中 {cache_hits} 个 group, "
-            f"新建或刷新 {cache_builds} 个 group"
-        )
-
-    def _get_alignment_cache_config(
-        self,
-        sensor_paths: Dict[str, Optional[Path]],
-        max_delta_sec: Optional[float],
-        one_to_one: bool,
-        time_offsets_sec: Optional[Dict[str, float]],
-    ) -> Dict[str, Any]:
-        """返回影响对齐结果的全部配置。"""
-        enabled_sensors = {
-            name: self.suffix_map[name]
-            for name, path in sorted(sensor_paths.items())
-            if path is not None
-        }
-
-        return {
-            'algorithm_version': self.ALIGNMENT_ALGORITHM_VERSION,
-            'base_source': self.base_source,
-            'max_delta_sec': max_delta_sec,
-            'one_to_one': one_to_one,
-            'time_offsets_sec': {
-                name: float(offset)
-                for name, offset in sorted((time_offsets_sec or {}).items())
-            },
-            'enabled_sensors': enabled_sensors,
-        }
-
-    def _get_alignment_cache_path(
-        self,
-        group_dir: Path,
-        config: Dict[str, Any],
-    ) -> Path:
-        config_json = json.dumps(
-            config,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(',', ':'),
-        )
-        config_hash = hashlib.sha256(
-            config_json.encode('utf-8')
-        ).hexdigest()[:16]
-
-        return group_dir / 'cache' / f'alignment_{config_hash}.json'
-
-    def _get_alignment_source_signatures(
-        self,
-        group_dir: Path,
-        sensor_paths: Dict[str, Optional[Path]],
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        对齐仅依赖传感器目录中的文件名。
-
-        目录项新增、删除或重命名时，目录 mtime 会变化，
-        从而使旧缓存失效。不遍历每个文件可以避免网络盘上
-        缓存命中时仍产生大量 I/O。
-        """
-        signatures = {}
-
-        for name, path in sorted(sensor_paths.items()):
-            if path is None:
-                continue
-
-            relative_dir = path.relative_to(group_dir).as_posix()
-
-            try:
-                stat_result = path.stat()
-                signatures[name] = {
-                    'relative_dir': relative_dir,
-                    'exists': True,
-                    'is_dir': path.is_dir(),
-                    'mtime_ns': stat_result.st_mtime_ns,
-                }
-            except FileNotFoundError:
-                signatures[name] = {
-                    'relative_dir': relative_dir,
-                    'exists': False,
-                    'is_dir': False,
-                    'mtime_ns': None,
-                }
-
-        return signatures
-
-    def _get_aligned_frame_count(
-        self,
-        aligned_frames: Any,
-        expected_sensors: Set[str],
-    ) -> Optional[int]:
-        """检查对齐结果结构，并返回各传感器共同的帧数。"""
-        if not isinstance(aligned_frames, dict):
-            return None
-
-        if set(aligned_frames.keys()) != expected_sensors:
-            return None
-
-        frame_counts = set()
-
-        for paths in aligned_frames.values():
-            if not isinstance(paths, list):
-                return None
-
-            if not all(isinstance(path, str) for path in paths):
-                return None
-
-            frame_counts.add(len(paths))
-
-        if len(frame_counts) != 1:
-            return None
-
-        return next(iter(frame_counts))
-
-    def _load_alignment_cache(
-        self,
-        cache_path: Path,
-        group_dir: Path,
-        config: Dict[str, Any],
-        source_signatures: Dict[str, Dict[str, Any]],
-    ) -> Optional[Dict[str, List[str]]]:
-        if not cache_path.is_file():
-            return None
-
-        try:
-            with cache_path.open('r', encoding='utf-8') as file:
-                payload = json.load(file)
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"对齐缓存无法读取，将重新生成: {cache_path}, {exc}")
-            return None
-
-        if not isinstance(payload, dict):
-            print(f"对齐缓存结构无效，将重新生成: {cache_path}")
-            return None
-
-        if payload.get('schema_version') != self.ALIGNMENT_CACHE_SCHEMA_VERSION:
-            return None
-
-        if payload.get('config') != config:
-            return None
-
-        if payload.get('source_signatures') != source_signatures:
-            return None
-
-        relative_frames = payload.get('aligned_frames')
-        expected_sensors = set(config['enabled_sensors'].keys())
-        frame_count = self._get_aligned_frame_count(
-            aligned_frames=relative_frames,
-            expected_sensors=expected_sensors,
-        )
-
-        if frame_count is None or payload.get('frame_count') != frame_count:
-            print(f"对齐缓存结构无效，将重新生成: {cache_path}")
-            return None
-
-        aligned_frames = {}
-
-        for sensor_name, relative_paths in relative_frames.items():
-            absolute_paths = []
-
-            for relative_path_str in relative_paths:
-                relative_path = Path(relative_path_str)
-
-                # 缓存只允许引用当前 group 内部文件。
-                if relative_path.is_absolute() or '..' in relative_path.parts:
-                    print(f"对齐缓存包含非法路径，将重新生成: {cache_path}")
-                    return None
-
-                absolute_paths.append(str(group_dir / relative_path))
-
-            aligned_frames[sensor_name] = absolute_paths
-
-        return aligned_frames
-
-    def _save_alignment_cache(
-        self,
-        cache_path: Path,
-        group_dir: Path,
-        config: Dict[str, Any],
-        source_signatures: Dict[str, Dict[str, Any]],
-        aligned_frames: Dict[str, List[str]],
-    ) -> bool:
-        expected_sensors = set(config['enabled_sensors'].keys())
-        frame_count = self._get_aligned_frame_count(
-            aligned_frames=aligned_frames,
-            expected_sensors=expected_sensors,
-        )
-
-        if frame_count is None:
-            raise ValueError(
-                f"不能缓存结构无效的对齐结果: {group_dir}"
-            )
-
-        relative_frames = {}
-
-        for sensor_name, paths in aligned_frames.items():
-            relative_frames[sensor_name] = [
-                Path(path).relative_to(group_dir).as_posix()
-                for path in paths
-            ]
-
-        payload = {
-            'schema_version': self.ALIGNMENT_CACHE_SCHEMA_VERSION,
-            'config': config,
-            'source_signatures': source_signatures,
-            'frame_count': frame_count,
-            'aligned_frames': relative_frames,
-        }
-
-        temp_path = None
-
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with tempfile.NamedTemporaryFile(
-                mode='w',
-                encoding='utf-8',
-                prefix=f'.{cache_path.name}.',
-                suffix='.tmp',
-                dir=cache_path.parent,
-                delete=False,
-            ) as temp_file:
-                temp_path = Path(temp_file.name)
-                json.dump(
-                    payload,
-                    temp_file,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(',', ':'),
-                )
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-
-            os.replace(temp_path, cache_path)
-            return True
-
-        except OSError as exc:
-            print(f"对齐缓存写入失败，本次仍使用已计算结果: {cache_path}, {exc}")
-            return False
-
-        finally:
-            if temp_path is not None and temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except OSError:
-                    pass
-
-    def _load_or_build_group_alignment(
-        self,
-        group_dir: Path,
-        sensor_paths: Dict[str, Optional[Path]],
-        max_delta_sec: Optional[float],
-        one_to_one: bool,
-        time_offsets_sec: Optional[Dict[str, float]],
-    ) -> Tuple[Dict[str, List[str]], bool]:
-        """
-        读取 group 级对齐缓存；未命中时加锁计算并原子写入。
-
-        Returns:
-            (aligned_frames, cache_hit)
-        """
-        config = self._get_alignment_cache_config(
-            sensor_paths=sensor_paths,
-            max_delta_sec=max_delta_sec,
-            one_to_one=one_to_one,
-            time_offsets_sec=time_offsets_sec,
-        )
-        cache_path = self._get_alignment_cache_path(
-            group_dir=group_dir,
-            config=config,
-        )
-        source_signatures = self._get_alignment_source_signatures(
-            group_dir=group_dir,
-            sensor_paths=sensor_paths,
-        )
-        cached_frames = self._load_alignment_cache(
-            cache_path=cache_path,
-            group_dir=group_dir,
-            config=config,
-            source_signatures=source_signatures,
-        )
-
-        if cached_frames is not None:
-            return cached_frames, True
-
-        lock_file = None
-
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            lock_path = cache_path.with_suffix(cache_path.suffix + '.lock')
-            lock_file = lock_path.open('a+', encoding='utf-8')
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-
-        except OSError as exc:
-            if lock_file is not None:
-                lock_file.close()
-
-            # 数据集可能以只读方式挂载。这种情况下退化为
-            # 当次直接对齐，不因缓存不可写而阻断数据加载。
-            print(f"对齐缓存不可用，将直接计算: {group_dir}, {exc}")
-            aligned_frames = self._align_multi_sensor_files(
-                sources=sensor_paths,
-                max_delta_sec=max_delta_sec,
-                one_to_one=one_to_one,
-                base_source=self.base_source,
-                time_offsets_sec=time_offsets_sec,
-            )
-            return aligned_frames, False
-
-        with lock_file:
-            # 等锁期间其他进程可能已生成缓存，因此再检查一次。
-            source_signatures = self._get_alignment_source_signatures(
-                group_dir=group_dir,
-                sensor_paths=sensor_paths,
-            )
-            cached_frames = self._load_alignment_cache(
-                cache_path=cache_path,
-                group_dir=group_dir,
-                config=config,
-                source_signatures=source_signatures,
-            )
-
-            if cached_frames is not None:
-                return cached_frames, True
-
-            aligned_frames = self._align_multi_sensor_files(
-                sources=sensor_paths,
-                max_delta_sec=max_delta_sec,
-                one_to_one=one_to_one,
-                base_source=self.base_source,
-                time_offsets_sec=time_offsets_sec,
-            )
-
-            self._save_alignment_cache(
-                cache_path=cache_path,
-                group_dir=group_dir,
-                config=config,
-                source_signatures=source_signatures,
-                aligned_frames=aligned_frames,
-            )
-
-            return aligned_frames, False
     
     def _align_multi_sensor_files(
         self,
@@ -855,7 +557,7 @@ class HPE_Dataset(Dataset):
         
         def list_files(dir_path: Optional[str], suffix: str) -> Tuple[List[str], List[datetime]]:
             """列出目录中匹配后缀的文件并解析时间戳"""
-            if not dir_path or not suffix or not Path(dir_path).is_dir():
+            if not dir_path or not suffix:
                 return [], []
             files = [f for f in os.listdir(dir_path) if f.lower().endswith(suffix)]
             files.sort()
@@ -1189,6 +891,176 @@ class HPE_Dataset(Dataset):
 
         return get_data_function_dict[sensor_name]
 
+    def _get_action_path(self, gt_path: Path | str) -> Path:
+        """
+        action 文件由对应 GT 文件生成，因此二者使用相同文件名。
+
+        GT:
+            camera results/smoothed 3D/<timestamp>.pkl
+        action:
+            camera results/action label/<timestamp>.pkl
+
+        同时兼容已有数据中的 ``<timestamp>.npz``。
+        """
+        gt_path = Path(gt_path)
+        action_dir = gt_path.parent.parent / 'action label'
+        pkl_path = action_dir / f'{gt_path.stem}.pkl'
+        npz_path = action_dir / f'{gt_path.stem}.npz'
+
+        if pkl_path.exists():
+            return pkl_path
+        if npz_path.exists():
+            return npz_path
+        return pkl_path
+
+    def _load_gt_action_frame(
+        self,
+        gt_path: Path | str,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        同步读取一帧 GT 和 action，并用 GT 的有效人体 mask 同步筛选。
+
+        action pkl 支持 ``{'labels': ..., 'valid': ...}``；其中 valid
+        不参与筛选，人体有效性统一由 GT 是否缺失/包含非有限关节决定。
+        """
+        gt_path = Path(gt_path)
+        action_path = self._get_action_path(gt_path)
+
+        if not action_path.exists():
+            raise FileNotFoundError(
+                f"GT 对应的 action 文件不存在: {action_path}"
+            )
+
+        def load_pickle(path: Path) -> Any:
+            def load_once() -> Any:
+                with open(path, 'rb') as file:
+                    return pickle.load(file)
+
+            return self._load_with_permission_retry(
+                path=path,
+                load_once=load_once,
+            )
+
+        raw_gt = load_pickle(gt_path)
+
+        if action_path.suffix.lower() == '.npz':
+            def load_action_npz() -> Dict[str, np.ndarray]:
+                with np.load(action_path) as action_npz:
+                    return {
+                        key: action_npz[key].copy()
+                        for key in action_npz.files
+                    }
+
+            action_data = self._load_with_permission_retry(
+                path=action_path,
+                load_once=load_action_npz,
+            )
+        else:
+            action_data = load_pickle(action_path)
+
+        if not isinstance(action_data, dict) or 'labels' not in action_data:
+            raise ValueError(
+                "action 标注必须包含 labels，"
+                f"path={action_path}, type={type(action_data).__name__}"
+            )
+
+        gt = np.asarray(raw_gt, dtype=np.float32)
+        labels = np.asarray(action_data['labels'], dtype=np.float32)
+
+        if gt.ndim != 3 or gt.shape[-1] != 3:
+            raise ValueError(
+                f"GT 必须为 [N,J,3]，path={gt_path}, shape={gt.shape}"
+            )
+
+        num_people = gt.shape[0]
+        if labels.shape != (num_people, 4):
+            raise ValueError(
+                "action labels 必须为 [N,4] 且与 GT 人数一致，"
+                f"path={action_path}, gt_people={num_people}, "
+                f"labels_shape={labels.shape}"
+            )
+
+        if not np.isfinite(labels).all():
+            raise ValueError(
+                f"action labels 包含 NaN 或 Inf: {action_path}"
+            )
+
+        # action_data['valid'] 本质上是 GT 缺失关节的派生信息。
+        # 统一直接由原始 GT 计算 mask，保证此后的人体筛选同步。
+        person_valid_mask = np.isfinite(gt).all(axis=(1, 2))
+        gt = gt[person_valid_mask]
+        labels = labels[person_valid_mask]
+
+        gt.setflags(write=False)
+        labels.setflags(write=False)
+        return gt, labels
+
+    def _load_with_permission_retry(
+        self,
+        path: Path | str,
+        load_once: Callable[[], Any],
+    ) -> Any:
+        """
+        对 NFS 偶发 PermissionError 进行有限次数指数退避重试。
+
+        只重试 PermissionError；文件不存在、格式损坏等其他异常立即抛出。
+        """
+        path = Path(path)
+
+        for attempt_idx in range(self.FILE_READ_MAX_ATTEMPTS):
+            try:
+                return load_once()
+            except PermissionError as exc:
+                is_last_attempt = (
+                    attempt_idx + 1
+                    == self.FILE_READ_MAX_ATTEMPTS
+                )
+                if is_last_attempt:
+                    raise PermissionError(
+                        "NFS 文件在多次重试后仍无读取权限："
+                        f"path={path}, "
+                        f"attempts={self.FILE_READ_MAX_ATTEMPTS}"
+                    ) from exc
+
+                delay = (
+                    self.FILE_READ_RETRY_BASE_DELAY_SEC
+                    * (2 ** attempt_idx)
+                )
+                time.sleep(delay)
+
+    def _get_gt_action_frame(
+        self,
+        gt_path: Path | str,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        path_key = str(gt_path)
+
+        if (
+            path_key not in self.gt_cache
+            or path_key not in self.action_cache
+        ):
+            gt, action = self._load_gt_action_frame(gt_path)
+            self.gt_cache[path_key] = gt
+            self.action_cache[path_key] = action
+
+        return (
+            self.gt_cache[path_key].copy(),
+            self.action_cache[path_key].copy(),
+        )
+
+    def _get_gt_action_sequence(
+        self,
+        gt_paths: List[Path | str],
+    ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        gt_sequence = []
+        action_sequence = []
+
+        for gt_path in gt_paths:
+            gt, action = self._get_gt_action_frame(gt_path)
+            gt_sequence.append(gt)
+            action_sequence.append(action)
+
+        return gt_sequence, action_sequence
+
     def preload_data_cache(self) -> None:
         """
         在主进程中预热点云和 GT 缓存。
@@ -1199,7 +1071,6 @@ class HPE_Dataset(Dataset):
             if sensor_name not in self.cached_sensor_names:
                 continue
 
-            load_fn = self._get_sensor_loader(sensor_name)
             seen_paths = set()
             for window_paths in path_windows:
                 for path in window_paths:
@@ -1207,11 +1078,15 @@ class HPE_Dataset(Dataset):
                     if path_key in seen_paths:
                         continue
 
-                    self._cache_frame_data(
-                        sensor_name=sensor_name,
-                        path=path,
-                        load_fn=load_fn,
-                    )
+                    if sensor_name == 'gt':
+                        self._get_gt_action_frame(path)
+                    else:
+                        load_fn = self._get_sensor_loader(sensor_name)
+                        self._cache_frame_data(
+                            sensor_name=sensor_name,
+                            path=path,
+                            load_fn=load_fn,
+                        )
                     seen_paths.add(path_key)
 
     def _get_sensor_data_from_path(self, sensor_name: str, sensor_path: List[Path|str]) -> List:
@@ -1236,6 +1111,7 @@ class HPE_Dataset(Dataset):
         """
         self.pointcloud_cache.clear()
         self.gt_cache.clear()
+        self.action_cache.clear()
 
     def _load_calib_T(self, date: str) -> Dict[str, Dict[str, np.ndarray]]:
         """
@@ -1488,11 +1364,20 @@ class HPE_Dataset(Dataset):
 
             paths = self.data_path_list.get(sensor_name)
             paths = paths[idx]
-            data = self._get_sensor_data_from_path(sensor_name, paths)
-            samples[sensor_name] = data
 
             if sensor_name == 'gt':
+                gt_sequence, action_sequence = (
+                    self._get_gt_action_sequence(paths)
+                )
+                samples['gt'] = gt_sequence
+                samples['action'] = action_sequence
                 date = paths[0].split('/')[3]
+            else:
+                data = self._get_sensor_data_from_path(
+                    sensor_name,
+                    paths,
+                )
+                samples[sensor_name] = data
         
         calib = self._load_calib_T(date)
         raw_gt = samples['gt']
@@ -1521,51 +1406,6 @@ class HPE_Dataset(Dataset):
             calib['high_to_low']['t'].copy()
             for _ in range(self.T)
         ]
-
-        # temp：单人 GT 框选高位雷达点云，并以髋部中心进行位置归一化。
-        gt_boxes = get_gt_boxes_list(
-            samples['gt_for_high'],
-            threshold=0.1,
-        )
-
-        for frame_idx in range(self.T):
-            frame_gt = samples['gt_for_high'][frame_idx]
-            frame_pc = samples['radar_high_pc'][frame_idx]
-            num_people = frame_gt.shape[0]
-
-            if num_people > 1:
-                raise ValueError(
-                    "当前版本只支持单人估计，"
-                    f"frame_idx={frame_idx}, num_people={num_people}"
-                )
-
-            # 没有 GT 时无法确定人体点云区域，因此返回空点云。
-            if num_people == 0:
-                samples['radar_high_pc'][frame_idx] = frame_pc[:0].copy()
-                continue
-
-            bbox = gt_boxes[frame_idx][0]
-            min_xyz = bbox[:3]
-            max_xyz = bbox[3:]
-
-            # 只保留落在该人 3D GT 包围盒内的雷达点。
-            xyz = frame_pc[:, :3]
-            inside = (
-                (xyz >= min_xyz[None, :])
-                & (xyz <= max_xyz[None, :])
-            ).all(axis=1)
-            selected_pc = frame_pc[inside].copy()
-
-            # 使用该人的 11、12 号关节点中点作为坐标原点。
-            offset = (
-                frame_gt[0, 11, :] + frame_gt[0, 12, :]
-            ) / 2.0
-
-            samples['gt_for_high'][frame_idx] = (
-                frame_gt - offset[None, None, :]
-            )
-            selected_pc[:, :3] -= offset[None, :]
-            samples['radar_high_pc'][frame_idx] = selected_pc
               
         return samples
 
@@ -1573,90 +1413,54 @@ class HPE_Dataset(Dataset):
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
+    from matplotlib.patches import Rectangle
+    from preprocess.gtprocess import get_gt_detection_targets
+    from preprocess.radarprocess import Radar_Config, get_radar_res, range_cube_to_doppler_cube
+    from preprocess.radarprocess_RPM2 import SingleRadarProjectionConfig, range_cube_to_rpm_projection_maps, power_to_db
 
     root_path = '/mnt/huawei'
     T = 4
-    batch_sample_idx = 0
-    time_idx = 0
-    pc_3d_x_limits = (-3.0, 3.0)
+    b = 0
+    projection_t_to_plot = 0
+    clutter_mode = 'chirp_mean'
+    # 因此对应 raw_t=1；其他模式的投影与原始帧同索引。
+    projection_time_start = 1 if clutter_mode == 'frame_difference' else 0
+    t = projection_t_to_plot + projection_time_start
+    if not 0 <= t < T:
+        raise IndexError(
+            f'待绘制投影帧超出时间范围：projection_t={projection_t_to_plot}, '
+            f'raw_t={t}, T={T}'
+        )
+    xy_x_limits = (0, 5.0)
+    xy_y_limits = (-2.0, 2.0)
+    xz_x_limits = (0, 5.0)
+    xz_z_limits = (-1.5, 1.5)
+    range_plot_limits = (0, 5.0)
+    pc_3d_x_limits = (0.0, 6.0)
     pc_3d_y_limits = (-3.0, 3.0)
     pc_3d_z_limits = (-3.0, 3.0)
 
+    radar_config = Radar_Config()
+    projection_config = SingleRadarProjectionConfig()
+
     dataset = HPE_Dataset(root_path, T=T)
+    collate_fn = partial(
+        collate_fn,
+        max_points=300,
+        max_people=4,
+    )
+
     dataloader = DataLoader(
         dataset,
         batch_size=8,
-        collate_fn=partial(
-            collate_fn,
-            max_points=300,
-            max_people=1,
-        ),
+        collate_fn=collate_fn,
         shuffle=False,
         num_workers=4,
     )
 
     for batch_idx, samples in enumerate(dataloader):
-        pc_mask = samples['radar_high_pc']['mask'][
-            batch_sample_idx, time_idx
-        ].bool()
-        gt_mask = samples['gt_for_high']['mask'][
-            batch_sample_idx, time_idx
-        ].bool()
-
-        point_cloud = samples['radar_high_pc']['padded'][
-            batch_sample_idx, time_idx
-        ][pc_mask, :3].cpu().numpy()
-        gt = samples['gt_for_high']['padded'][
-            batch_sample_idx, time_idx
-        ][gt_mask].cpu().numpy()
-
-        point_cloud = point_cloud[
-            np.isfinite(point_cloud).all(axis=1)
-        ]
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111, projection='3d')
-
-        if point_cloud.shape[0] > 0:
-            ax.scatter(
-                point_cloud[:, 0],
-                point_cloud[:, 1],
-                point_cloud[:, 2],
-                s=5,
-                c='blue',
-                alpha=0.6,
-                label='Radar point cloud',
-            )
-
-        if gt.shape[0] > 0:
-            joints = gt[0]
-            joints = joints[np.isfinite(joints).all(axis=1)]
-            ax.scatter(
-                joints[:, 0],
-                joints[:, 1],
-                joints[:, 2],
-                s=30,
-                c='red',
-                marker='x',
-                linewidth=2,
-                label='GT',
-            )
-
-        ax.set_xlim(pc_3d_x_limits)
-        ax.set_ylim(pc_3d_y_limits)
-        ax.set_zlim(pc_3d_z_limits)
-        ax.set_box_aspect((1, 1, 1))
-        ax.set_title(
-            f'radar high pc and gt, batch {batch_idx}, '
-            f'sample {batch_sample_idx}, time {time_idx}'
-        )
-        ax.set_xlabel('X (m)')
-        ax.set_ylabel('Y (m)')
-        ax.set_zlabel('Z (m)')
-        ax.legend(fontsize=8)
-
-        fig.tight_layout()
-        save_path = '/home/pai/Huawei/temp.png'
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        print(f'visualization saved to: {save_path}')
+        for key, value in samples.items():
+            if isinstance(value, dict) and 'padded' in value:
+                print(f"{key}: padded {value['padded'].shape}, mask {value['mask'].shape}")
+            else:
+                print(f"{key}: {value.shape}")

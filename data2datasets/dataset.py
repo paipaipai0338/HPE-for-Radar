@@ -10,13 +10,93 @@ from torch import nn
 from functools import partial
 from datetime import datetime, timedelta
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.dataloader import default_collate
 
 from data2datasets.load_json import get_meta_info
 from preprocess.radarprocess import get_bin_data, get_pc_data
 from preprocess.lidarprocess import get_lidar_data
 from preprocess.realsenseprocess import get_realsense_data
 from preprocess.gtprocess import get_gt_data
-from data2datasets.utils_data import collate_pc_gt_fn
+
+
+def collate_fn(batch, max_points=300, max_people=4):
+    """将本 Dataset 的变长点云和多人 GT padding 成 batch Tensor。"""
+    if not batch:
+        raise ValueError("batch 不能为空")
+    if max_points <= 0 or max_people <= 0:
+        raise ValueError("max_points 和 max_people 必须大于 0")
+
+    variable_config = {
+        'radar_low_pc': (max_points, (6,), True),
+        'radar_high_pc': (max_points, (6,), True),
+        'gt': (max_people, (17, 3), False),
+        'gt_for_high': (max_people, (17, 3), False),
+        'gt_for_low': (max_people, (17, 3), False),
+    }
+    expected_keys = set(batch[0])
+    for sample_idx, sample in enumerate(batch):
+        if set(sample) != expected_keys:
+            raise ValueError(
+                f"batch 中第 {sample_idx} 个样本的键不一致："
+                f"expected={expected_keys}, actual={set(sample)}"
+            )
+
+    B = len(batch)
+    collated = {}
+    for key in batch[0]:
+        T = len(batch[0][key])
+        for sample_idx, sample in enumerate(batch):
+            if len(sample[key]) != T:
+                raise ValueError(
+                    f"{key} 时间长度不一致：sample 0 T={T}, "
+                    f"sample {sample_idx} T={len(sample[key])}"
+                )
+
+        if key not in variable_config:
+            time_collated = default_collate(
+                [sample[key] for sample in batch]
+            )
+            collated[key] = torch.stack(list(time_collated), dim=1)
+            continue
+
+        max_var, fixed_dims, random_sample = variable_config[key]
+        padded = torch.zeros(
+            B, T, max_var, *fixed_dims, dtype=torch.float32
+        )
+        mask = torch.zeros(B, T, max_var, dtype=torch.bool)
+
+        for batch_idx, sample in enumerate(batch):
+            for time_idx, arr in enumerate(sample[key]):
+                if arr is None:
+                    continue
+                tensor = torch.as_tensor(arr, dtype=torch.float32)
+                if tensor.numel() == 0:
+                    continue
+                expected_ndim = 1 + len(fixed_dims)
+                if (
+                    tensor.ndim != expected_ndim
+                    or tuple(tensor.shape[1:]) != fixed_dims
+                ):
+                    raise ValueError(
+                        f"{key} shape 错误：batch_idx={batch_idx}, "
+                        f"time_idx={time_idx}, actual={tuple(tensor.shape)}, "
+                        f"expected=[N,{fixed_dims}]"
+                    )
+
+                original_n = tensor.shape[0]
+                valid_n = min(original_n, max_var)
+                if original_n > max_var:
+                    if random_sample:
+                        indices = torch.randperm(original_n)[:max_var]
+                        tensor = tensor[indices]
+                    else:
+                        tensor = tensor[:max_var]
+                padded[batch_idx, time_idx, :valid_n] = tensor[:valid_n]
+                mask[batch_idx, time_idx, :valid_n] = True
+
+        collated[key] = {'padded': padded, 'mask': mask}
+
+    return collated
 
 
 class HPE_Dataset(Dataset):
@@ -1040,7 +1120,7 @@ if __name__ == '__main__':
 
     dataset = HPE_Dataset(root_path, T=T)
     collate_fn = partial(
-        collate_pc_gt_fn,
+        collate_fn,
         max_points=300,
         max_people=4,
     )

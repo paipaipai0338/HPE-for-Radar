@@ -18,10 +18,10 @@ from run.utils.process_one_epoch import train_one_epoch, val_one_epoch
 from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint
 from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_warmup
 
-# from data2datasets.dataset import HPE_Dataset
-from data2datasets.dataset_for_single import HPE_Dataset
-from data2datasets.utils_data import collate_pc_gt_fn
-# from data2datasets.dataset_for_detection import HPE_Dataset, collate_detection_fn
+# from data2datasets.dataset import HPE_Dataset, collate_fn as dataset_collate_fn
+# from data2datasets.dataset_for_single import HPE_Dataset, collate_fn as dataset_collate_fn
+# from data2datasets.dataset_for_detection import HPE_Dataset, collate_fn as dataset_collate_fn
+from data2datasets.dataset_for_all_task import HPE_Dataset, collate_fn as dataset_collate_fn
 
 # nohup /home/pai/miniconda3/envs/pytorch/bin/python /home/pai/Huawei/run/main.py &
 
@@ -80,8 +80,7 @@ def main():
         'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False)),
         'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False)),
     }
-    collate_fn = partial(collate_pc_gt_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
-    # collate_fn = partial(collate_detection_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
+    collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
     dataloader = {
         'train': DataLoader(dataset['train'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['train']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
         'val': DataLoader(dataset['val'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['val']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
@@ -233,7 +232,6 @@ def main():
 
         pose_pre = []
         pose_gt = []
-        pose_confidence = []
         gt_valid = []
         pc = []
         pc_valid = []
@@ -242,6 +240,8 @@ def main():
         bbox_pre = []
         objectness_logits = []
         bbox_gt = []
+        action_logits = []
+        action_gt = []
 
         model.eval()
         with torch.no_grad():
@@ -260,6 +260,12 @@ def main():
                     'mask': samples[target_key]['mask'].to(device, non_blocking=True),
                     'bbox': samples[target_key]['bbox'].to(device, non_blocking=True)
                 }
+                batch_action_gt = samples[target_key].get('action')
+                if batch_action_gt is not None:
+                    gt['action'] = batch_action_gt.to(
+                        device,
+                        non_blocking=True,
+                    )
 
                 pre = model(model_input)
 
@@ -270,10 +276,6 @@ def main():
                 if pose is not None:
                     pose_pre.append(pose.detach().cpu())
 
-                confidence = pre.get('confidence')
-                if confidence is not None:
-                    pose_confidence.append(confidence.detach().cpu())
-
                 bbox = pre.get('bbox')
                 if bbox is not None:
                     bbox_pre.append(bbox.detach().cpu())
@@ -282,9 +284,17 @@ def main():
                 if logits is not None:
                     objectness_logits.append(logits.detach().cpu())
 
+                batch_action_logits = pre.get('action_logits')
+                if batch_action_logits is not None:
+                    action_logits.append(
+                        batch_action_logits.detach().cpu()
+                    )
+
                 pose_gt.append(gt['padded'].detach().cpu())
                 bbox_gt.append(gt['bbox'].detach().cpu())
                 gt_valid.append(gt['mask'].detach().cpu())
+                if gt.get('action') is not None:
+                    action_gt.append(gt['action'].detach().cpu())
 
                 transform_R = samples.get('high_to_low_R')
                 if transform_R is not None:
@@ -297,10 +307,6 @@ def main():
         pc = torch.concatenate(pc, dim=0)
         pc_valid = torch.concatenate(pc_valid, dim=0)
         pose_pre = torch.concatenate(pose_pre, dim=0) if pose_pre else None
-        pose_confidence = (
-            torch.concatenate(pose_confidence, dim=0)
-            if pose_confidence else None
-        )
         pose_gt = torch.concatenate(pose_gt, dim=0)
         gt_valid = torch.concatenate(gt_valid, dim=0)
         high_to_low_R = (
@@ -317,15 +323,32 @@ def main():
             if objectness_logits else None
         )
         bbox_gt = torch.concatenate(bbox_gt, dim=0)
+        action_logits = (
+            torch.concatenate(action_logits, dim=0)
+            if action_logits else None
+        )
+        action_gt = (
+            torch.concatenate(action_gt, dim=0)
+            if action_gt else None
+        )
 
         results = {
+            'input_key': cfg_task['input'],
+            'target_key': cfg_task['output'],
             'pc': pc,
             'pc_valid': pc_valid,
             'pose_pre': pose_pre,
             'bbox_pre': bbox_pre,
             'objectness_logits': objectness_logits,
+            'action_logits': action_logits,
             'pose_gt': pose_gt,
             'bbox_gt': bbox_gt,
+            'action_gt': action_gt,
+            'action_label': getattr(
+                dataset['val'],
+                'action_label',
+                None,
+            ),
             'gt_valid': gt_valid,
             'high_to_low_R': high_to_low_R,
             'high_to_low_t': high_to_low_t,

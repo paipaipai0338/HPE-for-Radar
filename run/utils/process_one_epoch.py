@@ -65,6 +65,12 @@ def val_one_epoch(model, dataloader, metric, device, cfg_task, if_plot, fig_path
                 'mask': samples[target_key]['mask'].to(device, non_blocking=True),
                 # 'bbox': samples[target_key]['bbox'].to(device, non_blocking=True)
             }
+            batch_action_gt = samples[target_key].get('action')
+            if batch_action_gt is not None:
+                gt['action'] = batch_action_gt.to(
+                    device,
+                    non_blocking=True,
+                )
 
             pre = model(model_input)
             loss, _ = metric.calculate_batch(pre, gt)
