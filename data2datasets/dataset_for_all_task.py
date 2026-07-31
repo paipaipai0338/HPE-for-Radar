@@ -105,7 +105,7 @@ def collate_fn(
     batch: List[Dict[str, Any]],
     max_points: int = 300,
     max_people: int = 4,
-    bbox_threshold: float = 0.1,
+    bbox_threshold: float = 0.3,
 ) -> Dict[str, Any]:
     """
     对统一多任务样本进行 padding，并生成雷达坐标系下的 3D 包围盒。
@@ -238,14 +238,35 @@ class HPE_Dataset(Dataset):
 
     FILE_READ_MAX_ATTEMPTS = 5
     FILE_READ_RETRY_BASE_DELAY_SEC = 0.05
+    _ROTATION_ROLL_RANGE_DEG = (-5.0, 5.0)
+    _ROTATION_PITCH_RANGE_DEG = (-10.0, 10.0)
+    _ROTATION_YAW_RANGE_DEG = (-5.0, 5.0)
     
-    def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_pc', split_method='group', ratio=0.7, T=8, preload_cache=False):
+    def __init__(
+        self,
+        root_path='/mnt/huawei',
+        sensor_config=None,
+        mode='train',
+        base_source='radar_high_pc',
+        split_method='group',
+        ratio=0.7,
+        T=8,
+        preload_cache=False,
+        enable_rotation=True,
+    ):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
         split_method = split_method.lower()
         assert split_method in ['person', 'group', 'sequence'], 'split_method has unmatched method'
+        if not isinstance(enable_rotation, bool):
+            raise TypeError(
+                "enable_rotation 必须为 bool，"
+                f"实际为 {type(enable_rotation).__name__}"
+            )
 
         self.root_path = Path(root_path)
+        self.mode = mode
+        self.enable_rotation = enable_rotation
         self.base_source = base_source
         self.ratio = ratio
         self.T = T
@@ -1352,6 +1373,132 @@ class HPE_Dataset(Dataset):
 
         return transformed_sequence
 
+    @staticmethod
+    def _rotation_matrix_from_euler_deg(
+        roll_deg: float,
+        pitch_deg: float,
+        yaw_deg: float,
+    ) -> np.ndarray:
+        """
+        根据雷达安装姿态偏移生成旧雷达坐标到增强坐标的旋转矩阵。
+
+        雷达坐标系采用 x 前、y 左、z 上的右手系。安装姿态旋转定义为
+        D = Rz(yaw) @ Ry(pitch) @ Rx(roll)，同一物理点在扰动后的雷达
+        坐标系中表示为 p_aug = D.T @ p，因此返回 A = D.T。
+        """
+        roll, pitch, yaw = np.deg2rad(
+            np.asarray(
+                [roll_deg, pitch_deg, yaw_deg],
+                dtype=np.float64,
+            )
+        )
+
+        cos_roll, sin_roll = np.cos(roll), np.sin(roll)
+        cos_pitch, sin_pitch = np.cos(pitch), np.sin(pitch)
+        cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
+
+        R_x = np.asarray(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, cos_roll, -sin_roll],
+                [0.0, sin_roll, cos_roll],
+            ],
+            dtype=np.float64,
+        )
+        R_y = np.asarray(
+            [
+                [cos_pitch, 0.0, sin_pitch],
+                [0.0, 1.0, 0.0],
+                [-sin_pitch, 0.0, cos_pitch],
+            ],
+            dtype=np.float64,
+        )
+        R_z = np.asarray(
+            [
+                [cos_yaw, -sin_yaw, 0.0],
+                [sin_yaw, cos_yaw, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+
+        mounting_rotation = R_z @ R_y @ R_x
+        return mounting_rotation.T.astype(
+            np.float32,
+            copy=False,
+        )
+
+    def _sample_rotation_matrix(self) -> np.ndarray:
+        """
+        为一个 T 帧窗口采样一次安装角扰动。
+
+        使用 PyTorch 随机数生成器，使 DataLoader worker 的标准随机种子
+        机制能够控制增强的可复现性。
+        """
+        roll_deg = torch.empty((), dtype=torch.float32).uniform_(
+            *self._ROTATION_ROLL_RANGE_DEG
+        ).item()
+        pitch_deg = torch.empty((), dtype=torch.float32).uniform_(
+            *self._ROTATION_PITCH_RANGE_DEG
+        ).item()
+        yaw_deg = torch.empty((), dtype=torch.float32).uniform_(
+            *self._ROTATION_YAW_RANGE_DEG
+        ).item()
+
+        return self._rotation_matrix_from_euler_deg(
+            roll_deg=roll_deg,
+            pitch_deg=pitch_deg,
+            yaw_deg=yaw_deg,
+        )
+
+    @staticmethod
+    def _rotate_pointcloud_sequence(
+        pointcloud_sequence: List,
+        rotation: np.ndarray,
+    ) -> List[np.ndarray]:
+        """
+        绕雷达原点旋转点云序列的 xyz，保持其余点特征不变。
+        """
+        rotation = np.asarray(rotation, dtype=np.float32)
+        if rotation.shape != (3, 3):
+            raise ValueError(
+                f"rotation 应为 [3,3]，实际为 {rotation.shape}"
+            )
+
+        rotated_sequence = []
+
+        for frame_idx, pointcloud_frame in enumerate(
+            pointcloud_sequence
+        ):
+            if pointcloud_frame is None:
+                rotated_sequence.append(None)
+                continue
+
+            pointcloud = np.array(
+                pointcloud_frame,
+                dtype=np.float32,
+                copy=True,
+            )
+
+            if (
+                pointcloud.ndim != 2
+                or pointcloud.shape[-1] < 3
+            ):
+                raise ValueError(
+                    "雷达点云必须为 [N,C] 且 C>=3，"
+                    f"frame_idx={frame_idx}, "
+                    f"实际形状={pointcloud.shape}"
+                )
+
+            if pointcloud.shape[0] > 0:
+                pointcloud[:, :3] = (
+                    rotation @ pointcloud[:, :3].T
+                ).T
+
+            rotated_sequence.append(pointcloud)
+
+        return rotated_sequence
+
     def __len__(self) -> int:
         return len(self.data_path_list[self.base_source])
 
@@ -1382,28 +1529,66 @@ class HPE_Dataset(Dataset):
         calib = self._load_calib_T(date)
         raw_gt = samples['gt']
 
+        R_high = calib['gt_to_high']['R']
+        t_high = calib['gt_to_high']['t']
+        R_low = calib['gt_to_low']['R']
+        t_low = calib['gt_to_low']['t']
+        R_high_to_low = calib['high_to_low']['R']
+        t_high_to_low = calib['high_to_low']['t']
+
+        if self.mode == 'train' and self.enable_rotation:
+            # 雷达安装角在一个 T 帧窗口内固定；高低雷达使用同一个 A。
+            rotation = self._sample_rotation_matrix()
+
+            for radar_key in (
+                'radar_high_pc',
+                'radar_low_pc',
+            ):
+                if radar_key in samples:
+                    samples[radar_key] = (
+                        self._rotate_pointcloud_sequence(
+                            pointcloud_sequence=samples[radar_key],
+                            rotation=rotation,
+                        )
+                    )
+
+            # p_radar_aug = A @ (R @ p_gt + t)
+            R_high = rotation @ R_high
+            t_high = rotation @ t_high
+            R_low = rotation @ R_low
+            t_low = rotation @ t_low
+
+            # 高低雷达坐标同时使用 A 后：
+            # p_low_aug = A R_hl A.T p_high_aug + A t_hl
+            R_high_to_low = (
+                rotation
+                @ R_high_to_low
+                @ rotation.T
+            )
+            t_high_to_low = rotation @ t_high_to_low
+
         samples['gt_for_high'] = (
             self._transform_gt_sequence(
                 gt_sequence=raw_gt,
-                R=calib['gt_to_high']['R'],
-                t=calib['gt_to_high']['t'],
+                R=R_high,
+                t=t_high,
             )
         )
 
         samples['gt_for_low'] = (
             self._transform_gt_sequence(
                 gt_sequence=raw_gt,
-                R=calib['gt_to_low']['R'],
-                t=calib['gt_to_low']['t'],
+                R=R_low,
+                t=t_low,
             )
         )
 
         samples['high_to_low_R'] = [
-            calib['high_to_low']['R'].copy()
+            R_high_to_low.copy()
             for _ in range(self.T)
         ]
         samples['high_to_low_t'] = [
-            calib['high_to_low']['t'].copy()
+            t_high_to_low.copy()
             for _ in range(self.T)
         ]
               
