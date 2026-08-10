@@ -240,7 +240,7 @@ class P4Transformer(nn.Module):
 
     """
     def __init__(self, 
-                 num_joints=17, max_people=4, feat_dim=2,                                                   # data
+                 num_joints=17, feat_dim=3,                                                   # data
                  radius=0.1, nsamples=32, spatial_stride=32,
                  temporal_kernel_size=3, temporal_stride=1,
                  emb_relu=False,
@@ -264,20 +264,11 @@ class P4Transformer(nn.Module):
             nn.Linear(dim, mlp_dim),
             nn.ReLU(),
             # nn.Dropout(dropout2),
-            nn.Linear(mlp_dim, max_people*num_joints*3),
-        )
-        self.mlp_head_confidence = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, mlp_dim),
-            nn.ReLU(),
-            # nn.Dropout(dropout2),
-            nn.Linear(mlp_dim, max_people),
-            nn.Sigmoid(),
+            nn.Linear(mlp_dim, num_joints*3),
         )
 
         self.num_joints = num_joints
         self.feat_dim = feat_dim
-        self.max_people = max_people
 
         
     def forward(self, model_input): 
@@ -340,12 +331,10 @@ class P4Transformer(nn.Module):
         output = output.reshape(B, T, n, -1)
         output = torch.max(input=output, dim=2, keepdim=False, out=None)[0]
         
-        pose = self.mlp_head_pose(output).view(B, T, self.max_people, self.num_joints, 3)
-        confidence = self.mlp_head_confidence(output).view(B, T, self.max_people)
+        pose = self.mlp_head_pose(output).view(B, T, 1, self.num_joints, 3)
 
         pre = {
             'pose': pose,
-            'confidence': confidence,
         }
 
         return pre

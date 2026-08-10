@@ -2,16 +2,7 @@ from pathlib import Path
 import time
 import torch
 
-from metrics.detection import (
-    get_bbox_iou,
-    get_bbox_l1,
-    get_hungarian_match,
-    get_objectness,
-    get_tp_fp_fn_tn,
-    get_acc, 
-    get_precision,
-    get_recall
-)
+
 from metrics.pose import get_bone_length, get_mpjpe, get_pampjpe
 from run.utils.load_config import load_config
 from run.utils.plot_fig import plt_fig

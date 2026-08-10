@@ -33,67 +33,62 @@ def _to_numpy(value):
     return value.detach().cpu().numpy()
 
 
-def _draw_action_text(
+def _draw_action_legend(
     ax,
-    poses,
     actions,
     mask,
     prefix,
     action_labels,
     color,
 ):
-    """在每个人体中心显示 one-hot/logits 对应的行为类别。"""
-    if poses is None or actions is None:
+    """在图例中显示没有对应 pose 可绘制的行为类别。"""
+    if actions is None:
         return
     if actions.ndim != 2 or actions.shape[-1] != len(action_labels):
         raise ValueError(
             f'{prefix} action must be [P,{len(action_labels)}], '
             f'got {actions.shape}'
         )
-    if poses.shape[0] != actions.shape[0]:
+    for person_idx, action in enumerate(actions):
+        if mask is not None and not mask[person_idx]:
+            continue
+        class_idx = int(np.argmax(action))
+        class_name = action_labels[class_idx]
+        ax.scatter(
+            [],
+            [],
+            [],
+            color=color,
+            label=f'{prefix} person {person_idx} action {class_name}',
+        )
+
+
+def _draw_pose(
+    ax,
+    poses,
+    mask,
+    color,
+    prefix,
+    mpjpe=None,
+    actions=None,
+    action_labels=DEFAULT_ACTION_LABELS,
+):
+    if poses is None:
+        return
+    if actions is not None and poses.shape[0] != actions.shape[0]:
         raise ValueError(
             f'{prefix} pose/action person dimensions differ: '
             f'pose={poses.shape[0]}, action={actions.shape[0]}'
         )
 
-    for person_idx, (joints, action) in enumerate(zip(poses, actions)):
-        if mask is not None and not mask[person_idx]:
-            continue
-
-        finite_joints = joints[np.isfinite(joints).all(axis=-1)]
-        if finite_joints.shape[0] == 0:
-            continue
-
-        class_idx = int(np.argmax(action))
-        class_name = action_labels[class_idx]
-        text_position = finite_joints.mean(axis=0)
-        ax.text(
-            text_position[0],
-            text_position[1],
-            text_position[2] + 0.15,
-            f'{prefix} action: {class_name}',
-            color=color,
-            fontsize=9,
-            weight='bold',
-            horizontalalignment='center',
-            bbox={
-                'facecolor': 'white',
-                'alpha': 0.75,
-                'edgecolor': color,
-                'pad': 2,
-            },
-        )
-
-
-def _draw_pose(ax, poses, mask, color, prefix, mpjpe=None):
-    if poses is None:
-        return
-
     for person_idx, joints in enumerate(poses):
         if mask is not None and not mask[person_idx]:
             continue
 
-        label = f'{prefix} pose'
+        label = f'{prefix} person {person_idx}'
+        if actions is not None:
+            class_idx = int(np.argmax(actions[person_idx]))
+            label += f' action {action_labels[class_idx]}'
         if mpjpe is not None:
             label += f' MPJPE={mpjpe[person_idx]:.3f} m'
         ax.scatter(
@@ -225,7 +220,11 @@ def _set_axis(ax, title):
     handles, labels = ax.get_legend_handles_labels()
     if handles:
         unique_legend = dict(zip(labels, handles))
-        ax.legend(unique_legend.values(), unique_legend.keys())
+        ax.legend(
+            unique_legend.values(),
+            unique_legend.keys(),
+            loc='upper right',
+        )
 
 
 def plt_fig(
@@ -239,6 +238,7 @@ def plt_fig(
 ):
     """绘制 pose 或 bbox；缺失的预测类型使用对应 GT 补充显示。"""
     pose_pre = _to_numpy(pre.get('pose'))
+    pose_pre_mask = _to_numpy(pre.get('mask'))
     bbox_pre = _to_numpy(pre.get('bbox'))
     action_logits = _to_numpy(pre.get('action_logits'))
     objectness_logits = pre.get('objectness_logits')
@@ -388,15 +388,8 @@ def plt_fig(
             current_gt_mask,
             color='red',
             prefix='GT',
-        )
-        _draw_action_text(
-            gt_ax,
-            current_pose_gt,
-            current_action_gt,
-            current_gt_mask,
-            prefix='GT',
+            actions=current_action_gt,
             action_labels=action_labels,
-            color='darkred',
         )
         _draw_bbox(
             gt_ax,
@@ -491,9 +484,20 @@ def plt_fig(
             current_gt_mask,
             color='red',
             prefix='GT',
+            actions=current_action_gt,
+            action_labels=action_labels,
         )
         if pose_pre is not None:
             current_pose_pre = pose_pre[batch_idx, time_idx]
+            pred_action_mask = (
+                pose_pre_mask[batch_idx, time_idx].astype(bool)
+                if pose_pre_mask is not None
+                else (
+                    current_gt_mask
+                    if current_pose_pre.shape[0] == current_gt_mask.shape[0]
+                    else None
+                )
+            )
             pose_mpjpe = np.linalg.norm(
                 current_pose_pre - current_pose_gt,
                 axis=-1,
@@ -501,31 +505,18 @@ def plt_fig(
             _draw_pose(
                 pose_ax,
                 current_pose_pre,
-                current_gt_mask,
+                pred_action_mask,
                 color='blue',
                 prefix='Pred',
                 mpjpe=pose_mpjpe,
-            )
-            pred_action_mask = (
-                current_gt_mask
-                if current_pose_pre.shape[0] == current_gt_mask.shape[0]
-                else None
-            )
-            _draw_action_text(
-                pose_ax,
-                current_pose_pre,
-                current_action_logits,
-                pred_action_mask,
-                prefix='Pred',
+                actions=current_action_logits,
                 action_labels=action_labels,
-                color='darkblue',
             )
         elif current_action_logits is not None:
             if bbox_pre is not None:
                 pred_idx, gt_idx = matches[time_idx]
-                _draw_action_text(
+                _draw_action_legend(
                     pose_ax,
-                    current_pose_gt[gt_idx],
                     current_action_logits[pred_idx],
                     mask=None,
                     prefix='Pred',
@@ -533,9 +524,8 @@ def plt_fig(
                     color='darkblue',
                 )
             elif current_action_logits.shape[0] == current_pose_gt.shape[0]:
-                _draw_action_text(
+                _draw_action_legend(
                     pose_ax,
-                    current_pose_gt,
                     current_action_logits,
                     current_gt_mask,
                     prefix='Pred',

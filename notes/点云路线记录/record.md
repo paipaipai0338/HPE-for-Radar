@@ -194,6 +194,31 @@ person的划分方式与group的差异近乎接近，性能恶化到记录一的
 
 下一步 观察按照 person 划分数据是否可行。
 
+## 记录六
+方法 P4
+
+[实验目录](/experiments/P4Transformer/20260728_203033/log/log.txt)
+
+数据 0615 - 0717 中的单人数据 14 号多人忽略
+
+划分方式 person，
+```
+train_person_ids = {'0', '1', '2', '3', '5'}
+val_person_ids = {'4'}
+```
+[dataset_for_single](/data2datasets/dataset_for_single.py)
+
+与记录五的差异：
+划分方式
+
+由于main脚本评估变更，无法统计结果，只有MPJPE，但足以判断
+
+效果展示
+| 指标 | 数值 |
+|------|------|
+| MPJPE | 0.161809m |
+
+group 划分 0.156892m -> person 划分 0.161809m，效果较为接近
 
 # 目标检测
 

@@ -8,8 +8,8 @@ data:
     ratio: 0.7
     T: 8
     split_method: person
-    max_points: 300
-    max_people: 1
+    max_points: 200
+    max_people: 4
     num_workers: 8
     preload_cache: true
     sensor_config:
@@ -34,14 +34,14 @@ task:
     stage: train
     input: radar_high_pc
     output: gt_for_high
-    device: 0
+    device: 1
     seed: 42
     batch_size: 8
     matching_for_hungarian:
         bbox_l1_weight: 5.0
         bbox_iou_weight: 2.0
     train:
-        epoch: 500
+        epoch: 300
         init_lr: 0.001
         warmup_epoch: 10
         resume:
@@ -57,7 +57,7 @@ task:
         best_metric: loss
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/VoxelNeXt/20260724_231418/checkpoint/best.pth
+        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260728_203033/checkpoint/best.pth
         shuffle: false
         score_thresh: 0.1
         iou_thresh: 0.7

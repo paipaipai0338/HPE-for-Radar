@@ -1597,6 +1597,30 @@ class HPE_Dataset(Dataset):
 
 
 if __name__ == '__main__':
+    """
+    radar_high_pc
+        padded: torch.Size([8, 4, 300, 6])
+        mask:   torch.Size([8, 4, 300])
+
+    gt
+        padded: torch.Size([8, 4, 4, 17, 3])
+        mask:   torch.Size([8, 4, 4])
+
+    gt_for_high
+        padded: torch.Size([8, 4, 4, 17, 3])
+        mask:   torch.Size([8, 4, 4])
+        bbox:   torch.Size([8, 4, 4, 6])
+        action: torch.Size([8, 4, 4, 4])
+
+    gt_for_low
+        padded: torch.Size([8, 4, 4, 17, 3])
+        mask:   torch.Size([8, 4, 4])
+        bbox:   torch.Size([8, 4, 4, 6])
+        action: torch.Size([8, 4, 4, 4])
+
+    high_to_low_R: torch.Size([8, 4, 3, 3])
+    high_to_low_t: torch.Size([8, 4, 3])
+    """
     from matplotlib import pyplot as plt
     from matplotlib.patches import Rectangle
     from preprocess.gtprocess import get_gt_detection_targets

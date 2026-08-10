@@ -188,9 +188,7 @@ def main():
                 dataloader['val'],
                 metric['val'],
                 device,
-                cfg_task,
-                if_plot=False,
-                fig_path=fig_path,
+                cfg_task
             )
             val_metrics['loss'] = sum(
                 weight * val_metrics[name]
@@ -251,26 +249,76 @@ def main():
                 if 'pc' in input_key:
                     model_input['input'] = samples[input_key]['padded'].to(device, non_blocking=True)
                     model_input['mask'] = samples[input_key]['mask'].to(device, non_blocking=True)
+
+                    # wrapper 将dataset取出的多人按照 mask 进行筛选，有效 mask 则按照bbox筛选点云，无效略过；将多人维度合并到batch中构建全新的batch
+                    person_mask = samples[cfg_task['output']]['mask'].to(device, non_blocking=True)
+                    person_bbox = samples[cfg_task['output']]['bbox'].to(device, non_blocking=True)
+
+                    points = model_input['input']
+                    point_mask = model_input['mask']
+                    B, T, N, D = points.shape
+                    K = person_mask.shape[2]
+
+                    # [B,T,K,6] -> [B,K,T,6]，为每个人生成独立点云实例。
+                    bbox = person_bbox.permute(0, 2, 1, 3)
+                    min_xyz = bbox[..., :3].unsqueeze(3)
+                    max_xyz = bbox[..., 3:].unsqueeze(3)
+                    xyz = points[:, None, :, :, :3]
+                    inside_bbox = ((xyz >= min_xyz) & (xyz <= max_xyz)).all(dim=-1)
+
+                    person_frame_mask = person_mask.permute(0, 2, 1)
+                    cropped_mask = (
+                        inside_bbox
+                        & point_mask[:, None, :, :]
+                        & person_frame_mask.unsqueeze(-1)
+                    )
+                    cropped_points = points[:, None, :, :, :].expand(
+                        B, K, T, N, D
+                    ).masked_fill(~cropped_mask.unsqueeze(-1), 0.0)
+
+                    # 保存时恢复原始 B、T 和 K 语义，避免与恢复后的
+                    # pose/GT 在样本维度上错位。
+                    pc_for_save = cropped_points.permute(
+                        0, 2, 1, 3, 4
+                    ).contiguous()
+                    pc_valid_for_save = cropped_mask.permute(
+                        0, 2, 1, 3
+                    ).contiguous()
+
+                    # 仅保留 T 帧内至少一帧存在的人员，并将 B、K 合并为新 batch。
+                    valid_instance_mask = person_frame_mask.any(dim=2)
+                    if not valid_instance_mask.any():
+                        continue
+                    model_input['input'] = cropped_points[valid_instance_mask].contiguous()
+                    model_input['mask'] = cropped_mask[valid_instance_mask].contiguous()
                 else:
                     model_input['input'] = samples[input_key].to(device, non_blocking=True)
+                    pc_for_save = model_input['input']
+                    pc_valid_for_save = None
 
                 target_key = cfg_task['output']
                 gt = {
                     'padded': samples[target_key]['padded'].to(device, non_blocking=True),
                     'mask': samples[target_key]['mask'].to(device, non_blocking=True),
-                    'bbox': samples[target_key]['bbox'].to(device, non_blocking=True)
+                    'bbox': samples[target_key]['bbox'].to(device, non_blocking=True),
+                    'action': samples[target_key]['action'].to(device, non_blocking=True),
                 }
-                batch_action_gt = samples[target_key].get('action')
-                if batch_action_gt is not None:
-                    gt['action'] = batch_action_gt.to(
-                        device,
-                        non_blocking=True,
-                    )
 
                 pre = model(model_input)
-
-                pc.append(model_input['input'].detach().cpu())
-                pc_valid.append(model_input['mask'].detach().cpu())
+                if 'pc' in input_key:
+                    instance_pose = pre['pose']
+                    if instance_pose.shape[2] != 1:
+                        raise ValueError(
+                            '按人裁剪后的 pose 模型必须为每个实例只输出一个人，'
+                            f'实际 shape={tuple(instance_pose.shape)}'
+                        )
+                    instance_pose = instance_pose.squeeze(2)
+                    pose = instance_pose.new_zeros(B, K, T, instance_pose.shape[2], instance_pose.shape[3])
+                    pose[valid_instance_mask] = instance_pose
+                    pre['pose'] = pose.permute(0, 2, 1, 3, 4).contiguous()
+                pc.append(pc_for_save.detach().cpu())
+                if pc_valid_for_save is not None:
+                    pc_valid.append(pc_valid_for_save.detach().cpu())
 
                 pose = pre.get('pose')
                 if pose is not None:
@@ -305,7 +353,10 @@ def main():
                     high_to_low_t.append(transform_t.detach().cpu())
 
         pc = torch.concatenate(pc, dim=0)
-        pc_valid = torch.concatenate(pc_valid, dim=0)
+        pc_valid = (
+            torch.concatenate(pc_valid, dim=0)
+            if pc_valid else None
+        )
         pose_pre = torch.concatenate(pose_pre, dim=0) if pose_pre else None
         pose_gt = torch.concatenate(pose_gt, dim=0)
         gt_valid = torch.concatenate(gt_valid, dim=0)
