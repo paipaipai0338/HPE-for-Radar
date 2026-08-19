@@ -57,8 +57,11 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_task):
             'padded': samples[target_key]['padded'].to(device, non_blocking=True),
             'mask': samples[target_key]['mask'].to(device, non_blocking=True),
             'bbox': samples[target_key]['bbox'].to(device, non_blocking=True),
-            'action': samples[target_key]['action'].to(device, non_blocking=True),
         }
+        if 'action' in samples[target_key]:
+            gt['action'] = samples[target_key]['action'].to(
+                device, non_blocking=True
+            )
         optimizer.zero_grad(set_to_none=True)
 
         pre = model(model_input)
@@ -140,8 +143,11 @@ def val_one_epoch(model, dataloader, metric, device, cfg_task):
                 'padded': samples[target_key]['padded'].to(device, non_blocking=True),
                 'mask': samples[target_key]['mask'].to(device, non_blocking=True),
                 'bbox': samples[target_key]['bbox'].to(device, non_blocking=True),
-                'action': samples[target_key]['action'].to(device, non_blocking=True),
             }
+            if 'action' in samples[target_key]:
+                gt['action'] = samples[target_key]['action'].to(
+                    device, non_blocking=True
+                )
 
             pre = model(model_input)
             if 'pc' in input_key:

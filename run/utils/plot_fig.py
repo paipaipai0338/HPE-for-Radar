@@ -120,43 +120,56 @@ def _draw_split_point_cloud(
     if points is None or mask is None:
         return
 
-    valid_points = points[mask.astype(bool)]
-    point_xyz = valid_points[:, :3]
-    point_xyz = point_xyz[np.isfinite(point_xyz).all(axis=-1)]
-    if point_xyz.shape[0] == 0:
-        return
+    if points.ndim == 2:
+        points = points[None, ...]
+        mask = mask[None, ...]
+    elif points.ndim != 3:
+        raise ValueError(
+            'frame point cloud must be [N,C] or [K,N,C], '
+            f'got {points.shape}'
+        )
 
-    inside = np.zeros(point_xyz.shape[0], dtype=bool)
-    if bboxes is not None:
-        for bbox in bboxes:
-            inside |= (
-                (point_xyz >= bbox[:3]).all(axis=-1)
-                & (point_xyz <= bbox[3:]).all(axis=-1)
+    instance_colors = plt.get_cmap('tab10')
+    for instance_idx, (instance_points, instance_mask) in enumerate(
+        zip(points, mask)
+    ):
+        valid_points = instance_points[instance_mask.astype(bool)]
+        point_xyz = valid_points[:, :3]
+        point_xyz = point_xyz[np.isfinite(point_xyz).all(axis=-1)]
+        if point_xyz.shape[0] == 0:
+            continue
+
+        inside = np.zeros(point_xyz.shape[0], dtype=bool)
+        if bboxes is not None:
+            for bbox in bboxes:
+                inside |= (
+                    (point_xyz >= bbox[:3]).all(axis=-1)
+                    & (point_xyz <= bbox[3:]).all(axis=-1)
+                )
+
+        outside_xyz = point_xyz[~inside]
+        if outside_xyz.shape[0] > 0:
+            ax.scatter(
+                outside_xyz[:, 0],
+                outside_xyz[:, 1],
+                outside_xyz[:, 2],
+                s=5,
+                color='gray',
+                alpha=0.35,
+                label=outside_label,
             )
 
-    outside_xyz = point_xyz[~inside]
-    if outside_xyz.shape[0] > 0:
-        ax.scatter(
-            outside_xyz[:, 0],
-            outside_xyz[:, 1],
-            outside_xyz[:, 2],
-            s=5,
-            color='gray',
-            alpha=0.35,
-            label=outside_label,
-        )
-
-    inside_xyz = point_xyz[inside]
-    if inside_xyz.shape[0] > 0:
-        ax.scatter(
-            inside_xyz[:, 0],
-            inside_xyz[:, 1],
-            inside_xyz[:, 2],
-            s=5,
-            color='green',
-            alpha=0.8,
-            label=inside_label,
-        )
+        inside_xyz = point_xyz[inside]
+        if inside_xyz.shape[0] > 0:
+            ax.scatter(
+                inside_xyz[:, 0],
+                inside_xyz[:, 1],
+                inside_xyz[:, 2],
+                s=5,
+                color=instance_colors(instance_idx % 10),
+                alpha=0.8,
+                label=f'{inside_label} (instance {instance_idx})',
+            )
 
 
 def _draw_bbox(
@@ -285,19 +298,24 @@ def plt_fig(
                 "model_input['mask'] exists but model_input['input'] "
                 "is missing"
             )
-        if input_data.ndim != 4 or input_data.shape[-1] < 3:
+        if input_data.ndim not in (4, 5) or input_data.shape[-1] < 3:
             raise ValueError(
-                "masked model_input['input'] must be [B, T, N, C] "
+                "masked model_input['input'] must be [B,T,N,C] or "
+                "[B,T,K,N,C] "
                 f"with C >= 3, got {tuple(input_data.shape)}"
             )
-        if input_mask.ndim != 3:
+        expected_mask_ndim = input_data.ndim - 1
+        if input_mask.ndim != expected_mask_ndim:
             raise ValueError(
-                "model_input['mask'] must be [B, T, N], "
+                "model_input['mask'] must be [B,T,N] or [B,T,K,N] "
+                "and align with input, "
                 f"got {tuple(input_mask.shape)}"
             )
-        if input_data.shape[:3] != input_mask.shape:
+        if input_data.shape[:-1] != input_mask.shape:
             raise ValueError(
-                "model_input input/mask B,T,N dimensions differ"
+                "model_input input/mask dimensions differ: "
+                f"input={tuple(input_data.shape)}, "
+                f"mask={tuple(input_mask.shape)}"
             )
         point_cloud = _to_numpy(input_data)
         point_mask = _to_numpy(input_mask)

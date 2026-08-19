@@ -75,16 +75,7 @@ def main():
     device_id = cfg_task['device']
     device = set_device(device_id)
 
-    # 获取dataloader
-    dataset = {
-        'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False)),
-        'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False)),
-    }
-    collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
-    dataloader = {
-        'train': DataLoader(dataset['train'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['train']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
-        'val': DataLoader(dataset['val'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['val']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
-    }
+    
 
     # 获取模型
     model = build_model(cfg_model['name'])
@@ -93,7 +84,16 @@ def main():
 
     # train
     if cfg_task['stage'] == 'train':
-
+        # 获取dataloader
+        dataset = {
+            'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_train']),
+            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val']),
+        }
+        collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
+        dataloader = {
+            'train': DataLoader(dataset['train'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['train']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
+            'val': DataLoader(dataset['val'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['val']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
+        }
         # 指标构建
         cfg_matching = cfg_task['matching_for_hungarian']
         metric = {
@@ -225,6 +225,15 @@ def main():
     elif cfg_task['stage'] == 'val':
         # 只做结果保存 后续分析见 /home/pai/Huawei/run/check.py
 
+        # 获取dataloader
+        dataset = {
+            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val']),
+        }
+        collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
+        dataloader = {
+            'val': DataLoader(dataset['val'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['val']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
+        }
+
         # best/last checkpoint 加载 
         load_model_checkpoint(cfg_task['val']['checkpoint_path'], model, device)
 
@@ -301,8 +310,11 @@ def main():
                     'padded': samples[target_key]['padded'].to(device, non_blocking=True),
                     'mask': samples[target_key]['mask'].to(device, non_blocking=True),
                     'bbox': samples[target_key]['bbox'].to(device, non_blocking=True),
-                    'action': samples[target_key]['action'].to(device, non_blocking=True),
                 }
+                if 'action' in samples[target_key]:
+                    gt['action'] = samples[target_key]['action'].to(
+                        device, non_blocking=True
+                    )
 
                 pre = model(model_input)
                 if 'pc' in input_key:

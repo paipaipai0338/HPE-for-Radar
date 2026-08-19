@@ -20,6 +20,20 @@ class Radar_Config:
     Rx: int = 4  # 接收通道数
     num_samp: int = 512  # 预设距离维采样点数量
     num_chirp: int = 64  # 预设一帧中chirp数量
+    num_channel: int = 16  # 预设虚拟通道数
+
+    channel_layout: Tuple[Tuple[int, ...], ...] = (
+        (0,  0,  0,  0,  4,  3,  2,  1),
+        (0,  0,  0,  0,  8,  7,  6,  5),
+        (16, 15, 14, 13, 12, 11, 10, 9),
+    )
+    azi_deg: Tuple[float, ...] = (-90, 90)  # 方位角度范围
+    ele_deg: Tuple[float, ...] = (-90, 90)  # 俯仰角度范围
+    azi_ant_indices: Tuple[int, ...] = (15, 14, 13, 12, 11, 10, 9, 8)   # 方位测算通道索引
+    ele_ant_indices: Tuple[int, ...] = (8, 4, 0)                        # 俯仰测算通道索引
+
+    angle_method: Literal["bartlett", "mvdr", "music"] = "mvdr"
+    num_angle_beams: int = 512  # 角度谱点数
 
     # 依赖其他参数的属性（使用 field(init=False)）
     slope: float = None  # 调频率
@@ -37,6 +51,27 @@ class Radar_Config:
         self.slope = self.B_set / self.time_B
         self.lam = self.c / self.fc
         self.prf = 1 / (self.chirp_time * self.Tx)
+        self.virtual_channel_positions = self._build_virtual_channel_position()
+
+    def _build_virtual_channel_position(self) -> torch.Tensor:
+        positions = torch.zeros((self.num_channel, 3), dtype=torch.float32)
+        
+        num_rows = len(self.channel_layout)
+        num_cols = len(self.channel_layout[0])
+        center_col = (num_cols - 1) / 2.0
+    
+        for row_idx, row in enumerate(self.channel_layout):
+            z = (num_rows - 1 - row_idx) * self.d_ele
+    
+            for col_idx, channel_id in enumerate(row):
+                if channel_id == 0:
+                    continue
+    
+                y = (col_idx -  center_col) * self.d_azi
+    
+                positions[channel_id - 1] = torch.tensor([0.0, y, z], dtype=torch.float32)
+    
+        return positions
 
 # 读取1DFFT函数
 def bin_to_cube_range_fft(file_path: Path|str, radar_config: Radar_Config) -> Optional[np.ndarray]:
@@ -531,8 +566,8 @@ def doppler_fft(
         v_axis,
     )
 
-# 对pytorch传出带有 B T的tensor进行fft处理
-def doppler_fft_batch_np_wrapper(
+# 对pytorch传出带有 B T 的tensor进行fft处理
+def doppler_fft_batch_T(
     data: torch.Tensor,
     radar_config: Radar_Config,
     window: bool = True,
@@ -763,11 +798,155 @@ def doppler_fft_batch_np_wrapper(
         v_axis_tensor,
     )
 
-# doppler_fft_batch_np_wrapper的封装版本
+# doppler_fft_batch_T 封装版本
 def range_cube_to_doppler_cube(data: torch.Tensor, radar_config: Radar_Config) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     range_res, _, _, _ = get_radar_res(radar_config)
     r_axis = np.arange(data.shape[2], dtype=float) * range_res
     r_axis = torch.tensor(r_axis)
-    doppler_cube, doppler_cube_mean, v_axis = doppler_fft_batch_np_wrapper(data=data, radar_config=radar_config)
+    doppler_cube, doppler_cube_mean, v_axis = doppler_fft_batch_T(data=data, radar_config=radar_config)
     return doppler_cube, doppler_cube_mean, r_axis, v_axis
 
+def angle_fft(data: np.ndarray, radar_config: Radar_Config, window: bool = True, n_fft_angle: int = 1024, target_index: List = None, channel_index: List = None, type: str = 'ele', method: str = 'fft') -> Tuple[np.ndarray, np.ndarray]:
+    """
+    对指定距离-多普勒单元和通道做角度谱估计。
+    输入:
+      data: np.ndarray，距离-多普勒-通道数据，shape=(Nr, Nd, Nch)。
+      radar_config: Radar_Config，雷达参数对象，lam/d_ele/d_azi 为 float 标量。
+      window: bool，FFT 方法下是否使用 Hann 窗，shape 为标量。
+      n_fft_angle: int，角度网格/FFT 点数，shape 为标量。
+      target_index: List[int]，目标 [range_index, doppler_index]，shape=(2,)。
+      channel_index: List[int]，参与角度估计的通道索引，shape=(M,)。
+      type: str，角度类型，'ele' 表示俯仰，'azi' 表示方位，shape 为标量字符串。
+      method: str，角度估计方法，'fft' 或 'MVDR'，shape 为标量字符串。
+    输出:
+      ang_result: np.ndarray，角度谱，FFT 时 dtype=complex，MVDR 时 dtype=float，shape=(n_fft_angle,)。
+      az_axis: np.ndarray，dtype=float，角度轴，单位 rad，shape=(n_fft_angle,)。
+    """
+
+    # --- 1. 参数与配置 ---
+    if type == 'ele':
+        d = radar_config.d_ele
+    elif type == 'azi':
+        d = radar_config.d_azi
+    else:
+        raise RuntimeError(f"Unknown type: '{type}'. Use 'ele' or 'azi'.")
+
+    data = np.asarray(data)
+    if data.ndim != 3:
+        raise RuntimeError("data must have shape (Nr, Nd, Nch)")
+    if n_fft_angle <= 0:
+        raise RuntimeError(f"n_fft_angle 必须大于 0，当前值为 {n_fft_angle}")
+    if len(target_index) != 2:
+        raise RuntimeError("target_index 必须为 [range_index, doppler_index]")
+    if not channel_index:
+        raise RuntimeError("channel_index 不能为空")
+    if method not in ('fft', 'MVDR'):
+        raise RuntimeError("method 必须为 'fft' 或 'MVDR'")
+    Nr, Nd, Nch = data.shape
+    if target_index[0] < 0 or target_index[0] >= Nr or target_index[1] < 0 or target_index[1] >= Nd:
+        raise RuntimeError(f"target_index 越界，当前值为 {target_index}，data shape 为 {data.shape}")
+    if min(channel_index) < 0 or max(channel_index) >= Nch:
+        raise RuntimeError(f"channel_index 越界，当前值为 {channel_index}，通道数为 {Nch}")
+    # data shape假设: [Range, Doppler, Antenna] 或类似
+    # 确保拿到正确维度
+
+    num_ant = len(channel_index)
+
+    # --- 2. 数据切片与快拍选取 ---
+    if method == 'fft':
+        # FFT 模式：通常只取单快拍，或者多快拍相干累加（视具体需求）
+        # 这里保持你原有的逻辑：单点切片
+        # Shape: (1, num_ant)
+        snap_data = data[target_index[0], target_index[1], channel_index].reshape(1, -1)
+    else:  # MVDR
+        # MVDR 模式：需要多个快拍来估计协方差矩阵 R
+        K = 8
+        Nd = data.shape[1]
+        # 获取快拍索引
+        snap_indices = np.arange(target_index[1] - K, target_index[1] + K + 1)
+        snap_indices = np.clip(snap_indices, 0, Nd - 1)
+        snap_indices = np.unique(snap_indices)
+
+        # 取数据 Shape: (S, num_ant)
+        snap_data = data[target_index[0], snap_indices, :]
+        snap_data = snap_data[:, channel_index]
+
+    # --- 3. 角度网格生成 (通用) ---
+    # 使用 linspace 生成均匀的角度正弦空间 [-1, 1]，比 fftfreq 更直观用于 MVDR
+    if method == 'MVDR':
+        # MVDR 通常不需要像 FFT 那样凑 2 的幂次，但也可用 n_fft_angle 控制精度
+        sin_theta = np.linspace(-1, 1, n_fft_angle)
+        az_axis = np.arcsin(sin_theta)  # 注意：这里 sin_theta 为 1/-1 时可能产生极小误差，arcsin 没问题
+    else:
+        # FFT 模式保持原逻辑，与频率对齐
+        u = np.fft.fftshift(np.fft.fftfreq(n_fft_angle, d=1.0))
+        sin_theta = (u * radar_config.lam) / d
+        # 裁剪以防数值误差导致 arcsin nan
+        mask = np.abs(sin_theta) <= 1.0
+        sin_theta = np.clip(sin_theta, -1.0, 1.0)
+        az_axis = np.arcsin(sin_theta)
+
+    # --- 4. 核心算法 ---
+
+    if method == 'fft':
+        # === FFT 流程 ===
+        # 仅在 FFT 模式下加窗
+        process_data = snap_data
+        if window:
+            w_a = np.hanning(num_ant).astype(process_data.dtype)
+            # 广播乘法 (1, M) * (M,)
+            process_data = process_data * w_a
+
+        # Zero padding
+        # axis=1 是天线维度
+        ang_spec = np.fft.fft(process_data, n=n_fft_angle, axis=1)
+        ang_spec = np.fft.fftshift(ang_spec, axes=1)
+
+        # 如果是单快拍，去掉第一维
+        ang_result = ang_spec[0]
+
+    elif method == 'MVDR':
+        # === MVDR 流程 ===
+        # 1. 绝对不要加窗 (Keep Raw Data)
+        X = snap_data  # Shape (S, M)
+        S, M = X.shape
+
+        # 2. 计算协方差矩阵 R = E[x x^H]
+        # X.T 是 (M, S), X.conj() 是 (S, M)
+        # R 应该是 (M, M)
+        # 正确公式: R = (X.conj().T @ X) / S
+        R = (X.conj().T @ X) / S
+
+        # 3. 对角加载 (Diagonal Loading)
+        # 增强鲁棒性，防止 R 不可逆
+        tr = np.trace(R).real
+        dl_factor = 1e-3  # 加载因子，可调
+        R = R + (dl_factor * tr / M) * np.eye(M, dtype=R.dtype)
+
+        # 4. 求逆
+        Rinv = np.linalg.inv(R)
+
+        # 5. 构建导向矢量矩阵 A
+        # A shape: (M, n_fft_angle)
+        # 假设天线是均匀线阵 (ULA)，索引 0..M-1
+        m = np.arange(M).reshape(-1, 1)  # (M, 1)
+
+        # Steering Vector: a(theta) = exp(-j * 2pi * d/lam * m * sin(theta))
+        # 注意：这里 sin_theta 使用上面生成的网格
+        phase = -2.0j * np.pi * (d / radar_config.lam) * m * sin_theta.reshape(1, -1)
+        A = np.exp(phase)
+
+        # 6. 计算 MVDR 空间谱
+        # P = 1 / (a^H * Rinv * a)
+        # 分母计算技巧：
+        # Rinv @ A -> (M, N)
+        # conj(A) * (Rinv @ A) -> 逐元素乘
+        # sum(..., axis=0) -> 对天线维求和
+
+        den = np.sum(np.conj(A) * (Rinv @ A), axis=0).real
+        ang_result = 1.0 / np.maximum(den, 1e-12)  # 避免除以0
+
+        # 如果之前为了 sin_theta 做了 mask (仅针对 FFT 频率超范围情况)，这里其实不需要
+        # 因为 linspace(-1, 1) 保证了都在范围内
+
+    return ang_result, az_axis

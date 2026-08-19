@@ -4,13 +4,111 @@ import torch
 
 
 from metrics.pose import get_bone_length, get_mpjpe, get_pampjpe
+from metrics.detection import get_bbox_iou, get_bbox_l1, get_objectness, get_hungarian_match, get_tp_fp_fn_tn, get_precision, get_recall, get_acc
 from run.utils.load_config import load_config
 from run.utils.plot_fig import plt_fig
+from utils.COCO import COCO_NAMES
+
+
+def transform_points_high_to_low(points, rotation, translation):
+    """将 [B,T,...,3] 点坐标从 high 雷达系变换到 low 雷达系。"""
+    if points is None:
+        return None
+    if points.ndim < 3 or points.shape[-1] != 3:
+        raise ValueError(
+            'points 应为 [B,T,...,3]，'
+            f'实际 shape={tuple(points.shape)}'
+        )
+    if rotation.shape != (*points.shape[:2], 3, 3):
+        raise ValueError(
+            'high_to_low_R 应为 [B,T,3,3] 且与 points 对齐，'
+            f'points={tuple(points.shape)}, R={tuple(rotation.shape)}'
+        )
+    if translation.shape != (*points.shape[:2], 3):
+        raise ValueError(
+            'high_to_low_t 应为 [B,T,3] 且与 points 对齐，'
+            f'points={tuple(points.shape)}, t={tuple(translation.shape)}'
+        )
+
+    transformed = torch.einsum(
+        'bt...c,btdc->bt...d',
+        points,
+        rotation.to(dtype=points.dtype, device=points.device),
+    )
+    translation = translation.to(
+        dtype=points.dtype,
+        device=points.device,
+    )
+    translation_shape = (
+        *translation.shape[:2],
+        *((1,) * (points.ndim - 3)),
+        3,
+    )
+    return transformed + translation.reshape(translation_shape)
+
+
+def transform_pointcloud_high_to_low(pointcloud, rotation, translation):
+    """仅变换点云最后一维中的 xyz，保留其余点特征。"""
+    if pointcloud is None:
+        return None
+    if pointcloud.ndim < 4 or pointcloud.shape[-1] < 3:
+        raise ValueError(
+            'pointcloud 应为 [B,T,...,N,C] 且 C>=3，'
+            f'实际 shape={tuple(pointcloud.shape)}'
+        )
+    transformed = pointcloud.clone()
+    transformed[..., :3] = transform_points_high_to_low(
+        pointcloud[..., :3],
+        rotation,
+        translation,
+    )
+    return transformed
+
+
+def transform_bbox_high_to_low(bbox, rotation, translation):
+    """变换 bbox 的 8 个角点并生成 low 雷达系下的轴对齐框。"""
+    if bbox is None:
+        return None
+    if bbox.ndim < 3 or bbox.shape[-1] != 6:
+        raise ValueError(
+            'bbox 应为 [B,T,...,6]，'
+            f'实际 shape={tuple(bbox.shape)}'
+        )
+
+    bbox_min = bbox[..., :3]
+    bbox_max = bbox[..., 3:]
+    corners = torch.stack(
+        [
+            torch.stack((bbox_min[..., 0], bbox_min[..., 1], bbox_min[..., 2]), dim=-1),
+            torch.stack((bbox_max[..., 0], bbox_min[..., 1], bbox_min[..., 2]), dim=-1),
+            torch.stack((bbox_min[..., 0], bbox_max[..., 1], bbox_min[..., 2]), dim=-1),
+            torch.stack((bbox_max[..., 0], bbox_max[..., 1], bbox_min[..., 2]), dim=-1),
+            torch.stack((bbox_min[..., 0], bbox_min[..., 1], bbox_max[..., 2]), dim=-1),
+            torch.stack((bbox_max[..., 0], bbox_min[..., 1], bbox_max[..., 2]), dim=-1),
+            torch.stack((bbox_min[..., 0], bbox_max[..., 1], bbox_max[..., 2]), dim=-1),
+            torch.stack((bbox_max[..., 0], bbox_max[..., 1], bbox_max[..., 2]), dim=-1),
+        ],
+        dim=-2,
+    )
+    transformed_corners = transform_points_high_to_low(
+        corners,
+        rotation,
+        translation,
+    )
+    return torch.cat(
+        (
+            transformed_corners.amin(dim=-2),
+            transformed_corners.amax(dim=-2),
+        ),
+        dim=-1,
+    )
 
 
 result_path = Path('/home/pai/Huawei/run/result.pkl')
 config_path = Path('/home/pai/Huawei/run/config.yaml')
 fig_path = Path('/home/pai/Huawei/temp')
+catastrophic_mpjpe_threshold = 0.4
+max_catastrophic_figures = 100
 
 loaded = torch.load(result_path, map_location='cpu')
 cfg = load_config(config_path)
@@ -143,61 +241,169 @@ if pose_pre is not None:
     print(f'pampjpe: {pampjpe_mean:.6f}')
     print(f'bone_length: {bone_length_mean:.6f}')
 
+    torso_joint_names = {
+        'nose',
+        'left_eye',
+        'right_eye',
+        'left_ear',
+        'right_ear',
+        'left_shoulder',
+        'right_shoulder',
+        'left_hip',
+        'right_hip',
+    }
+    torso_joint_indices = [
+        joint_idx
+        for joint_idx, joint_name in enumerate(COCO_NAMES)
+        if joint_name in torso_joint_names
+    ]
+    limb_joint_indices = [
+        joint_idx
+        for joint_idx, joint_name in enumerate(COCO_NAMES)
+        if joint_name not in torso_joint_names
+    ]
+    per_joint_error = torch.norm(pose_pre - pose_gt, dim=-1)
+    valid_per_joint_error = per_joint_error[gt_mask]
+    if gt_num > 0:
+        per_joint_mpjpe = valid_per_joint_error.mean(dim=0)
+        torso_mpjpe = valid_per_joint_error[
+            :, torso_joint_indices
+        ].mean()
+        limb_mpjpe = valid_per_joint_error[
+            :, limb_joint_indices
+        ].mean()
+        print('\nMPJPE by body region')
+        print(f'torso: {torso_mpjpe.item():.6f}')
+        print(f'limbs: {limb_mpjpe.item():.6f}')
+    else:
+        print('\nMPJPE by joint: no valid GT person')
+        print('MPJPE by body region: no valid GT person')
+
+    # TODO: 后续可在这里继续细分灾难样本类型（躺卧、稀疏点云等）。
+    # 当前先按单人单帧 MPJPE 选择灾难样本，并按误差从高到低保存，
+    # 供下方可视化使用。
+    catastrophic_mask = (
+        gt_mask
+        & (mpjpe >= catastrophic_mpjpe_threshold)
+    )
+    catastrophic_indices = catastrophic_mask.nonzero(as_tuple=False)
+    if catastrophic_indices.numel() > 0:
+        catastrophic_errors = mpjpe[catastrophic_mask]
+        catastrophic_order = torch.argsort(
+            catastrophic_errors,
+            descending=True,
+        )
+        if max_catastrophic_figures is not None:
+            catastrophic_order = catastrophic_order[
+                :max_catastrophic_figures
+            ]
+        catastrophic_indices = catastrophic_indices[
+            catastrophic_order
+        ]
+        catastrophic_errors = catastrophic_errors[
+            catastrophic_order
+        ]
+    else:
+        catastrophic_errors = torch.empty(dtype=mpjpe.dtype)
+
+    print('\nCatastrophic samples')
+    print(
+        f'threshold: {catastrophic_mpjpe_threshold:.3f} m | '
+        f'total: {int(catastrophic_mask.sum())} | '
+        f'to visualize: {len(catastrophic_indices)}'
+    )
+else:
+    catastrophic_indices = torch.empty((0, 3), dtype=torch.long)
+    catastrophic_errors = torch.empty(dtype=torch.float32)
+
+# 指标仍在模型原本的 high 雷达坐标系中计算；仅将传给 plt_fig 的
+# 几何数据转换到 low 雷达坐标系。
+if high_to_low_R is None or high_to_low_t is None:
+    raise ValueError(
+        '绘图坐标转换需要 result.pkl 中同时包含 '
+        'high_to_low_R 和 high_to_low_t'
+    )
+
 num_frames = pose_gt.shape[1]
-for sample_idx in range(pose_gt.shape[0]):
+catastrophic_fig_path = fig_path / 'catastrophic'
+catastrophic_fig_path.mkdir(parents=True, exist_ok=True)
+for figure_idx, (catastrophic_index, catastrophic_error) in enumerate(
+    zip(catastrophic_indices, catastrophic_errors)
+):
+    sample_idx, time_idx, person_idx = catastrophic_index.tolist()
+    sample_slice = slice(sample_idx, sample_idx + 1)
+    time_slice = slice(time_idx, time_idx + 1)
+    rotation = high_to_low_R[sample_slice, time_slice]
+    translation = high_to_low_t[sample_slice, time_slice]
+    plot_pc = transform_pointcloud_high_to_low(
+        pc[sample_slice, time_slice], rotation, translation,
+    )
+    plot_pose_pre = transform_points_high_to_low(
+        pose_pre[sample_slice, time_slice], rotation, translation,
+    )
+    plot_pose_gt = transform_points_high_to_low(
+        pose_gt[sample_slice, time_slice], rotation, translation,
+    )
+    plot_bbox_pre = transform_bbox_high_to_low(
+        None if bbox_pre is None else bbox_pre[sample_slice, time_slice],
+        rotation,
+        translation,
+    )
+    plot_bbox_gt = transform_bbox_high_to_low(
+        bbox_gt[sample_slice, time_slice], rotation, translation,
+    )
+
     pre = {
-        'pose': (
-            None
-            if pose_pre is None
-            else pose_pre[sample_idx:sample_idx + 1]
-        ),
-        'bbox': (
-            None
-            if bbox_pre is None
-            else bbox_pre[sample_idx:sample_idx + 1]
-        ),
+        'pose': plot_pose_pre,
+        'bbox': plot_bbox_pre,
         'objectness_logits': (
             None
             if objectness_logits is None
-            else objectness_logits[sample_idx:sample_idx + 1]
+            else objectness_logits[sample_slice, time_slice]
         ),
         'action_logits': (
             None
             if action_logits is None
-            else action_logits[sample_idx:sample_idx + 1]
+            else action_logits[sample_slice, time_slice]
         ),
     }
     gt = {
-        'padded': pose_gt[sample_idx:sample_idx + 1],
-        'bbox': bbox_gt[sample_idx:sample_idx + 1],
-        'mask': gt_valid[sample_idx:sample_idx + 1],
+        'padded': plot_pose_gt,
+        'bbox': plot_bbox_gt,
+        'mask': gt_valid[sample_slice, time_slice],
     }
     if action_gt is not None:
-        gt['action'] = action_gt[sample_idx:sample_idx + 1]
+        gt['action'] = action_gt[sample_slice, time_slice]
     if action_label is not None:
         gt['action_label'] = action_label
     model_input = {
-        'input': pc[sample_idx:sample_idx + 1],
+        'input': plot_pc,
     }
     if pc_valid is not None:
-        model_input['mask'] = pc_valid[sample_idx:sample_idx + 1]
+        model_input['mask'] = pc_valid[sample_slice, time_slice]
     sample_matches = (
         None
         if matches is None
         else matches[
-            sample_idx * num_frames:(sample_idx + 1) * num_frames
+            sample_idx * num_frames + time_idx:
+            sample_idx * num_frames + time_idx + 1
         ]
     )
+    error_mm = round(float(catastrophic_error) * 1000)
     plt_fig(
-        fig_path / f'temp_{sample_idx % 10}.png',
+        catastrophic_fig_path / (
+            f'rank_{figure_idx:03d}_sample_{sample_idx}_'
+            f'frame_{time_idx}_person_{person_idx}_'
+            f'mpjpe_{error_mm}mm.png'
+        ),
         pre,
         gt,
         model_input,
         matches=sample_matches,
     )
     print(
-        f'\rFigure: {sample_idx + 1}/{pose_gt.shape[0]} | '
-        f'{fig_path}',
+        f'\rFigure: {figure_idx + 1}/{len(catastrophic_indices)} | '
+        f'{catastrophic_fig_path}',
         end='',
         flush=True,
     )

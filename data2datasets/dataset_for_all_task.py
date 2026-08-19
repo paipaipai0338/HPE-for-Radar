@@ -130,6 +130,7 @@ def collate_fn(
                 无效 person 槽位填 0。
     """
     action_sequences = []
+    has_action = 'action' in batch[0]
 
     for sample_idx, sample in enumerate(batch):
         gt_sequence = sample.get('gt_for_high')
@@ -139,10 +140,10 @@ def collate_fn(
             )
 
         action_sequence = sample.get('action')
-        if action_sequence is None:
-            raise KeyError(
-                f"统一多任务样本 {sample_idx} 缺少 action"
-            )
+        if (action_sequence is not None) != has_action:
+            raise ValueError("同一 batch 中 action 的启用状态不一致")
+        if not has_action:
+            continue
         if len(action_sequence) != len(gt_sequence):
             raise ValueError(
                 "action 与 GT 的时间长度不一致："
@@ -189,27 +190,22 @@ def collate_fn(
     )
 
     B = len(batch)
-    T = len(action_sequences[0])
-    padded_action = torch.zeros(
-        B,
-        T,
-        max_people,
-        4,
-        dtype=torch.float32,
-    )
-
-    for batch_idx, action_sequence in enumerate(action_sequences):
-        for time_idx, frame_action in enumerate(action_sequence):
-            action_tensor = torch.as_tensor(
-                frame_action,
-                dtype=torch.float32,
-            )
-            num_people = action_tensor.shape[0]
-            padded_action[
-                batch_idx,
-                time_idx,
-                :num_people,
-            ] = action_tensor
+    padded_action = None
+    if has_action:
+        T = len(action_sequences[0])
+        padded_action = torch.zeros(
+            B, T, max_people, 4, dtype=torch.float32,
+        )
+        for batch_idx, action_sequence in enumerate(action_sequences):
+            for time_idx, frame_action in enumerate(action_sequence):
+                action_tensor = torch.as_tensor(
+                    frame_action,
+                    dtype=torch.float32,
+                )
+                num_people = action_tensor.shape[0]
+                padded_action[batch_idx, time_idx, :num_people] = (
+                    action_tensor
+                )
 
     for gt_key in ('gt_for_high', 'gt_for_low'):
         if gt_key not in collated:
@@ -226,10 +222,11 @@ def collate_fn(
             ~valid_person.unsqueeze(-1),
             0.0,
         )
-        gt_data['action'] = padded_action.masked_fill(
-            ~valid_person.unsqueeze(-1),
-            0.0,
-        )
+        if padded_action is not None:
+            gt_data['action'] = padded_action.masked_fill(
+                ~valid_person.unsqueeze(-1),
+                0.0,
+            )
 
     return collated
 
@@ -238,6 +235,7 @@ class HPE_Dataset(Dataset):
 
     FILE_READ_MAX_ATTEMPTS = 5
     FILE_READ_RETRY_BASE_DELAY_SEC = 0.05
+    MIN_RADAR_POINTS_PER_FRAME = 20
     _ROTATION_ROLL_RANGE_DEG = (-5.0, 5.0)
     _ROTATION_PITCH_RANGE_DEG = (-10.0, 10.0)
     _ROTATION_YAW_RANGE_DEG = (-5.0, 5.0)
@@ -251,8 +249,9 @@ class HPE_Dataset(Dataset):
         split_method='group',
         ratio=0.7,
         T=8,
-        preload_cache=False,
+        preload_cache=True,
         enable_rotation=True,
+        enable_action=False,
     ):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
@@ -263,10 +262,16 @@ class HPE_Dataset(Dataset):
                 "enable_rotation 必须为 bool，"
                 f"实际为 {type(enable_rotation).__name__}"
             )
+        if not isinstance(enable_action, bool):
+            raise TypeError(
+                "enable_action 必须为 bool，"
+                f"实际为 {type(enable_action).__name__}"
+            )
 
         self.root_path = Path(root_path)
         self.mode = mode
         self.enable_rotation = enable_rotation
+        self.enable_action = enable_action
         self.base_source = base_source
         self.ratio = ratio
         self.T = T
@@ -322,7 +327,7 @@ class HPE_Dataset(Dataset):
         if split_method == 'person':
             # 按人来划分
             train_person_ids = {'0', '1', '2', '3', '5'}
-            val_person_ids = {'4'}
+            val_person_ids = {'4', '6', '7', '8'}
 
             self.meta_info_splited['train'] = {
                 person_id: person_data
@@ -362,7 +367,7 @@ class HPE_Dataset(Dataset):
                 group_data_path = entry['group_data_path']
                 for group in valid_group:
                     frame = len(group_data_path[group][base_source])
-                    starts = list(range(0, frame - T + 1))
+                    starts = list(range(0, frame - T + 1, 4))
                     windows = [(start, start + T) for start in starts]
                     for start_idx, end_idx in windows:
                         window_by_sensor = {}
@@ -434,6 +439,20 @@ class HPE_Dataset(Dataset):
             # 确保至少读取并解析 header
             _ = array.shape
             _ = array.dtype
+
+            # 点云窗口中只要有一帧为空或形状非法，就将该文件标记为
+            # 无效；_is_valid_window 会据此跳过包含它的整个 T 窗口。
+            if sensor_name in {'radar_low_pc', 'radar_high_pc'}:
+                if (
+                    array.ndim != 2
+                    or array.shape[0] < self.MIN_RADAR_POINTS_PER_FRAME
+                    or array.shape[1] < 3
+                ):
+                    raise ValueError(
+                        "雷达点云必须为 [N,C]、"
+                        f"N>={self.MIN_RADAR_POINTS_PER_FRAME} 且 C>=3，"
+                        f"实际形状={array.shape}"
+                    )
 
             del array
             valid = True
@@ -1099,7 +1118,7 @@ class HPE_Dataset(Dataset):
                     if path_key in seen_paths:
                         continue
 
-                    if sensor_name == 'gt':
+                    if sensor_name == 'gt' and self.enable_action:
                         self._get_gt_action_frame(path)
                     else:
                         load_fn = self._get_sensor_loader(sensor_name)
@@ -1513,11 +1532,17 @@ class HPE_Dataset(Dataset):
             paths = paths[idx]
 
             if sensor_name == 'gt':
-                gt_sequence, action_sequence = (
-                    self._get_gt_action_sequence(paths)
-                )
-                samples['gt'] = gt_sequence
-                samples['action'] = action_sequence
+                if self.enable_action:
+                    gt_sequence, action_sequence = (
+                        self._get_gt_action_sequence(paths)
+                    )
+                    samples['gt'] = gt_sequence
+                    samples['action'] = action_sequence
+                else:
+                    samples['gt'] = self._get_sensor_data_from_path(
+                        sensor_name,
+                        paths,
+                    )
                 date = paths[0].split('/')[3]
             else:
                 data = self._get_sensor_data_from_path(
@@ -1536,7 +1561,7 @@ class HPE_Dataset(Dataset):
         R_high_to_low = calib['high_to_low']['R']
         t_high_to_low = calib['high_to_low']['t']
 
-        if self.mode == 'train' and self.enable_rotation:
+        if self.enable_rotation:
             # 雷达安装角在一个 T 帧窗口内固定；高低雷达使用同一个 A。
             rotation = self._sample_rotation_matrix()
 
@@ -1599,27 +1624,27 @@ class HPE_Dataset(Dataset):
 if __name__ == '__main__':
     """
     radar_high_pc
-        padded: torch.Size([8, 4, 300, 6])
-        mask:   torch.Size([8, 4, 300])
+        padded: torch.Size([B, T, N, 6])
+        mask:   torch.Size([B, T, N])
 
     gt
-        padded: torch.Size([8, 4, 4, 17, 3])
-        mask:   torch.Size([8, 4, 4])
+        padded: torch.Size([B, T, K, 17, 3])
+        mask:   torch.Size([B, T, K])
 
     gt_for_high
-        padded: torch.Size([8, 4, 4, 17, 3])
-        mask:   torch.Size([8, 4, 4])
-        bbox:   torch.Size([8, 4, 4, 6])
-        action: torch.Size([8, 4, 4, 4])
+        padded: torch.Size([B, T, K, 17, 3])
+        mask:   torch.Size([B, T, K])
+        bbox:   torch.Size([B, T, K, 6])
+        action: torch.Size([B, T, K, A])
 
     gt_for_low
-        padded: torch.Size([8, 4, 4, 17, 3])
-        mask:   torch.Size([8, 4, 4])
-        bbox:   torch.Size([8, 4, 4, 6])
-        action: torch.Size([8, 4, 4, 4])
+        padded: torch.Size([B, T, K, 17, 3])
+        mask:   torch.Size([B, T, K])
+        bbox:   torch.Size([B, T, K, 6])
+        action: torch.Size([B, T, K, A])
 
-    high_to_low_R: torch.Size([8, 4, 3, 3])
-    high_to_low_t: torch.Size([8, 4, 3])
+    high_to_low_R: torch.Size([B, T, 3, 3])
+    high_to_low_t: torch.Size([B, T, 3])
     """
     from matplotlib import pyplot as plt
     from matplotlib.patches import Rectangle

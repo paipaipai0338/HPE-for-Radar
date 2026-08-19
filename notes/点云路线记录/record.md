@@ -1,3 +1,43 @@
+# 目标检测
+
+## 记录一
+方法 VoxelNeXt
+
+[实验目录](/experiments/VoxelNeXt/20260724_231418/log/log.txt)
+
+数据 0615 - 0717，不删除多人数据
+
+划分方式 group 不打乱，前 70% 后 30%
+[dataset_for_detection](/data2datasets/dataset_for_detection.py)
+
+BBox Metrics, objectness thresh 0.1, iou_thresh 0.7
+| Metric | Value |
+|--------|-------|
+| objectness | 0.212350 |
+| bbox_l1 | 0.019132 |
+| bbox_iou | 0.586919 |
+| TP | 190871 |
+| TN | 3574609 |
+| FP | 123240 |
+| FN | 480864 |
+| Precision | 0.607655 |
+| Recall | 0.284146 |
+| Accuracy | 0.861748 |
+
+分析：
+当前是按照 gt 产生的bbox，并未考虑 点云数据时候在内，当人员从下方进入时会出现框选空点云情况，
+
+当前模型是将 B T reshape 为一个维度，这直接丢失了时间维度的信息。
+
+训练极度缓慢，是因为当前 匈牙利匹配中 B T 维度reshape后多次在cpu gpu 之间搬运，已修复。
+
+当前只对匈牙利匹配成功的数据进行监督 bce 与 iou，匹配不成功的也做 bce 不做 iou 的隔离，这导致输出中的 bbox 很大概率重复框选但 confidence 很小，映射有些不明确，导致 loss 梯度震荡不下降？（存疑未验证）
+此外，又想到隔离不同 query 的输出 iou 使得其尽可能的低，但是多人情况会恶化。
+
+下一步首先应该考虑：
+学习 sam3 等目标检测网络的多头表达能力（跟踪？）
+修改voxel_size: 0.025 0.025 0.1 的 0.1
+
 # 姿态估计
 ## 记录一
 方法 P4
@@ -220,44 +260,76 @@ val_person_ids = {'4'}
 
 group 划分 0.156892m -> person 划分 0.161809m，效果较为接近
 
-# 目标检测
+## 记录七
+方法 P4
 
-## 记录一
-方法 VoxelNeXt
+[实验目录](/experiments/P4Transformer/20260810_191342/log/log.txt)
 
-[实验目录](/experiments/VoxelNeXt/20260724_231418/log/log.txt)
+数据 0615 - 0730 中的单人数据 14 28 号多人忽略
 
-数据 0615 - 0717，不删除多人数据
+划分方式 person，
+```
+train_person_ids = {'0', '1', '2', '3', '5'}
+val_person_ids = {'4', '6', '7', '8'}
+```
+[dataset_for_all_task](/data2datasets/dataset_for_all_task.py)
 
-划分方式 group 不打乱，前 70% 后 30%
-[dataset_for_detection](/data2datasets/dataset_for_detection.py)
+与记录六的差异：
+数据体量；验证集合人数；max_points: 200；加入了训练集合上的三种角度随机旋转
 
-BBox Metrics, objectness thresh 0.1, iou_thresh 0.7
-| Metric | Value |
-|--------|-------|
-| objectness | 0.212350 |
-| bbox_l1 | 0.019132 |
-| bbox_iou | 0.586919 |
-| TP | 190871 |
-| TN | 3574609 |
-| FP | 123240 |
-| FN | 480864 |
-| Precision | 0.607655 |
-| Recall | 0.284146 |
-| Accuracy | 0.861748 |
+效果展示
+| 指标 | 数值 |
+|------|------|
+| MPJPE | 0.196132m |
 
-分析：
-当前是按照 gt 产生的bbox，并未考虑 点云数据时候在内，当人员从下方进入时会出现框选空点云情况，
+误差上升，跨实验者结果还是略有差异，点数存在差异
 
-当前模型是将 B T reshape 为一个维度，这直接丢失了时间维度的信息。
+## 记录八
+方法 P4
 
-训练极度缓慢，是因为当前 匈牙利匹配中 B T 维度reshape后多次在cpu gpu 之间搬运，已修复。
+[实验目录](/experiments/P4Transformer/20260814_170610/log/log.txt)
 
-当前只对匈牙利匹配成功的数据进行监督 bce 与 iou，匹配不成功的也做 bce 不做 iou 的隔离，这导致输出中的 bbox 很大概率重复框选但 confidence 很小，映射有些不明确，导致 loss 梯度震荡不下降？（存疑未验证）
-此外，又想到隔离不同 query 的输出 iou 使得其尽可能的低，但是多人情况会恶化。
+数据 0615 - 0730 中的单人数据 14 28 号多人忽略
 
-下一步首先应该考虑：
-学习 sam3 等目标检测网络的多头表达能力（跟踪？）
-修改voxel_size: 0.025 0.025 0.1 的 0.1
+划分方式 person，
+```
+train_person_ids = {'0', '1', '2', '3', '5'}
+val_person_ids = {'4', '6', '7', '8'}
+```
+[dataset_for_all_task](/data2datasets/dataset_for_all_task.py)
+
+与记录六的差异：
+max_points: 300
+
+效果展示
+| 指标 | 数值 |
+|------|------|
+| MPJPE | 0.182127m |
+
+点数提升有适当的精度提升
+
+## 记录九
+方法 P4
+
+[实验目录](/experiments/P4Transformer/xxx/log/log.txt)
+
+数据 0615 - 0730 中的单人数据 14 28 号多人忽略
+
+划分方式 person，
+```
+train_person_ids = {'0', '1', '2', '3', '5'}
+val_person_ids = {'4', '6', '7', '8'}
+```
+[dataset_for_all_task](/data2datasets/dataset_for_all_task.py)
+
+与记录六的差异：
+取消了随机旋转矩阵，观察精度如何
+
+效果展示
+| 指标 | 数值 |
+|------|------|
+| MPJPE | xxxx |
+
+点数提升有适当的精度提升
 
 

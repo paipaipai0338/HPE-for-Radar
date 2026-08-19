@@ -1,305 +1,15 @@
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import Literal, Sequence, Tuple
+from typing import *
 import math
-
 import torch
 import torch.nn.functional as F
+import numpy as np
+from preprocess.radarprocess import Radar_Config, get_bin_data, doppler_fft, get_radar_res, angle_fft
 
-
-# =============================================================================
-# 固定硬件虚拟阵列
-#
-# 雷达坐标系：
-#   x：雷达前方
-#   y：雷达左侧
-#   z：雷达上方
-#
-# range_cube 最后一维约定：
-#   index 0  <-> 虚拟通道 1
-#   ...
-#   index 15 <-> 虚拟通道 16
-# =============================================================================
-
-AZIMUTH_ELEMENT_SPACING_M = 2170e-6
-ELEVATION_ELEMENT_SPACING_M = 2400e-6
-NUM_VIRTUAL_CHANNELS = 16
-
-# 从上到下、从图中左到右排列。
-# 0 表示该网格位置不存在虚拟通道。
-VIRTUAL_CHANNEL_LAYOUT: Tuple[Tuple[int, ...], ...] = (
-    (0,  0,  0,  0,  4,  3,  2,  1),
-    (0,  0,  0,  0,  8,  7,  6,  5),
-    (16, 15, 14, 13, 12, 11, 10, 9),
-)
-
-
-def build_virtual_phase_positions() -> torch.Tensor:
-    """
-    根据固定虚拟阵列布局生成 16 个虚拟通道的相位坐标。
-
-    Returns:
-        positions:
-            float32 Tensor，[16, 3]，单位 m。
-            positions[channel_id - 1] 对应虚拟通道 channel_id。
-
-    坐标约定：
-        x：雷达前方。所有阵元都位于雷达面板，因此 x=0。
-        y：雷达左侧为正。图中越靠左，y 越大。
-        z：雷达上方为正。最下层 z=0。
-    """
-    positions = torch.zeros(
-        (NUM_VIRTUAL_CHANNELS, 3),
-        dtype=torch.float32,
-    )
-
-    num_rows = len(VIRTUAL_CHANNEL_LAYOUT)
-    num_cols = len(VIRTUAL_CHANNEL_LAYOUT[0])
-    center_col = (num_cols - 1) / 2.0
-
-    for row_idx, row in enumerate(VIRTUAL_CHANNEL_LAYOUT):
-        z = (
-            num_rows - 1 - row_idx
-        ) * ELEVATION_ELEMENT_SPACING_M
-
-        for col_idx, channel_id in enumerate(row):
-            if channel_id == 0:
-                continue
-
-            y = (
-                center_col - col_idx
-            ) * AZIMUTH_ELEMENT_SPACING_M
-
-            positions[channel_id - 1] = torch.tensor(
-                [0.0, y, z],
-                dtype=torch.float32,
-            )
-
-    return positions
-
-
-@dataclass
-class SingleRadarProjectionConfig:
-    """
-    固定 4Tx × 4Rx 单雷达的 RPM 风格投影配置。
-
-    方位子阵列：
-        虚拟通道 16,15,14,13,12,11,10,9，
-        对应底部完整的 8 阵元水平 ULA。
-
-    俯仰子阵列：
-        虚拟通道 9,5,1，
-        对应最右侧同一列的 3 阵元垂直 ULA。
-    """
-
-    virtual_phase_positions: torch.Tensor = field(
-        default_factory=build_virtual_phase_positions
-    )
-
-    # 0-based Tensor 索引，对应虚拟通道 16...9。
-    azi_ant_indices: Tuple[int, ...] = (
-        15, 14, 13, 12, 11, 10, 9, 8
-    )
-
-    # 0-based Tensor 索引，对应虚拟通道 9,5,1。
-    ele_ant_indices: Tuple[int, ...] = (
-        8, 4, 0
-    )
-
-    azimuth_min_deg: float = -60.0
-    azimuth_max_deg: float = 60.0
-    elevation_min_deg: float = -45.0
-    elevation_max_deg: float = 45.0
-
-    num_azimuth_beams: int = 1024
-    num_elevation_beams: int = 1024
-
-    # 8 阵元方位阵列可以使用 Hann 窗。
-    azi_apply_array_window: bool = False
-
-    # 3 阵元俯仰阵列不能使用 Hann 窗；
-    # 非周期 3 点 Hann 近似为 [0, 1, 0]，会破坏角度信息。
-    ele_apply_array_window: bool = False
-
-    # 方位和俯仰阵列的相位方向可能不同，分别配置。
-    azimuth_phase_sign: float = -1.0
-    elevation_phase_sign: float = 1.0
-
-    # Bartlett 分块处理 chirp，避免一次生成 [B,T,R,C,K] 大张量。
-    chirp_chunk_size: int = 8
-
-    # 测角方法：bartlett 为当前常规波束形成，mvdr/music 为超分辨测角。
-    angle_method: Literal["bartlett", "mvdr", "music"] = "mvdr"
-
-    # MVDR/MUSIC 协方差矩阵对角加载系数。
-    diagonal_loading: float = 1e-2
-
-    # 当前方位和俯仰子阵列均为 ULA，可使用前后向平均增强稳健性。
-    forward_backward_average: bool = True
-
-    # MUSIC 必须指定信号源数量。方位可尝试 1~2，俯仰 3 阵元建议固定为 1。
-    music_num_sources_azi: int = 1
-    music_num_sources_ele: int = 1
-
-    def __post_init__(self) -> None:
-        self.virtual_phase_positions = (
-            torch.as_tensor(
-                self.virtual_phase_positions,
-                dtype=torch.float32,
-            )
-            .detach()
-            .clone()
-        )
-
-        if self.virtual_phase_positions.shape != (
-            NUM_VIRTUAL_CHANNELS,
-            3,
-        ):
-            raise ValueError(
-                "virtual_phase_positions 必须为 [16,3]，"
-                f"实际为 {tuple(self.virtual_phase_positions.shape)}"
-            )
-
-        for name, indices in (
-            ("azi_ant_indices", self.azi_ant_indices),
-            ("ele_ant_indices", self.ele_ant_indices),
-        ):
-            if len(indices) < 2:
-                raise ValueError(f"{name} 至少需要两个阵元")
-            if len(set(indices)) != len(indices):
-                raise ValueError(f"{name} 中存在重复索引")
-            if min(indices) < 0 or max(indices) >= NUM_VIRTUAL_CHANNELS:
-                raise ValueError(
-                    f"{name} 必须位于 [0,15]，当前为 {indices}"
-                )
-
-        if not (
-            self.azimuth_min_deg < self.azimuth_max_deg
-            and self.elevation_min_deg < self.elevation_max_deg
-        ):
-            raise ValueError("角度范围下限必须小于上限")
-
-        if self.num_azimuth_beams < 2:
-            raise ValueError("num_azimuth_beams 必须 >= 2")
-        if self.num_elevation_beams < 2:
-            raise ValueError("num_elevation_beams 必须 >= 2")
-        if self.chirp_chunk_size <= 0:
-            raise ValueError("chirp_chunk_size 必须 > 0")
-        if self.angle_method not in ("bartlett", "mvdr", "music"):
-            raise ValueError(f"未知 angle_method={self.angle_method}")
-        if self.diagonal_loading < 0:
-            raise ValueError("diagonal_loading 必须 >= 0")
-        if not 1 <= self.music_num_sources_azi < len(self.azi_ant_indices):
-            raise ValueError("music_num_sources_azi 必须位于 [1, 方位阵元数-1]")
-        if not 1 <= self.music_num_sources_ele < len(self.ele_ant_indices):
-            raise ValueError("music_num_sources_ele 必须位于 [1, 俯仰阵元数-1]")
-
-
-@dataclass
-class RPMProjectionOutput:
-    """
-    单雷达 RPM 风格投影结果。
-
-    张量形状：
-        range_azimuth_power:
-            [B,T_out,R,K_azi]
-
-        range_elevation_power:
-            [B,T_out,R,K_ele]
-
-        horizontal_xy_power:
-            [B,T_out,H_y,W_x]
-            行方向为侧向 y，列方向为前向 x。
-
-        vertical_xz_power:
-            [B,T_out,H_z,W_x]
-            行方向为竖直 z，列方向为前向 x。
-    """
-
-    horizontal_xy_power: torch.Tensor
-    vertical_xz_power: torch.Tensor
-
-    range_azimuth_power: torch.Tensor
-    range_elevation_power: torch.Tensor
-
-    range_axis: torch.Tensor
-    azimuth_axis_rad: torch.Tensor
-    elevation_axis_rad: torch.Tensor
-
-    horizontal_x_axis: torch.Tensor
-    horizontal_y_axis: torch.Tensor
-    vertical_x_axis: torch.Tensor
-    vertical_z_axis: torch.Tensor
-
-    time_start_index: int
-
-
-def suppress_static_clutter(
-    range_cube: torch.Tensor,
-    mode: Literal[
-        "none",
-        "chirp_mean",
-        "frame_difference",
-    ] = "frame_difference",
-) -> Tuple[torch.Tensor, int]:
-    """
-    静态杂波抑制。
-
-    Args:
-        range_cube:
-            复数 Tensor，[B,T,R,C,A]。
-
-        mode:
-            "none":
-                不处理，T_out=T。
-
-            "chirp_mean":
-                沿 chirp 维减复数均值，抑制零 Doppler，T_out=T。
-
-            "frame_difference":
-                相邻外层帧做复数差分 X_t-X_{t-1}，
-                更接近 RPM 的 consecutive measurement subtraction，
-                T_out=T-1。
-    """
-    if range_cube.ndim != 5:
-        raise ValueError(
-            "range_cube 必须为 [B,T,R,C,A]，"
-            f"实际为 {tuple(range_cube.shape)}"
-        )
-
-    if mode == "none":
-        return range_cube, 0
-
-    if mode == "chirp_mean":
-        return (
-            range_cube
-            - range_cube.mean(dim=3, keepdim=True),
-            0,
-        )
-
-    if mode == "frame_difference":
-        if range_cube.shape[1] < 2:
-            raise ValueError(
-                "frame_difference 至少需要两个连续帧"
-            )
-        return (
-            range_cube[:, 1:]
-            - range_cube[:, :-1],
-            1,
-        )
-
-    raise ValueError(f"未知 clutter mode: {mode}")
-
-
-def _build_direction_vectors(
-    angle_axis_rad: torch.Tensor,
-    plane: Literal["azimuth", "elevation"],
-) -> torch.Tensor:
+def _build_direction_vectors(angle_axis_rad: torch.Tensor, plane: Literal["azi", "ele"]) -> torch.Tensor:
     """
     按 x 前、y 左、z 上坐标系构造单位方向向量。
 
-    azimuth:
+    azi:
         u(theta) = [cos(theta), sin(theta), 0]
 
     elevation:
@@ -307,17 +17,16 @@ def _build_direction_vectors(
     """
     zeros = torch.zeros_like(angle_axis_rad)
 
-    if plane == "azimuth":
+    if plane == "azi":
         return torch.stack(
-            (
-                torch.cos(angle_axis_rad),
+            (torch.cos(angle_axis_rad),
                 torch.sin(angle_axis_rad),
                 zeros,
             ),
             dim=-1,
         )
 
-    if plane == "elevation":
+    if plane == "ele":
         return torch.stack(
             (
                 torch.cos(angle_axis_rad),
@@ -327,89 +36,39 @@ def _build_direction_vectors(
             dim=-1,
         )
 
-    raise ValueError(
-        f"plane 必须为 azimuth 或 elevation，当前为 {plane}"
-    )
-
-
+# range_cube B, T, R, C, A  - >  range_angle_power B, T, R, K
 def range_cube_to_range_angle_power(
     range_cube: torch.Tensor,
-    virtual_phase_positions: torch.Tensor,
-    ant_indices: Sequence[int],
-    wavelength: float,
-    angle_min_deg: float,
-    angle_max_deg: float,
-    num_angle_beams: int,
-    plane: Literal["azimuth", "elevation"],
-    apply_array_window: bool,
-    phase_sign: float = 1.0,
-    chirp_chunk_size: int = 8,
-    angle_method: Literal["bartlett", "mvdr", "music"] = "mvdr",
-    diagonal_loading: float = 1e-2,
-    forward_backward_average: bool = True,
-    music_num_sources: int = 1,
+    radar_config: Radar_Config,
+    plane: Literal["azi", "ele"],
+    remove_static: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    从 Range FFT cube 生成 Range-Angle 功率图。
 
-    输入：
-        range_cube: [B,T,R,C,A]，C 作为协方差估计的快拍维。
-
-    输出：
-        range_angle_power: [B,T,R,K]
-        angle_axis_rad: [K]
-
-    angle_method：
-        bartlett：常规波束形成，与原实现一致。
-        mvdr：Capon/MVDR 超分辨谱，不需要预先指定目标数量。
-        music：MUSIC 伪谱，需要指定 music_num_sources。
-    """
-    if range_cube.ndim != 5:
-        raise ValueError(f"range_cube 必须为 [B,T,R,C,A]，实际为 {tuple(range_cube.shape)}")
-    if not torch.is_complex(range_cube):
-        raise TypeError(f"range_cube 必须为复数 Tensor，实际 dtype={range_cube.dtype}")
-    if wavelength <= 0:
-        raise ValueError("wavelength 必须 > 0")
-    if num_angle_beams < 2:
-        raise ValueError("num_angle_beams 必须 >= 2")
-    if chirp_chunk_size <= 0:
-        raise ValueError("chirp_chunk_size 必须 > 0")
-    if phase_sign not in (-1.0, 1.0):
-        raise ValueError("phase_sign 必须为 +1.0 或 -1.0")
-    if angle_method not in ("bartlett", "mvdr", "music"):
-        raise ValueError(f"未知 angle_method={angle_method}")
-    if diagonal_loading < 0:
-        raise ValueError("diagonal_loading 必须 >= 0")
-    if angle_method != "bartlett" and apply_array_window:
-        raise ValueError("MVDR/MUSIC 不建议使用阵列 Hann 窗，请将 apply_array_window=False")
+    assert plane in ("azi", "ele"), f"plane 必须为 'azi' 或 'ele'，当前为 {plane}"
+    assert radar_config.angle_method in ("bartlett", "mvdr", "music"), f"未知 angle_method={radar_config.angle_method}"
 
     B, T, R, C, A = range_cube.shape
     device = range_cube.device
     real_dtype = range_cube.real.dtype
     eps = torch.finfo(real_dtype).eps
+    if remove_static:
+        range_cube = range_cube - range_cube.mean(dim=3, keepdim=True)
 
-    positions = torch.as_tensor(virtual_phase_positions, dtype=real_dtype, device=device)
-    if positions.shape != (A, 3):
-        raise ValueError(f"virtual_phase_positions 期望 ({A},3)，实际 {tuple(positions.shape)}")
+    positions = torch.as_tensor(radar_config.virtual_channel_positions, dtype=real_dtype, device=device)
+    fov = radar_config.azi_deg if plane == "azi" else radar_config.ele_deg
+    ant_indices = radar_config.azi_ant_indices if plane == "azi" else radar_config.ele_ant_indices
 
     index_tensor = torch.as_tensor(tuple(ant_indices), dtype=torch.long, device=device)
-    if index_tensor.numel() < 2:
-        raise ValueError("角度估计至少需要两个阵元")
-    if int(index_tensor.min()) < 0 or int(index_tensor.max()) >= A:
-        raise IndexError(f"天线索引超出范围，A={A}, indices={tuple(ant_indices)}")
 
     subarray_cube = torch.index_select(range_cube, dim=-1, index=index_tensor)
     subarray_positions = torch.index_select(positions, dim=0, index=index_tensor)
     subarray_positions = subarray_positions - subarray_positions[:1]
 
-    angle_axis_rad = torch.linspace(
-        math.radians(angle_min_deg), math.radians(angle_max_deg), num_angle_beams,
-        dtype=real_dtype, device=device,
-    )
+    angle_axis_rad = torch.linspace(math.radians(fov[0]), math.radians(fov[1]), radar_config.num_angle_beams,dtype=real_dtype, device=device)
 
     direction_vectors = _build_direction_vectors(angle_axis_rad, plane)
     path_difference = torch.einsum("mc,kc->mk", subarray_positions, direction_vectors)
-    phase = phase_sign * 2.0 * math.pi / wavelength * path_difference
+    phase = 2.0 * math.pi / radar_config.lam * path_difference
 
     # steering_weight 保持与原代码一致，用于 y = sum(x_m * steering_weight_m)。
     steering_weight = torch.exp(1j * phase).to(dtype=range_cube.dtype)
@@ -419,399 +78,300 @@ def range_cube_to_range_angle_power(
     # -------------------------------------------------------------------------
     # Bartlett：保留原常规波束形成实现，便于与超分辨结果直接对比。
     # -------------------------------------------------------------------------
-    if angle_method == "bartlett":
-        if apply_array_window:
-            if num_selected_ant < 4:
-                raise ValueError(f"少于 4 个阵元时不应使用 Hann 窗，当前阵元数={num_selected_ant}")
-            array_window = torch.hann_window(
-                num_selected_ant, periodic=False, dtype=real_dtype, device=device,
-            )
-            subarray_cube = subarray_cube * array_window.view(1, 1, 1, 1, num_selected_ant)
-            normalization = array_window.sum().square().clamp_min(1e-12)
-        else:
-            normalization = torch.tensor(float(num_selected_ant ** 2), dtype=real_dtype, device=device)
+    if radar_config.angle_method == "bartlett":
+        
+        normalization = torch.tensor(float(num_selected_ant ** 2), dtype=real_dtype, device=device)
 
-        power_sum = torch.zeros((B, T, R, num_angle_beams), dtype=real_dtype, device=device)
-        for start in range(0, C, chirp_chunk_size):
-            stop = min(start + chirp_chunk_size, C)
+        power_sum = torch.zeros((B, T, R, radar_config.num_angle_beams), dtype=real_dtype, device=device)
+        for start in range(0, C, 8):
+            stop = min(start + 8, C)
             angle_spectrum_chunk = torch.einsum(
                 "btrcm,mk->btrck", subarray_cube[:, :, :, start:stop, :], steering_weight,
             )
             power_sum += angle_spectrum_chunk.abs().square().sum(dim=3)
 
         range_angle_power = power_sum / float(C) / normalization
-        return range_angle_power, angle_axis_rad
+    else:
+        # -------------------------------------------------------------------------
+        # MVDR/MUSIC：使用 C 个 chirp 作为快拍，按每个 range bin 构造空间协方差。
+        # Rxx[m,n] = E[x_m * conj(x_n)]。
+        # -------------------------------------------------------------------------
+        covariance = torch.einsum(
+            "btrcm,btrcn->btrmn", subarray_cube, subarray_cube.conj(),
+        ) / float(C)
+        covariance = 0.5 * (covariance + covariance.conj().transpose(-2, -1))
 
-    # -------------------------------------------------------------------------
-    # MVDR/MUSIC：使用 C 个 chirp 作为快拍，按每个 range bin 构造空间协方差。
-    # Rxx[m,n] = E[x_m * conj(x_n)]。
-    # -------------------------------------------------------------------------
-    covariance = torch.einsum(
-        "btrcm,btrcn->btrmn", subarray_cube, subarray_cube.conj(),
-    ) / float(C)
-    covariance = 0.5 * (covariance + covariance.conj().transpose(-2, -1))
-
-    if forward_backward_average:
         exchange = torch.eye(num_selected_ant, dtype=range_cube.dtype, device=device).flip(0)
         covariance_fb = torch.matmul(torch.matmul(exchange, covariance.conj()), exchange)
         covariance = 0.5 * (covariance + covariance_fb)
         covariance = 0.5 * (covariance + covariance.conj().transpose(-2, -1))
 
-    trace_mean = covariance.diagonal(dim1=-2, dim2=-1).real.mean(dim=-1)
-    loading = diagonal_loading * trace_mean.clamp_min(eps) + eps
-    identity = torch.eye(num_selected_ant, dtype=range_cube.dtype, device=device)
-    covariance_loaded = covariance + loading[..., None, None] * identity
+        trace_mean = covariance.diagonal(dim1=-2, dim2=-1).real.mean(dim=-1)
+        loading = 1e-2 * trace_mean.clamp_min(eps) + eps
+        identity = torch.eye(num_selected_ant, dtype=range_cube.dtype, device=device)
+        covariance_loaded = covariance + loading[..., None, None] * identity
 
-    if angle_method == "mvdr":
-        covariance_inverse = torch.linalg.inv(covariance_loaded)
-        denominator = torch.einsum(
-            "mk,btrmn,nk->btrk", steering_vector.conj(), covariance_inverse, steering_vector,
-        ).real.clamp_min(eps)
-        range_angle_power = 1.0 / denominator
-        return range_angle_power, angle_axis_rad
+        if radar_config.angle_method == "mvdr":
+            covariance_inverse = torch.linalg.inv(covariance_loaded)
+            denominator = torch.einsum(
+                "mk,btrmn,nk->btrk", steering_vector.conj(), covariance_inverse, steering_vector,
+            ).real.clamp_min(eps)
+            range_angle_power = 1.0 / denominator
 
-    if not 1 <= music_num_sources < num_selected_ant:
-        raise ValueError(
-            f"music_num_sources 必须位于 [1,{num_selected_ant - 1}]，当前为 {music_num_sources}"
-        )
-
-    _, eigenvectors = torch.linalg.eigh(covariance_loaded)
-    noise_subspace = eigenvectors[..., :num_selected_ant - music_num_sources]
-    noise_projection = torch.einsum(
-        "btrmq,mk->btrqk", noise_subspace.conj(), steering_vector,
-    )
-    denominator = noise_projection.abs().square().sum(dim=-2).clamp_min(eps)
-    music_spectrum = 1.0 / denominator
-
-    # MUSIC 是无量纲伪谱。先按每个 range bin 归一化角谱，再用该距离单元能量加权，
-    # 避免纯噪声距离单元也出现与强目标相同亮度的尖峰。
-    music_spectrum = music_spectrum / music_spectrum.amax(dim=-1, keepdim=True).clamp_min(eps)
-    range_power = subarray_cube.abs().square().mean(dim=(-1, -2))
-    range_angle_power = music_spectrum * range_power.unsqueeze(-1)
+        if radar_config.angle_method == "music":
+            _, eigenvectors = torch.linalg.eigh(covariance_loaded)
+            noise_subspace = eigenvectors[..., :num_selected_ant - 1]
+            noise_projection = torch.einsum(
+                "btrmq,mk->btrqk", noise_subspace.conj(), steering_vector,
+            )
+            denominator = noise_projection.abs().square().sum(dim=-2).clamp_min(eps)
+            music_spectrum = 1.0 / denominator
+            music_spectrum = music_spectrum / music_spectrum.amax(dim=-1, keepdim=True).clamp_min(eps)
+            range_power = subarray_cube.abs().square().mean(dim=(-1, -2))
+            range_angle_power = music_spectrum * range_power.unsqueeze(-1)
 
     return range_angle_power, angle_axis_rad
 
-def range_angle_to_cartesian_map(
-    range_angle_power: torch.Tensor,
-    range_axis: torch.Tensor,
-    angle_axis_rad: torch.Tensor,
-    forward_limits: Tuple[float, float],
-    lateral_limits: Tuple[float, float],
-    output_size: Tuple[int, int],
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    将 Range-Angle 图重采样到 Cartesian 平面。
-
-    水平 x-y 图：
-        forward=x，lateral=y。
-
-    垂直 x-z 图：
-        forward=x，lateral=z。
-
-    Args:
-        range_angle_power:
-            [B,T,R,K]
-
-        output_size:
-            (num_forward_pixels, num_lateral_pixels)
-
-    Returns:
-        cartesian_map:
-            [B,T,num_forward_pixels,num_lateral_pixels]
-    """
-    if range_angle_power.ndim != 4:
-        raise ValueError(
-            "range_angle_power 必须为 [B,T,R,K]，"
-            f"实际为 {tuple(range_angle_power.shape)}"
-        )
-
+# range_angle_power B, T, R, K -> cartesian_map B, T, H, W
+def range_angle_power_to_cartesian_map(
+        range_angle_power: torch.Tensor, 
+        range_axis: torch.Tensor, 
+        angle_axis_rad: torch.Tensor, 
+        xyz_limits: Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]],
+        map_size: Tuple[int, int],
+        plane: Literal["horizontal", "vertical"] = "horizontal",
+    ) -> torch.Tensor:
     B, T, R, K = range_angle_power.shape
-    H_forward, W_lateral = output_size
+    H, W = map_size
 
-    if H_forward <= 0 or W_lateral <= 0:
-        raise ValueError("output_size 的两个维度必须 > 0")
+    if H <= 0 or W <= 0:
+        raise ValueError("map_size 的两个维度必须 > 0")
 
     device = range_angle_power.device
     dtype = range_angle_power.dtype
 
-    range_axis = torch.as_tensor(
-        range_axis,
-        dtype=dtype,
-        device=device,
-    )
-    angle_axis_rad = torch.as_tensor(
-        angle_axis_rad,
-        dtype=dtype,
-        device=device,
-    )
+    range_axis = torch.as_tensor(range_axis, dtype=dtype, device=device)
+    angle_axis_rad = torch.as_tensor(angle_axis_rad, dtype=dtype, device=device)
 
-    if range_axis.shape != (R,):
-        raise ValueError(
-            f"range_axis 应为 [{R}]，实际为 {tuple(range_axis.shape)}"
+    if plane == "horizontal":
+        H_axis = torch.linspace(xyz_limits[0][0], xyz_limits[0][1], H, dtype=dtype, device=device)  # X
+        W_axis = torch.linspace(xyz_limits[1][0], xyz_limits[1][1], W, dtype=dtype, device=device)  # Y
+    elif plane == "vertical":
+        H_axis = torch.linspace(xyz_limits[0][0], xyz_limits[0][1], H, dtype=dtype, device=device)  # X
+        W_axis = torch.linspace(xyz_limits[2][0], xyz_limits[2][1], W, dtype=dtype, device=device)  # Z
+    else:
+        raise ValueError(f"plane 必须为 'horizontal' 或 'vertical'，当前为 {plane}")
+    
+
+    H_grid, W_grid = torch.meshgrid(H_axis, W_axis, indexing="ij")
+
+    range_grid = torch.sqrt(H_grid.square() + W_grid.square())
+    angle_grid = torch.atan2(W_grid, H_grid)
+
+    # 按照torch.nn.functional.grid_sample(要求转化为坐标范围 [-1,1]
+    angle_normalized = (2.0 * (angle_grid - angle_axis_rad[0]) / (angle_axis_rad[-1] - angle_axis_rad[0]) - 1.0)
+    range_normalized = (2.0 * (range_grid - range_axis[0]) / (range_axis[-1] - range_axis[0]) - 1.0)
+
+    sampling_grid = torch.stack((angle_normalized, range_normalized), dim=-1,).unsqueeze(0).expand(B * T, -1, -1, -1)
+
+    polar_input = range_angle_power.reshape(B * T, 1, R, K)
+
+    cartesian_map = F.grid_sample(polar_input, sampling_grid, mode="bilinear", padding_mode="zeros", align_corners=True,).reshape(B, T, H, W)
+
+    return cartesian_map, H_axis, W_axis
+
+if __name__ == "__main__":
+    import os
+    from matplotlib import pyplot as plt
+
+    bin_file_path = "/mnt/huawei/20260709/data_collection/group_017/dpct高位机/Bin"
+    files = os.listdir(bin_file_path)
+    files = [f for f in files if f.endswith('.bin')]
+    files.sort()
+
+    def power_to_numpy(power: torch.Tensor) -> np.ndarray:
+        """保留算法输出的原始线性谱值。"""
+        return power.detach().real.cpu().numpy()
+
+    for file in files:
+        print(f"Processing file: {file}")
+        file_path = os.path.join(bin_file_path, file)
+        fft1d = get_bin_data(file_path)
+        if fft1d is None:
+            print(f"Skip invalid bin file: {file_path}")
+            continue
+
+        fft1d = torch.from_numpy(fft1d)[None, None, ...]
+        radar_config = Radar_Config()
+        range_res, _, _, _ = get_radar_res(radar_config)
+        range_axis = (
+            torch.arange(
+                fft1d.shape[2],
+                dtype=fft1d.real.dtype,
+                device=fft1d.device,
+            )
+            * range_res
         )
-    if angle_axis_rad.shape != (K,):
-        raise ValueError(
-            f"angle_axis_rad 应为 [{K}]，实际为 "
-            f"{tuple(angle_axis_rad.shape)}"
+        xyz_limits = ((0.2, 5.0), (-2.0, 2.0), (-1.0, 1.5))
+        cartesian_size = (256, 256)
+
+        method_results = []
+        with torch.no_grad():
+            for method in ("bartlett", "mvdr", "music"):
+                radar_config.angle_method = method
+                range_azi_power, azi_axis_rad = (
+                    range_cube_to_range_angle_power(
+                        fft1d,
+                        radar_config,
+                        plane="azi",
+                        remove_static=True,
+                    )
+                )
+                horizontal_power, horizontal_x_axis, horizontal_y_axis = (
+                    range_angle_power_to_cartesian_map(
+                        range_azi_power,
+                        range_axis,
+                        azi_axis_rad,
+                        xyz_limits,
+                        cartesian_size,
+                        plane="horizontal",
+                    )
+                )
+                range_ele_power, ele_axis_rad = (
+                    range_cube_to_range_angle_power(
+                        fft1d,
+                        radar_config,
+                        plane="ele",
+                        remove_static=True,
+                    )
+                )
+                vertical_power, vertical_x_axis, vertical_z_axis = (
+                    range_angle_power_to_cartesian_map(
+                        range_ele_power,
+                        range_axis,
+                        ele_axis_rad,
+                        xyz_limits,
+                        cartesian_size,
+                        plane="vertical",
+                    )
+                )
+                method_results.append(
+                    (
+                        method,
+                        power_to_numpy(range_azi_power[0, 0]),
+                        power_to_numpy(range_ele_power[0, 0]),
+                        power_to_numpy(horizontal_power[0, 0]),
+                        power_to_numpy(vertical_power[0, 0]),
+                    )
+                )
+
+        azi_axis_deg = torch.rad2deg(azi_axis_rad).cpu().numpy()
+        ele_axis_deg = torch.rad2deg(ele_axis_rad).cpu().numpy()
+        num_range_bins = fft1d.shape[2]
+
+        horizontal_x_axis = horizontal_x_axis.cpu().numpy()
+        horizontal_y_axis = horizontal_y_axis.cpu().numpy()
+        vertical_x_axis = vertical_x_axis.cpu().numpy()
+        vertical_z_axis = vertical_z_axis.cpu().numpy()
+
+        fig, axes = plt.subplots(3, 4, figsize=(26, 13))
+        for row, (
+            method,
+            azi_power,
+            ele_power,
+            horizontal_power,
+            vertical_power,
+        ) in enumerate(method_results):
+            azi_image = axes[row, 0].imshow(
+                azi_power,
+                aspect="auto",
+                extent=[
+                    azi_axis_deg[0],
+                    azi_axis_deg[-1],
+                    0,
+                    num_range_bins,
+                ],
+                origin="lower",
+                cmap="jet",
+            )
+            axes[row, 0].set_title(
+                f"{method.upper()} Dynamic Range-Azimuth"
+            )
+            axes[row, 0].set_xlabel("Azimuth Angle (deg)")
+            axes[row, 0].set_ylabel("Range Bin")
+            fig.colorbar(azi_image, ax=axes[row, 0], label="Raw spectrum (linear)")
+
+            ele_image = axes[row, 1].imshow(
+                ele_power,
+                aspect="auto",
+                extent=[
+                    ele_axis_deg[0],
+                    ele_axis_deg[-1],
+                    0,
+                    num_range_bins,
+                ],
+                origin="lower",
+                cmap="jet",
+            )
+            axes[row, 1].set_title(
+                f"{method.upper()} Dynamic Range-Elevation"
+            )
+            axes[row, 1].set_xlabel("Elevation Angle (deg)")
+            axes[row, 1].set_ylabel("Range Bin")
+            fig.colorbar(ele_image, ax=axes[row, 1], label="Raw spectrum (linear)")
+
+            horizontal_image = axes[row, 2].imshow(
+                horizontal_power.T,
+                aspect="auto",
+                extent=[
+                    horizontal_x_axis[0],
+                    horizontal_x_axis[-1],
+                    horizontal_y_axis[0],
+                    horizontal_y_axis[-1],
+                ],
+                origin="lower",
+                cmap="jet",
+            )
+            axes[row, 2].set_title(
+                f"{method.upper()} Horizontal XY Projection"
+            )
+            axes[row, 2].set_xlabel("Forward X (m)")
+            axes[row, 2].set_ylabel("Lateral Y (m)")
+            fig.colorbar(
+                horizontal_image,
+                ax=axes[row, 2],
+                label="Raw spectrum (linear)",
+            )
+
+            vertical_image = axes[row, 3].imshow(
+                vertical_power.T,
+                aspect="auto",
+                extent=[
+                    vertical_x_axis[0],
+                    vertical_x_axis[-1],
+                    vertical_z_axis[0],
+                    vertical_z_axis[-1],
+                ],
+                origin="lower",
+                cmap="jet",
+            )
+            axes[row, 3].set_title(
+                f"{method.upper()} Vertical XZ Projection"
+            )
+            axes[row, 3].set_xlabel("Forward X (m)")
+            axes[row, 3].set_ylabel("Height Z (m)")
+            fig.colorbar(
+                vertical_image,
+                ax=axes[row, 3],
+                label="Raw spectrum (linear)",
+            )
+
+        fig.suptitle(
+            f"Static-clutter-removed angle spectra: {file}",
+            fontsize=14,
         )
-    if not bool(torch.all(range_axis[1:] > range_axis[:-1])):
-        raise ValueError("range_axis 必须严格递增")
-    if not bool(torch.all(angle_axis_rad[1:] > angle_axis_rad[:-1])):
-        raise ValueError("angle_axis_rad 必须严格递增")
-
-    forward_axis = torch.linspace(
-        forward_limits[0],
-        forward_limits[1],
-        H_forward,
-        dtype=dtype,
-        device=device,
-    )
-    lateral_axis = torch.linspace(
-        lateral_limits[0],
-        lateral_limits[1],
-        W_lateral,
-        dtype=dtype,
-        device=device,
-    )
-
-    forward_grid, lateral_grid = torch.meshgrid(
-        forward_axis,
-        lateral_axis,
-        indexing="ij",
-    )
-
-    range_grid = torch.sqrt(
-        forward_grid.square()
-        + lateral_grid.square()
-    )
-    angle_grid = torch.atan2(
-        lateral_grid,
-        forward_grid,
-    )
-
-    angle_normalized = (
-        2.0
-        * (angle_grid - angle_axis_rad[0])
-        / (angle_axis_rad[-1] - angle_axis_rad[0])
-        - 1.0
-    )
-    range_normalized = (
-        2.0
-        * (range_grid - range_axis[0])
-        / (range_axis[-1] - range_axis[0])
-        - 1.0
-    )
-
-    sampling_grid = torch.stack(
-        (angle_normalized, range_normalized),
-        dim=-1,
-    ).unsqueeze(0).expand(
-        B * T,
-        -1,
-        -1,
-        -1,
-    )
-
-    polar_input = range_angle_power.reshape(
-        B * T,
-        1,
-        R,
-        K,
-    )
-
-    cartesian_map = F.grid_sample(
-        polar_input,
-        sampling_grid,
-        mode="bilinear",
-        padding_mode="zeros",
-        align_corners=True,
-    ).reshape(
-        B,
-        T,
-        H_forward,
-        W_lateral,
-    )
-
-    return cartesian_map, forward_axis, lateral_axis
-
-
-def range_cube_to_rpm_projection_maps(
-    range_cube: torch.Tensor,
-    range_axis: torch.Tensor,
-    wavelength: float,
-    projection_config: SingleRadarProjectionConfig | None = None,
-    *,
-    xy_limits: Tuple[
-        Tuple[float, float],
-        Tuple[float, float],
-    ] = ((0.2, 5.0), (-2.0, 2.0)),
-    xz_limits: Tuple[
-        Tuple[float, float],
-        Tuple[float, float],
-    ] = ((0.2, 5.0), (-1.0, 1.5)),
-    xy_size: Tuple[int, int] = (256, 256),
-    xz_size: Tuple[int, int] = (256, 256),
-    clutter_mode: Literal[
-        "none",
-        "chirp_mean",
-        "frame_difference",
-    ] = "chirp_mean",
-) -> RPMProjectionOutput:
-    """
-    从单雷达 Range FFT cube 生成 RPM 风格水平和垂直投影图。
-
-    xy_limits:
-        ((x_min,x_max), (y_min,y_max))。
-        x 为前方，y 为左侧。
-
-    xz_limits:
-        ((x_min,x_max), (z_min,z_max))。
-        x 为前方，z 为上方。
-
-    xy_size:
-        (num_y_pixels, num_x_pixels)，即标准图像 (H,W)。
-        输出 horizontal_xy_power 为 [B,T_out,num_y,num_x]，
-        其中 row 对应 y，column 对应 x。
-
-    xz_size:
-        (num_z_pixels, num_x_pixels)。
-        输出 vertical_xz_power 为 [B,T_out,num_z,num_x]。
-    """
-    if projection_config is None:
-        projection_config = SingleRadarProjectionConfig()
-
-    processed_cube, time_start_index = suppress_static_clutter(
-        range_cube,
-        mode=clutter_mode,
-    )
-
-    range_azimuth_power, azimuth_axis_rad = (
-        range_cube_to_range_angle_power(
-            range_cube=processed_cube,
-            virtual_phase_positions=(
-                projection_config.virtual_phase_positions
-            ),
-            ant_indices=projection_config.azi_ant_indices,
-            wavelength=wavelength,
-            angle_min_deg=projection_config.azimuth_min_deg,
-            angle_max_deg=projection_config.azimuth_max_deg,
-            num_angle_beams=(
-                projection_config.num_azimuth_beams
-            ),
-            plane="azimuth",
-            apply_array_window=(
-                projection_config.azi_apply_array_window
-            ),
-            phase_sign=projection_config.azimuth_phase_sign,
-            chirp_chunk_size=projection_config.chirp_chunk_size,
-            angle_method=projection_config.angle_method,
-            diagonal_loading=projection_config.diagonal_loading,
-            forward_backward_average=projection_config.forward_backward_average,
-            music_num_sources=projection_config.music_num_sources_azi,
-        )
-    )
-
-    range_elevation_power, elevation_axis_rad = (
-        range_cube_to_range_angle_power(
-            range_cube=processed_cube,
-            virtual_phase_positions=(
-                projection_config.virtual_phase_positions
-            ),
-            ant_indices=projection_config.ele_ant_indices,
-            wavelength=wavelength,
-            angle_min_deg=projection_config.elevation_min_deg,
-            angle_max_deg=projection_config.elevation_max_deg,
-            num_angle_beams=(
-                projection_config.num_elevation_beams
-            ),
-            plane="elevation",
-            apply_array_window=(
-                projection_config.ele_apply_array_window
-            ),
-            phase_sign=projection_config.elevation_phase_sign,
-            chirp_chunk_size=projection_config.chirp_chunk_size,
-            angle_method=projection_config.angle_method,
-            diagonal_loading=projection_config.diagonal_loading,
-            forward_backward_average=projection_config.forward_backward_average,
-            music_num_sources=projection_config.music_num_sources_ele,
-        )
-    )
-
-    # 水平图内部先生成 [B,T_out,X,Y]。
-    horizontal_xy_forward_first, horizontal_x_axis, horizontal_y_axis = (
-        range_angle_to_cartesian_map(
-            range_angle_power=range_azimuth_power,
-            range_axis=range_axis,
-            angle_axis_rad=azimuth_axis_rad,
-            forward_limits=xy_limits[0],
-            lateral_limits=xy_limits[1],
-            output_size=(xy_size[1], xy_size[0]),
-        )
-    )
-
-    # [B,T_out,X,Y] -> [B,T_out,Y,X]，遵循图像 row=y、column=x。
-    horizontal_xy_power = (
-        horizontal_xy_forward_first
-        .transpose(-2, -1)
-        .contiguous()
-    )
-
-    # 垂直图内部先生成 [B,T_out,X,Z]。
-    vertical_xz_forward_first, vertical_x_axis, vertical_z_axis = (
-        range_angle_to_cartesian_map(
-            range_angle_power=range_elevation_power,
-            range_axis=range_axis,
-            angle_axis_rad=elevation_axis_rad,
-            forward_limits=xz_limits[0],
-            lateral_limits=xz_limits[1],
-            output_size=(xz_size[1], xz_size[0]),
-        )
-    )
-
-    # [B,T_out,X,Z] -> [B,T_out,Z,X]
-    vertical_xz_power = (
-        vertical_xz_forward_first
-        .transpose(-2, -1)
-        .contiguous()
-    )
-
-    return RPMProjectionOutput(
-        horizontal_xy_power=horizontal_xy_power,
-        vertical_xz_power=vertical_xz_power,
-        range_azimuth_power=range_azimuth_power,
-        range_elevation_power=range_elevation_power,
-        range_axis=torch.as_tensor(
-            range_axis,
-            dtype=range_azimuth_power.dtype,
-            device=range_azimuth_power.device,
-        ),
-        azimuth_axis_rad=azimuth_axis_rad,
-        elevation_axis_rad=elevation_axis_rad,
-        horizontal_x_axis=horizontal_x_axis,
-        horizontal_y_axis=horizontal_y_axis,
-        vertical_x_axis=vertical_x_axis,
-        vertical_z_axis=vertical_z_axis,
-        time_start_index=time_start_index,
-    )
-
-
-def power_to_db(
-    power: torch.Tensor,
-    eps: float = 1e-12,
-) -> torch.Tensor:
-    """线性功率转换为 dB。"""
-    return 10.0 * torch.log10(
-        power.clamp_min(eps)
-    )
-
-
-__all__ = [
-    "SingleRadarProjectionConfig",
-    "RPMProjectionOutput",
-    "build_virtual_phase_positions",
-    "suppress_static_clutter",
-    "range_cube_to_range_angle_power",
-    "range_angle_to_cartesian_map",
-    "range_cube_to_rpm_projection_maps",
-    "power_to_db",
-]
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+        output_path = f"range_angle_methods_dynamic.png"
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved comparison figure: {output_path}")

@@ -31,10 +31,17 @@ def _sync(device):
         torch.cuda.synchronize(device)
 
 
+def _forward(model, model_inputs):
+    """Run a model with either one input or multiple positional inputs."""
+    if isinstance(model_inputs, tuple):
+        return model(*model_inputs)
+    return model(model_inputs)
+
+
 def _time_forward(model, x, device, warmup=20, repeat=100):
     with torch.inference_mode():
         for _ in range(warmup):
-            model(x)
+            _forward(model, x)
         _sync(device)
 
         if device.type == "cuda":
@@ -42,14 +49,14 @@ def _time_forward(model, x, device, warmup=20, repeat=100):
             ender = torch.cuda.Event(enable_timing=True)
             starter.record()
             for _ in range(repeat):
-                model(x)
+                _forward(model, x)
             ender.record()
             _sync(device)
             return starter.elapsed_time(ender) / repeat
 
         start = time.perf_counter()
         for _ in range(repeat):
-            model(x)
+            _forward(model, x)
         return (time.perf_counter() - start) * 1000.0 / repeat
 
 
@@ -62,7 +69,7 @@ def profile_model(model_name, model, x, warmup=20, repeat=100):
         torch.cuda.reset_peak_memory_stats(device)
 
     with torch.inference_mode():
-        output = model(x)
+        output = _forward(model, x)
     _sync(device)
 
     infer_ms = _time_forward(model, x, device, warmup=warmup, repeat=repeat)
@@ -76,7 +83,8 @@ def profile_model(model_name, model, x, warmup=20, repeat=100):
     try:
         from thop import profile
 
-        macs, params = profile(model, inputs=(x,), verbose=False)
+        thop_inputs = x if isinstance(x, tuple) else (x,)
+        macs, params = profile(model, inputs=thop_inputs, verbose=False)
         macs_m = macs / 1000 ** 2
         flops_m = 2 * macs_m
         params_m = params / 1000 ** 2
