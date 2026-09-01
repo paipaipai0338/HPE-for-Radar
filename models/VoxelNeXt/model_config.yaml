@@ -1,13 +1,10 @@
 # The Huawei radar point-cloud tensors contain xyz plus three point features,
 # matching models/P4Transformer/model_config.yaml (feat_dim: 3).
 num_point_features: 3
-point_cloud_range:
-  - 0.0
-  - -3.0
-  - -2.0
-  - 6
-  - 3.0
-  - 2.0
+xyz_limits:
+  - [0.0, 6.0]
+  - [-3.0, 3.0]
+  - [-2.0, 2.0]
 voxel_size:
   - 0.025
   - 0.025

@@ -129,13 +129,13 @@ class Temporal_Attention_Module(nn.Module):
 
 class RPM2(nn.Module):
     def __init__(self, 
-                inchannels, crop_size, num_joints, drop_rate, time_window, input_size, xyz_limits,
+                inchannels, crop_size, num_joints, drop_rate, time_window, map_size, xyz_limits,
                 stage2_num_modules, stage2_num_branches, stage2_block, stage2_num_blocks, stage2_num_channels, stage2_fuse_method,
                 stage3_num_modules, stage3_num_branches, stage3_block, stage3_num_blocks, stage3_num_channels, stage3_fuse_method,
                 stage4_num_modules, stage4_num_branches, stage4_block, stage4_num_blocks, stage4_num_channels, stage4_fuse_method,
                 ):
         super().__init__()
-        self.input_size = input_size
+        self.map_size = map_size
         self.xyz_limits = xyz_limits
 
         self.feature_extractor_hor = Feature_Extractor(
@@ -187,9 +187,10 @@ class RPM2(nn.Module):
         self.tam = Temporal_Attention_Module(crop_size=crop_size, time_window=time_window, num_joints=num_joints, drop_rate=drop_rate)
         self.feature_to_joint = nn.Linear(2*crop_size[0]*crop_size[1]//16, 3)
 
-    def forward(self, model_input, gt):
-        hor = model_input['hor']
-        ver = model_input['ver']
+    def forward(self, model_input):
+        hor = model_input['input'][:, :, 0:1, :, :]
+        ver = model_input['input'][:, :, 1:2, :, :]
+        gt = model_input['gt']
         B, T, C, H, W = hor.shape
         hor = hor.reshape(B*T, C, H, W)
         ver = ver.reshape(B*T, C, H, W)
@@ -200,7 +201,7 @@ class RPM2(nn.Module):
 
         center_heatmap_hor = center_heatmap_hor.reshape(B, T, *center_heatmap_hor.shape[1:])            # B, T, 1, 64, 64
         center_offset_hor = center_offset_hor.reshape(B, T, *center_offset_hor.shape[1:])               # B, T, 2, 64, 64
-        center_box_hor = center_box_hor.reshape(B, T, *center_box_hor.shape[1:])                        # B, 4, 64, 64
+        center_box_hor = center_box_hor.reshape(B, T, *center_box_hor.shape[1:])                        # B, T, 4, 64, 64
         keypoint_heatmap_hor = keypoint_heatmap_hor.reshape(B, T, *keypoint_heatmap_hor.shape[1:])      # B, T, 128, 64, 64
         center_heatmap_ver = center_heatmap_ver.reshape(B, T, *center_heatmap_ver.shape[1:])
         center_offset_ver = center_offset_ver.reshape(B, T, *center_offset_ver.shape[1:])
@@ -445,16 +446,16 @@ if __name__ == "__main__":
     from run.utils.build_model import build_model
     from run.utils.set_device import set_device
 
-    b, t, k, c, h, w = 1, 8, 6, 1, 256, 256
+    b, t, k, c, h, w = 64, 8, 4, 1, 256, 256
 
     device = set_device(1)
     model = build_model('RPM2').to(device)
     x = {
-        'hor': torch.zeros((b, t, c, h, w), device=device),
-        'ver': torch.zeros((b, t, c, h, w), device=device),
+        'input': torch.zeros((b, t, 2 * c, h, w), device=device),
     }
     gt = {
         'mask': torch.ones((b, t, k), device=device, dtype=torch.bool),
         'bbox': torch.zeros((b, t, k, 6), device=device),
     }
-    profile_model("RPM2", model, (x, gt))
+    x['gt'] = gt
+    profile_model("RPM2", model, x)

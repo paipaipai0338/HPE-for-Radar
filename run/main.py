@@ -3,8 +3,10 @@ from pathlib import Path
 from functools import partial
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
+
+from preprocess.radarprocess import Radar_Config
 
 from run.utils.write_log import write_log
 from run.utils.load_config import load_config
@@ -13,8 +15,8 @@ from run.utils.set_device import set_device
 from run.utils.build_model import build_model
 from run.utils.model_init import model_init
 from run.utils.build_metric import Metric
-from run.utils.build_experiment import build_experiment
-from run.utils.process_one_epoch import train_one_epoch, val_one_epoch
+from run.utils.build_experiment import build_experiment, save_radar_config
+from run.utils.process_one_epoch import train_one_epoch, val_one_epoch, prepare_bin_input
 from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint
 from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_warmup
 
@@ -33,6 +35,13 @@ def parse_args():
         type=str,
         default='/home/pai/Huawei/run/config.yaml',
     )
+    parser.add_argument("--init-lr", type=float)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--warmup-epochs", type=int)
+    parser.add_argument("--max-train-samples", type=int)
+    parser.add_argument("--max-val-samples", type=int)
+    parser.add_argument("--max-train-groups", type=int)
+    parser.add_argument("--max-val-groups", type=int)
     return parser.parse_args()
 
 
@@ -44,29 +53,35 @@ def main():
     cfg_data = cfg['data']
     cfg_model = cfg['model']
     cfg_task = cfg['task']
-    # 判断重复值是否相等
-    model_config_path = (
-        Path(__file__).resolve().parents[1]
-        / 'models'
-        / cfg_model['name']
-        / 'model_config.yaml'
-    )
+    cfg_radar = cfg['radar']
+    if args.init_lr is not None:
+        cfg_task['train']['init_lr'] = args.init_lr
+    if args.epochs is not None:
+        cfg_task['train']['epoch'] = args.epochs
+    if args.warmup_epochs is not None:
+        cfg_task['train']['warmup_epoch'] = args.warmup_epochs
+    if any(value is not None for value in (
+        args.max_train_samples,
+        args.max_val_samples,
+        args.max_train_groups,
+        args.max_val_groups,
+    )):
+        cfg_data['preload_cache'] = False
+    radar_bin_root = cfg_data.get('radar_bin_root')
+    # 判断模型重复值是否相等
+    model_config_path = (Path(__file__).resolve().parents[1] / 'models' / cfg_model['name'] / 'model_config.yaml')
     cfg_model_arch = load_config(model_config_path)
     if 'max_people' in cfg_model_arch:
-        assert cfg_data['max_people'] == cfg_model_arch['max_people'], (
-            'max_people mismatch: '
-            f'data={cfg_data["max_people"]}, '
-            f'model={cfg_model_arch["max_people"]}'
-        )
-    if 'point_cloud_range' in cfg_model_arch:
-        assert (
-            cfg_data['point_cloud_range']
-            == cfg_model_arch['point_cloud_range']
-        ), (
-            'point_cloud_range mismatch: '
-            f'data={cfg_data["point_cloud_range"]}, '
-            f'model={cfg_model_arch["point_cloud_range"]}'
-        )
+        assert cfg_data['max_people'] == cfg_model_arch['max_people'],  'max_people mismatch: 'f'data={cfg_data["max_people"]}, 'f'model={cfg_model_arch["max_people"]}'
+
+    if 'xyz_limits' in cfg_model_arch:
+        assert cfg_data['xyz_limits'] == cfg_model_arch['xyz_limits'], 'xyz_limits mismatch: 'f'data={cfg_data["xyz_limits"]}, 'f'model={cfg_model_arch["xyz_limits"]}'
+
+    if 'map_size' in cfg_model_arch:
+        assert cfg_data['map_size'] == cfg_model_arch['map_size'], 'map_size mismatch: 'f'data={cfg_data["map_size"]}, 'f'model={cfg_model_arch["map_size"]}'
+
+    if 'cube_size' in cfg_model_arch:
+        assert cfg_data['cube_size'] == cfg_model_arch['cube_size'], 'cube_size mismatch: 'f'data={cfg_data["cube_size"]}, 'f'model={cfg_model_arch["cube_size"]}'
 
     # 固定随机种子
     set_seed(cfg_task['seed'])
@@ -75,7 +90,14 @@ def main():
     device_id = cfg_task['device']
     device = set_device(device_id)
 
-    
+    # 配置雷达config
+    radar_config = Radar_Config()
+    for k, v in cfg_radar.items():
+        if hasattr(radar_config, k):
+            setattr(radar_config, k, v)
+        else:
+            raise ValueError(f"Radar_Config 不存在字段: {k}")
+    radar_config.__post_init__()
 
     # 获取模型
     model = build_model(cfg_model['name'])
@@ -86,9 +108,20 @@ def main():
     if cfg_task['stage'] == 'train':
         # 获取dataloader
         dataset = {
-            'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_train']),
-            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val']),
+            'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_train'], radar_config=radar_config, radar_bin_root=radar_bin_root, max_groups=args.max_train_groups),
+            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, radar_bin_root=radar_bin_root, max_groups=args.max_val_groups),
         }
+        for split, max_samples in (
+            ('train', args.max_train_samples),
+            ('val', args.max_val_samples),
+        ):
+            if max_samples is not None:
+                if max_samples <= 0:
+                    raise ValueError(f"--max-{split}-samples must be positive")
+                generator = torch.Generator().manual_seed(cfg_task['seed'])
+                indices = torch.randperm(len(dataset[split]), generator=generator)[:max_samples]
+                dataset[split] = Subset(dataset[split], indices.tolist())
+                print(f"{split} subset: {len(dataset[split])} samples")
         collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
         dataloader = {
             'train': DataLoader(dataset['train'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['train']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
@@ -99,13 +132,13 @@ def main():
         metric = {
             'train': Metric(
                 cfg_task['train']['metrics'],
-                cfg_data['point_cloud_range'],
+                cfg_data['xyz_limits'],
                 cfg_matching['bbox_l1_weight'],
                 cfg_matching['bbox_iou_weight'],
             ),
             'val': Metric(
                 cfg_task['val']['metrics'],
-                cfg_data['point_cloud_range'],
+                cfg_data['xyz_limits'],
                 cfg_matching['bbox_l1_weight'],
                 cfg_matching['bbox_iou_weight'],
             ),
@@ -156,6 +189,8 @@ def main():
                 model=model,
             )
 
+        save_radar_config(paths['config'], radar_config)
+
         # 记录日志
         log_path = paths['log'] / 'log.txt'
         fig_path = paths['fig'] / 'fig.png'
@@ -178,7 +213,10 @@ def main():
                 optimizer,
                 metric['train'],
                 device,
+                cfg_data,
                 cfg_task,
+                cfg_model,
+                radar_config,
             )
             
             scheduler.step()
@@ -188,7 +226,10 @@ def main():
                 dataloader['val'],
                 metric['val'],
                 device,
-                cfg_task
+                cfg_data,
+                cfg_task,
+                cfg_model,
+                radar_config,
             )
             val_metrics['loss'] = sum(
                 weight * val_metrics[name]
@@ -221,13 +262,13 @@ def main():
                 print(message)
             save_checkpoint(paths['checkpoint'] / 'last.pth', epoch, model, optimizer, scheduler, metric, best_metric)
 
-        
+
     elif cfg_task['stage'] == 'val':
         # 只做结果保存 后续分析见 /home/pai/Huawei/run/check.py
 
         # 获取dataloader
         dataset = {
-            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val']),
+            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, radar_bin_root=radar_bin_root),
         }
         collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
         dataloader = {
@@ -242,6 +283,7 @@ def main():
         gt_valid = []
         pc = []
         pc_valid = []
+        bin_inputs = []
         high_to_low_R = []
         high_to_low_t = []
         bbox_pre = []
@@ -254,6 +296,7 @@ def main():
         with torch.no_grad():
             for samples in tqdm(dataloader['val'], total=len(dataloader['val'])):
                 input_key = cfg_task['input']
+                target_key = cfg_task['output']
                 model_input = {}
                 if 'pc' in input_key:
                     model_input['input'] = samples[input_key]['padded'].to(device, non_blocking=True)
@@ -281,42 +324,52 @@ def main():
                         & point_mask[:, None, :, :]
                         & person_frame_mask.unsqueeze(-1)
                     )
-                    cropped_points = points[:, None, :, :, :].expand(
-                        B, K, T, N, D
-                    ).masked_fill(~cropped_mask.unsqueeze(-1), 0.0)
-
-                    # 保存时恢复原始 B、T 和 K 语义，避免与恢复后的
-                    # pose/GT 在样本维度上错位。
-                    pc_for_save = cropped_points.permute(
-                        0, 2, 1, 3, 4
-                    ).contiguous()
-                    pc_valid_for_save = cropped_mask.permute(
-                        0, 2, 1, 3
-                    ).contiguous()
-
+                    cropped_points = points[:, None, :, :, :].expand(B, K, T, N, D)
                     # 仅保留 T 帧内至少一帧存在的人员，并将 B、K 合并为新 batch。
                     valid_instance_mask = person_frame_mask.any(dim=2)
                     if not valid_instance_mask.any():
                         continue
+
+                    if cfg_task['center_on_hip']:
+                        gt_pose = samples[target_key]['padded'].to(device)
+                        # 髋部中心: [B,T,K,3]
+                        hip_center = (gt_pose[..., 11, :] + gt_pose[..., 12, :]) / 2
+                        # 已裁剪点云: [B,K,T,N,D]
+                        center = hip_center.permute(0, 2, 1, 3).unsqueeze(3)
+                        centered_xyz = cropped_points[..., :3] - center
+                        cropped_points = torch.cat([centered_xyz, cropped_points[..., 3:]],dim=-1)
+                    cropped_points = cropped_points.masked_fill(~cropped_mask.unsqueeze(-1), 0.0)
+                    pc_for_save = cropped_points.permute(0, 2, 1, 3, 4).contiguous()
+                    pc_valid_for_save = cropped_mask.permute(0, 2, 1, 3).contiguous()
                     model_input['input'] = cropped_points[valid_instance_mask].contiguous()
                     model_input['mask'] = cropped_mask[valid_instance_mask].contiguous()
                 else:
-                    model_input['input'] = samples[input_key].to(device, non_blocking=True)
-                    pc_for_save = model_input['input']
-                    pc_valid_for_save = None
+                    model_input['input'] = prepare_bin_input(
+                        samples,
+                        input_key,
+                        device,
+                        model,
+                        cfg_data,
+                        cfg_model,
+                        radar_config,
+                    )
+                    bin_for_save = model_input['input']
 
-                target_key = cfg_task['output']
                 gt = {
                     'padded': samples[target_key]['padded'].to(device, non_blocking=True),
                     'mask': samples[target_key]['mask'].to(device, non_blocking=True),
                     'bbox': samples[target_key]['bbox'].to(device, non_blocking=True),
                 }
+                if cfg_task['center_on_hip'] and 'pc' in input_key:
+                    gt['padded'] -= hip_center[:, :, :, None, :]
                 if 'action' in samples[target_key]:
                     gt['action'] = samples[target_key]['action'].to(
                         device, non_blocking=True
                     )
+                model_input['gt'] = gt
 
                 pre = model(model_input)
+
                 if 'pc' in input_key:
                     instance_pose = pre['pose']
                     if instance_pose.shape[2] != 1:
@@ -328,9 +381,11 @@ def main():
                     pose = instance_pose.new_zeros(B, K, T, instance_pose.shape[2], instance_pose.shape[3])
                     pose[valid_instance_mask] = instance_pose
                     pre['pose'] = pose.permute(0, 2, 1, 3, 4).contiguous()
-                pc.append(pc_for_save.detach().cpu())
-                if pc_valid_for_save is not None:
+                if 'pc' in input_key:
+                    pc.append(pc_for_save.detach().cpu())
                     pc_valid.append(pc_valid_for_save.detach().cpu())
+                else:
+                    bin_inputs.append(bin_for_save.detach().cpu())
 
                 pose = pre.get('pose')
                 if pose is not None:
@@ -364,10 +419,14 @@ def main():
                 if transform_t is not None:
                     high_to_low_t.append(transform_t.detach().cpu())
 
-        pc = torch.concatenate(pc, dim=0)
+        pc = torch.concatenate(pc, dim=0) if pc else None
         pc_valid = (
             torch.concatenate(pc_valid, dim=0)
             if pc_valid else None
+        )
+        bin_inputs = (
+            torch.concatenate(bin_inputs, dim=0)
+            if bin_inputs else None
         )
         pose_pre = torch.concatenate(pose_pre, dim=0) if pose_pre else None
         pose_gt = torch.concatenate(pose_gt, dim=0)
@@ -398,8 +457,6 @@ def main():
         results = {
             'input_key': cfg_task['input'],
             'target_key': cfg_task['output'],
-            'pc': pc,
-            'pc_valid': pc_valid,
             'pose_pre': pose_pre,
             'bbox_pre': bbox_pre,
             'objectness_logits': objectness_logits,
@@ -416,6 +473,11 @@ def main():
             'high_to_low_R': high_to_low_R,
             'high_to_low_t': high_to_low_t,
         }
+        if 'pc' in cfg_task['input']:
+            results['pc'] = pc
+            results['pc_valid'] = pc_valid
+        else:
+            results['bin'] = bin_inputs
         torch.save(results, '/home/pai/Huawei/run/result.pkl')
     else:
         raise ValueError(f"cfg_task['stage'] dismatched, got {cfg_task['stage']}")

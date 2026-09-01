@@ -122,7 +122,7 @@ class FixedPersonQueryHead(nn.Module):
         ffn_dim,
         dropout,
         max_people,
-        point_cloud_range,
+        xyz_limits,
     ):
         super().__init__()
         self.max_people = int(max_people)
@@ -136,8 +136,8 @@ class FixedPersonQueryHead(nn.Module):
             )
 
         self.register_buffer(
-            "point_cloud_range",
-            torch.as_tensor(point_cloud_range, dtype=torch.float32),
+            "xyz_limits",
+            torch.as_tensor(xyz_limits, dtype=torch.float32),
             persistent=False,
         )
         self.input_projection = nn.Linear(input_channels, self.hidden_dim)
@@ -221,8 +221,8 @@ class FixedPersonQueryHead(nn.Module):
         raw_boxes = self.box_head(decoded)
         objectness_logits = self.objectness_head(decoded).squeeze(-1)
 
-        pc_min = self.point_cloud_range[:3]
-        pc_extent = self.point_cloud_range[3:] - pc_min
+        pc_min = self.xyz_limits[:, 0]
+        pc_extent = self.xyz_limits[:, 1] - pc_min
         center = pc_min + raw_boxes[..., :3].sigmoid() * pc_extent
         size = F.softplus(raw_boxes[..., 3:]).clamp_max(pc_extent)
         boxes = torch.cat([center - size * 0.5, center + size * 0.5], dim=-1)
@@ -234,15 +234,15 @@ class PersonSetCriterion(nn.Module):
 
     def __init__(
         self,
-        point_cloud_range,
+        xyz_limits,
         objectness_weight=1.0,
         bbox_l1_weight=5.0,
         bbox_iou_weight=2.0,
     ):
         super().__init__()
         self.register_buffer(
-            "point_cloud_range",
-            torch.as_tensor(point_cloud_range, dtype=torch.float32),
+            "xyz_limits",
+            torch.as_tensor(xyz_limits, dtype=torch.float32),
             persistent=False,
         )
         self.objectness_weight = float(objectness_weight)
@@ -250,8 +250,8 @@ class PersonSetCriterion(nn.Module):
         self.bbox_iou_weight = float(bbox_iou_weight)
 
     def _normalize_boxes(self, boxes):
-        pc_min = self.point_cloud_range[:3]
-        extent = (self.point_cloud_range[3:] - pc_min).clamp_min(1e-6)
+        pc_min = self.xyz_limits[:, 0]
+        extent = (self.xyz_limits[:, 1] - pc_min).clamp_min(1e-6)
         return torch.cat(
             [
                 (boxes[..., :3] - pc_min) / extent,
@@ -352,18 +352,26 @@ class DynamicMeanVoxelizer(nn.Module):
 
     def __init__(
         self,
-        point_cloud_range: Sequence[float],
+        xyz_limits: Sequence[Sequence[float]],
         voxel_size: Sequence[float],
         append_time: bool = True,
         append_xyz: bool = False,
     ) -> None:
         super().__init__()
-        self.point_cloud_range = tuple(float(x) for x in point_cloud_range)
+        self.xyz_limits = tuple(
+            (float(axis[0]), float(axis[1])) for axis in xyz_limits
+        )
+        if len(self.xyz_limits) != 3 or any(
+            len(axis) != 2 or axis[0] >= axis[1] for axis in self.xyz_limits
+        ):
+            raise ValueError(
+                "xyz_limits must be three increasing [min, max] pairs"
+            )
         self.voxel_size = tuple(float(x) for x in voxel_size)
         self.append_time = append_time
         self.append_xyz = append_xyz
         self.grid_size = torch.Size(
-            int(round((self.point_cloud_range[i + 3] - self.point_cloud_range[i]) / self.voxel_size[i]))
+            int(round((self.xyz_limits[i][1] - self.xyz_limits[i][0]) / self.voxel_size[i]))
             for i in range(3)
         )
 
@@ -387,8 +395,9 @@ class DynamicMeanVoxelizer(nn.Module):
         device = points.device
 
         xyz = points[..., :3]
-        pc_min = torch.as_tensor(self.point_cloud_range[:3], dtype=torch.float32, device=device)
-        pc_max = torch.as_tensor(self.point_cloud_range[3:], dtype=torch.float32, device=device)
+        xyz_limits = torch.as_tensor(self.xyz_limits, dtype=torch.float32, device=device)
+        pc_min = xyz_limits[:, 0]
+        pc_max = xyz_limits[:, 1]
         voxel_size = torch.as_tensor(self.voxel_size, dtype=torch.float32, device=device)
         grid_size = torch.as_tensor(tuple(self.grid_size), dtype=torch.long, device=device)
 
@@ -728,7 +737,7 @@ def decode_bbox_from_voxels(
     center: torch.Tensor,
     center_z: torch.Tensor,
     dim: torch.Tensor,
-    point_cloud_range: torch.Tensor,
+    xyz_limits: torch.Tensor,
     voxel_size: torch.Tensor,
     feature_map_stride: int,
     K: int,
@@ -744,8 +753,8 @@ def decode_bbox_from_voxels(
     dim = gather_feat_idx(dim, inds, batch_size, batch_idx)
     spatial_indices = gather_feat_idx(spatial_indices.float(), inds, batch_size, batch_idx)
 
-    xs = (spatial_indices[:, :, -1:] + center[:, :, 0:1]) * feature_map_stride * voxel_size[0] + point_cloud_range[0]
-    ys = (spatial_indices[:, :, -2:-1] + center[:, :, 1:2]) * feature_map_stride * voxel_size[1] + point_cloud_range[1]
+    xs = (spatial_indices[:, :, -1:] + center[:, :, 0:1]) * feature_map_stride * voxel_size[0] + xyz_limits[0, 0]
+    ys = (spatial_indices[:, :, -2:-1] + center[:, :, 1:2]) * feature_map_stride * voxel_size[1] + xyz_limits[1, 0]
     center_xyz = torch.cat([xs, ys, center_z], dim=-1)
     half_dim = dim * 0.5
     # Axis-aligned human box: [x_min, y_min, z_min, x_max, y_max, z_max].
@@ -800,12 +809,12 @@ def class_agnostic_nms(box_scores: torch.Tensor, box_preds: torch.Tensor, nms_co
 class VoxelNeXtHead(nn.Module):
     """Inference-focused VoxelNeXt sparse CenterNet head."""
 
-    def __init__(self, model_cfg, input_channels, num_class, class_names, grid_size, point_cloud_range, voxel_size):
+    def __init__(self, model_cfg, input_channels, num_class, class_names, grid_size, xyz_limits, voxel_size):
         super().__init__()
         self.model_cfg = model_cfg
         self.num_class = num_class
         self.grid_size = grid_size
-        self.register_buffer("point_cloud_range", torch.as_tensor(point_cloud_range, dtype=torch.float32), persistent=False)
+        self.register_buffer("xyz_limits", torch.as_tensor(xyz_limits, dtype=torch.float32), persistent=False)
         self.register_buffer("voxel_size", torch.as_tensor(voxel_size, dtype=torch.float32), persistent=False)
         self.feature_map_stride = self.model_cfg.TARGET_ASSIGNER_CONFIG.get("FEATURE_MAP_STRIDE", None)
         self.class_names = list(class_names)
@@ -877,7 +886,7 @@ class VoxelNeXtHead(nn.Module):
                 center=batch_center,
                 center_z=batch_center_z,
                 dim=batch_dim,
-                point_cloud_range=self.point_cloud_range,
+                xyz_limits=self.xyz_limits,
                 voxel_size=self.voxel_size,
                 feature_map_stride=self.feature_map_stride,
                 K=post_cfg.MAX_OBJ_PER_SAMPLE,

@@ -1,12 +1,16 @@
 experiment:
-  description: P4Transformer baseline using high radar point cloud
+  description: HRRadarPose baseline using high radar bin
   output_path: /home/pai/Huawei/experiments
 
 data:
+    # NAS 地址
     root_path: /mnt/huawei
-    base_source: radar_high_pc
+    # SSD Bin 地址
+    radar_bin_root: /mnt/ssd/Huawei
+    # 时钟基准
+    base_source: radar_high_bin
     ratio: 0.7
-    T: 8
+    T: 1
     split_method: person
     max_points: 300
     max_people: 4
@@ -18,31 +22,38 @@ data:
     sensor_config:
         lidar: false
         radar_low_bin: false
-        radar_high_bin: false
+        radar_high_bin: true
         radar_low_pc: false
-        radar_high_pc: true
+        radar_high_pc: false
         gt: true
         realsense: false
-    point_cloud_range:
-        - 0.0
-        - -3.0
-        - -2.0
-        - 6
-        - 3.0
-        - 2.0
+    xyz_limits:
+        - [0.0, 6.0]
+        - [-3.0, 3.0]
+        - [-2.0, 2.0]
+    # RPM2
+    map_size: [256, 256]
+    # HRRadarPose
+    cube_size: [96, 96, 32]
 model:
-    name: P4Transformer
+    name: HRRadarPose
+
+radar:
+    angle_method: bartlett
 
 task:
     stage: train
-    input: radar_high_pc
+    input: radar_high_bin
     output: gt_for_high
     device: 1
     seed: 42
-    batch_size: 64
+    batch_size: 1
+    # 匈牙利匹配
     matching_for_hungarian:
         bbox_l1_weight: 5.0
         bbox_iou_weight: 2.0
+    # 坐标归一化，仅适配于点云
+    center_on_hip: false
     train:
         epoch: 500
         init_lr: 0.001
@@ -50,24 +61,44 @@ task:
         resume:
           enabled: false
           checkpoint_path: none
-        metrics: 
-            MPJPE: 1
+        metrics:
+            # Pose loss
+            MPJPE: 0
             PAMPJPE: 0
             Bone_Length: 0
+            # Detection loss
             bbox_iou: 0
             bbox_l1: 0
             objectness: 0
+            # RPM2 loss
+            rpm2_center_heatmap: 0
+            rpm2_center_offset: 0
+            rpm2_box_size: 0
+            rpm2_pose: 0
+            # HRRadarPose loss
+            hrradarpose_body_center: 1.0
+            hrradarpose_keypoint_offset: 1.0
         best_metric: loss
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260814_170610/checkpoint/best.pth
+        checkpoint_path: none
         shuffle: false
         score_thresh: 0.1
         iou_thresh: 0.7
-        metrics: 
-            MPJPE: 1
+        metrics:
+            # Pose loss
+            MPJPE: 0
             PAMPJPE: 0
             Bone_Length: 0
+            # Detection loss
             bbox_iou : 0
             bbox_l1: 0
             objectness: 0
+            # RPM2 loss
+            rpm2_center_heatmap: 0
+            rpm2_center_offset: 0
+            rpm2_box_size: 0
+            rpm2_pose: 0
+            # HRRadarPose loss
+            hrradarpose_body_center: 1.0
+            hrradarpose_keypoint_offset: 1.0

@@ -1,7 +1,34 @@
 from datetime import datetime
+from dataclasses import asdict
 from pathlib import Path
 import inspect
 import shutil
+import yaml
+
+
+def save_radar_config(config_dir, radar_config):
+    config_dir = Path(config_dir)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    radar_config_dict = asdict(radar_config)
+    virtual_channel_positions = getattr(
+        radar_config,
+        "virtual_channel_positions",
+        None,
+    )
+    if virtual_channel_positions is not None:
+        radar_config_dict["virtual_channel_positions"] = (
+            virtual_channel_positions.tolist()
+        )
+    with (config_dir / "radar_config.yaml").open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        yaml.safe_dump(
+            radar_config_dict,
+            file,
+            allow_unicode=True,
+            sort_keys=False,
+        )
 
 
 def build_experiment(output_root, model_name, source_config_path, model):
@@ -22,6 +49,7 @@ def build_experiment(output_root, model_name, source_config_path, model):
     #         └── config/
     #             ├── config.yaml
     #             ├── model_config.yaml
+    #             ├── radar_config.yaml
     #             └── (model_name).py
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 

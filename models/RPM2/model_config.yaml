@@ -3,7 +3,7 @@ crop_size: [32, 32]
 num_joints: 17
 drop_rate: 0.2
 time_window: 8
-input_size: [256, 256]
+map_size: [256, 256]
 xyz_limits:
   - [0.0, 6.0]
   - [-3.0, 3.0]

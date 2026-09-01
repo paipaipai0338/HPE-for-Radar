@@ -237,15 +237,17 @@ def paired_axis_aligned_iou_3d(
 
 def _normalize_bbox(
     bbox: torch.Tensor,
-    point_cloud_range: Sequence[float],
+    xyz_limits: Sequence[Sequence[float]],
 ) -> torch.Tensor:
-    point_cloud_range = torch.as_tensor(
-        point_cloud_range, dtype=bbox.dtype, device=bbox.device
+    xyz_limits = torch.as_tensor(
+        xyz_limits, dtype=bbox.dtype, device=bbox.device
     )
-    if point_cloud_range.numel() != 6:
-        raise ValueError("point_cloud_range must contain 6 values")
-    pc_min = point_cloud_range[:3]
-    extent = (point_cloud_range[3:] - pc_min).clamp_min(1e-6)
+    if xyz_limits.shape != (3, 2):
+        raise ValueError(
+            f"xyz_limits must have shape [3, 2], got {tuple(xyz_limits.shape)}"
+        )
+    pc_min = xyz_limits[:, 0]
+    extent = (xyz_limits[:, 1] - pc_min).clamp_min(1e-6)
     return torch.cat(
         [
             (bbox[..., :3] - pc_min) / extent,
@@ -259,7 +261,7 @@ def get_hungarian_match(
     pred_bbox: torch.Tensor,
     gt_bbox: torch.Tensor,
     gt_mask: torch.Tensor,
-    point_cloud_range: Sequence[float],
+    xyz_limits: Sequence[Sequence[float]],
     bbox_l1_weight: float = 5.0,
     bbox_iou_weight: float = 2.0,
 ) -> MatchIndices:
@@ -293,8 +295,8 @@ def get_hungarian_match(
     num_frames, num_queries = flat_pred_bbox.shape[:2]
 
     with torch.no_grad():
-        pred_norm = _normalize_bbox(flat_pred_bbox, point_cloud_range)
-        gt_norm = _normalize_bbox(flat_gt_bbox, point_cloud_range)
+        pred_norm = _normalize_bbox(flat_pred_bbox, xyz_limits)
+        gt_norm = _normalize_bbox(flat_gt_bbox, xyz_limits)
         l1_cost = (
             pred_norm[:, :, None, :] - gt_norm[:, None, :, :]
         ).abs().sum(dim=-1)
@@ -412,7 +414,7 @@ def get_bbox_l1(
     pred_bbox: torch.Tensor,
     gt_bbox: torch.Tensor,
     matches: MatchIndices,
-    point_cloud_range: Sequence[float],
+    xyz_limits: Sequence[Sequence[float]],
 ) -> torch.Tensor:
     """计算匹配框的归一化 L1，返回 ``[B, T, K]``。
 
@@ -431,8 +433,8 @@ def get_bbox_l1(
         matched_pred = flat_pred_bbox[frame_idx, pred_idx]
         matched_gt = flat_gt_bbox[frame_idx, gt_idx]
         matched_l1 = F.l1_loss(
-            _normalize_bbox(matched_pred, point_cloud_range),
-            _normalize_bbox(matched_gt, point_cloud_range),
+            _normalize_bbox(matched_pred, xyz_limits),
+            _normalize_bbox(matched_gt, xyz_limits),
             reduction="none",
         ).mean(dim=-1)
         bbox_l1[frame_idx, gt_idx] = matched_l1
@@ -627,14 +629,14 @@ if __name__ == "__main__":
     gt_bbox = torch.rand((2, 3, 4, 6))
     gt_bbox[..., 3:] += gt_bbox[..., :3]
     gt_mask = torch.rand((2, 3, 4)) > 0.5
-    point_cloud_range = (0.0, -3.0, -2.0, 6.0, 3.0, 2.0)
+    xyz_limits = ((0.0, 6.0), (-3.0, 3.0), (-2.0, 2.0))
 
     matches = get_hungarian_match(
-        pred_bbox, gt_bbox, gt_mask, point_cloud_range
+        pred_bbox, gt_bbox, gt_mask, xyz_limits
     )
     objectness = get_objectness(objectness_logits, gt_mask, matches)
     bbox_l1 = get_bbox_l1(
-        pred_bbox, gt_bbox, matches, point_cloud_range
+        pred_bbox, gt_bbox, matches, xyz_limits
     )
     bbox_iou = get_bbox_iou(pred_bbox, gt_bbox, matches)
     print("objectness", objectness.shape)

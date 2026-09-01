@@ -6,6 +6,7 @@ import time
 import torch
 import copy
 import numpy as np
+from dataclasses import dataclass
 from typing import *
 from pathlib import Path
 from torch import nn
@@ -15,10 +16,24 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 
 from data2datasets.load_json import get_meta_info
-from preprocess.radarprocess import get_bin_data, get_pc_data
+from preprocess.radarprocess import (
+    Radar_Config,
+    bin_buffer_to_cube_range_fft,
+    get_bin_data,
+    get_pc_data,
+)
 from preprocess.lidarprocess import get_lidar_data
 from preprocess.realsenseprocess import get_realsense_data
 from preprocess.gtprocess import get_gt_boxes, get_gt_data
+
+
+@dataclass(frozen=True)
+class PackedBinFrame:
+    pack_path: str
+    frame_name: str
+    timestamp_ns: int
+    offset: int
+    length: int
 
 
 def _collate_base(batch, max_points=300, max_people=4):
@@ -245,13 +260,16 @@ class HPE_Dataset(Dataset):
         root_path='/mnt/huawei',
         sensor_config=None,
         mode='train',
-        base_source='radar_high_pc',
+        base_source='radar_high_bin',
         split_method='group',
         ratio=0.7,
         T=8,
         preload_cache=True,
-        enable_rotation=True,
+        enable_rotation=False,
         enable_action=False,
+        radar_config: Optional[Radar_Config] = None,
+        radar_bin_root: Optional[Union[str, Path]] = None,
+        max_groups: Optional[int] = None,
     ):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
@@ -272,6 +290,10 @@ class HPE_Dataset(Dataset):
         self.mode = mode
         self.enable_rotation = enable_rotation
         self.enable_action = enable_action
+        self.radar_config = radar_config
+        self.radar_bin_root = (
+            None if radar_bin_root is None else Path(radar_bin_root)
+        )
         self.base_source = base_source
         self.ratio = ratio
         self.T = T
@@ -289,18 +311,53 @@ class HPE_Dataset(Dataset):
         self.skip_bad_samples = 0
         self.bad_files = set()
         self.npy_valid_cache = {}
+        self.bin_valid_cache = {}
+        self.packed_bin_cache = {}
+        self.packed_bin_cache_pid = os.getpid()
 
         # 加载元信息
         json_path = self.root_path / 'data description.json'
         self.meta_info = get_meta_info(json_path)
+        if split_method == 'person':
+            person_ids = (
+                {'0', '1', '2', '3', '5'}
+                if mode == 'train'
+                else {'4', '6', '7', '8'}
+            )
+            self.meta_info = {
+                person_id: person_data
+                for person_id, person_data in self.meta_info.items()
+                if person_id in person_ids
+            }
+        if max_groups is not None:
+            if max_groups <= 0:
+                raise ValueError("max_groups 必须大于 0")
+            remaining = max_groups
+            for person_data in self.meta_info.values():
+                for entry in person_data:
+                    selected = entry['valid_group'][:remaining]
+                    entry['valid_group'] = selected
+                    remaining -= len(selected)
+            self.meta_info = {
+                person_id: [
+                    entry for entry in person_data
+                    if entry['valid_group']
+                ]
+                for person_id, person_data in self.meta_info.items()
+            }
+            self.meta_info = {
+                person_id: person_data
+                for person_id, person_data in self.meta_info.items()
+                if person_data
+            }
         
         # 定义传感器，是否选取该传感器
         self.sensor_config = {
             'lidar': False,
-            'radar_high_bin': False,
+            'radar_high_bin': True,
             'radar_low_bin': False,
             'radar_low_pc': False,
-            'radar_high_pc': True,
+            'radar_high_pc': False,
             'gt': True,
             'realsense': False,
         } if sensor_config is None else sensor_config
@@ -427,13 +484,15 @@ class HPE_Dataset(Dataset):
         sensor_name: str,
         file_path: str,
     ) -> bool:
-        if file_path in self.npy_valid_cache:
-            return self.npy_valid_cache[file_path]
+        cache_key = str(file_path)
+        if cache_key in self.npy_valid_cache:
+            return self.npy_valid_cache[cache_key]
 
         try:
             array = np.load(
-                file_path,
+                cache_key,
                 mmap_mode="r",
+                allow_pickle=False,
             )
 
             # 确保至少读取并解析 header
@@ -453,7 +512,6 @@ class HPE_Dataset(Dataset):
                         f"N>={self.MIN_RADAR_POINTS_PER_FRAME} 且 C>=3，"
                         f"实际形状={array.shape}"
                     )
-
             del array
             valid = True
 
@@ -461,20 +519,69 @@ class HPE_Dataset(Dataset):
             valid = False
 
             if (
-                file_path not in self.bad_files
+                cache_key not in self.bad_files
                 and len(self.bad_files) < 10
             ):
                 print(
                     f"跳过损坏文件: "
                     f"sensor={sensor_name}, "
-                    f"path={file_path}, "
+                    f"path={cache_key}, "
                     f"error={type(exc).__name__}: {exc}"
                 )
 
+            self.bad_files.add(cache_key)
+
+        self.npy_valid_cache[cache_key] = valid
+
+        return valid
+
+    def _is_valid_radar_bin(
+        self,
+        sensor_name: str,
+        file_path: Union[str, PackedBinFrame],
+    ) -> bool:
+        cache_key = file_path
+        if cache_key in self.bin_valid_cache:
+            return self.bin_valid_cache[cache_key]
+
+        if self.radar_config is None:
+            raise ValueError(
+                f'{sensor_name} 已启用，但未向 HPE_Dataset 传入 radar_config'
+            )
+
+        use_range = self.radar_config.num_samp // 2
+        num_ant = self.radar_config.Tx * self.radar_config.Rx
+        expected_bytes = (
+            use_range
+            * self.radar_config.num_chirp
+            * num_ant
+            * 4
+        )
+
+        if isinstance(file_path, PackedBinFrame):
+            actual_bytes = file_path.length
+            valid = actual_bytes == expected_bytes
+            error = f'size mismatch: {actual_bytes} != {expected_bytes}'
+        else:
+            try:
+                actual_bytes = os.path.getsize(file_path)
+                valid = actual_bytes == expected_bytes
+            except OSError as exc:
+                actual_bytes = None
+                valid = False
+                error = f'{type(exc).__name__}: {exc}'
+            else:
+                error = f'size mismatch: {actual_bytes} != {expected_bytes}'
+
+        if not valid:
+            if file_path not in self.bad_files and len(self.bad_files) < 10:
+                print(
+                    f'跳过损坏文件: sensor={sensor_name}, '
+                    f'path={file_path}, error={error}'
+                )
             self.bad_files.add(file_path)
 
-        self.npy_valid_cache[file_path] = valid
-
+        self.bin_valid_cache[cache_key] = valid
         return valid
 
     def _is_valid_window(
@@ -482,15 +589,15 @@ class HPE_Dataset(Dataset):
         window_by_sensor: Dict[str, List[str]],
     ) -> bool:
         for sensor_name, window_files in window_by_sensor.items():
-            if self.suffix_map[sensor_name] != ".npy":
-                continue
-
-            for file_path in window_files:
-                if not self._is_valid_npy(
-                    sensor_name,
-                    file_path,
-                ):
-                    return False
+            suffix = self.suffix_map[sensor_name]
+            if suffix == '.npy':
+                for file_path in window_files:
+                    if not self._is_valid_npy(sensor_name, file_path):
+                        return False
+            elif suffix == '.bin' and 'radar_' in sensor_name:
+                for file_path in window_files:
+                    if not self._is_valid_radar_bin(sensor_name, file_path):
+                        return False
 
         return True
         
@@ -541,16 +648,17 @@ class HPE_Dataset(Dataset):
                         # },
                         )
                     
-                    if not aligned_frames:
+                    if not aligned_frames or not aligned_frames.get(self.base_source):
                         print(f"{group_name} 对齐后没有数据")
                         continue
                     group_data_path[f'{group_name}'] = aligned_frames
+                entry['valid_group'] = list(group_data_path)
                 entry['group_data_path'] = group_data_path
     
     def _align_multi_sensor_files(
         self,
         sources: Dict[str, Optional[Path]],
-        max_delta_sec: Optional[float] = 0.5,
+        max_delta_sec: Optional[float] = 0.3,
         one_to_one: bool = True,
         base_source: Optional[str] = None,
         time_offsets_sec: Optional[Dict[str, float]] = None
@@ -587,6 +695,9 @@ class HPE_Dataset(Dataset):
             """
             times = []
             for file in files:
+                if isinstance(file, PackedBinFrame):
+                    times.append(unix_to_datetime(file.timestamp_ns * 1e-9))
+                    continue
                 base = Path(file).stem
                 sec_str, ns_str = base.split('_')
                 sec = int(sec_str)
@@ -595,10 +706,57 @@ class HPE_Dataset(Dataset):
                 times.append(unix_to_datetime(unix_ts))
             return times
         
-        def list_files(dir_path: Optional[str], suffix: str) -> Tuple[List[str], List[datetime]]:
+        def list_files(
+            sensor_name: str,
+            dir_path: Optional[str],
+            suffix: str,
+        ) -> Tuple[List, List[datetime]]:
             """列出目录中匹配后缀的文件并解析时间戳"""
-            if not dir_path or not suffix:
+            if not dir_path or not suffix or not Path(dir_path).is_dir():
                 return [], []
+
+            if (
+                sensor_name == 'radar_high_bin'
+                and self.radar_bin_root is not None
+            ):
+                pack_path = Path(dir_path) / 'frames.binpack'
+                index_path = Path(dir_path) / 'frames_index.npz'
+                if not pack_path.is_file() or not index_path.is_file():
+                    return [], []
+                with np.load(index_path, allow_pickle=False) as index:
+                    required = {'frame_names', 'timestamps_ns', 'offsets', 'lengths'}
+                    missing = required - set(index.files)
+                    if missing:
+                        raise KeyError(f"{index_path} 缺少字段: {sorted(missing)}")
+                    names = np.asarray(index['frame_names']).reshape(-1)
+                    timestamps = np.asarray(index['timestamps_ns'], dtype=np.int64).reshape(-1)
+                    offsets = np.asarray(index['offsets'], dtype=np.int64).reshape(-1)
+                    lengths = np.asarray(index['lengths'], dtype=np.int64).reshape(-1)
+
+                count = len(names)
+                if not (len(timestamps) == len(offsets) == len(lengths) == count):
+                    raise ValueError(f"打包 BIN 索引字段长度不一致: {index_path}")
+                pack_size = pack_path.stat().st_size
+                if count and (
+                    offsets[0] != 0
+                    or np.any(lengths < 0)
+                    or np.any(offsets[1:] != offsets[:-1] + lengths[:-1])
+                    or offsets[-1] + lengths[-1] != pack_size
+                ):
+                    raise ValueError(f"打包 BIN offset/length 非连续或越界: {index_path}")
+
+                refs = [
+                    PackedBinFrame(
+                        pack_path=str(pack_path),
+                        frame_name=str(names[idx]),
+                        timestamp_ns=int(timestamps[idx]),
+                        offset=int(offsets[idx]),
+                        length=int(lengths[idx]),
+                    )
+                    for idx in range(count)
+                ]
+                return refs, files_to_time_list(refs)
+
             files = [f for f in os.listdir(dir_path) if f.lower().endswith(suffix)]
             files.sort()
             # 假设 files_to_time_list 函数已存在
@@ -745,7 +903,7 @@ class HPE_Dataset(Dataset):
         sensor_data = {}
         for name, path in sources.items():
             suffix = self.suffix_map.get(name)
-            files, times = list_files(path, suffix)
+            files, times = list_files(name, path, suffix)
             if time_offsets_sec and name in time_offsets_sec:
                 offset = timedelta(seconds=float(time_offsets_sec[name]))
                 times = [t + offset for t in times]
@@ -823,9 +981,11 @@ class HPE_Dataset(Dataset):
                         all_matched = False
                         break
 
-                frame_paths[name] = os.path.join(
-                    data['path'],
-                    data['files'][sensor_idx],
+                sensor_file = data['files'][sensor_idx]
+                frame_paths[name] = (
+                    sensor_file
+                    if isinstance(sensor_file, PackedBinFrame)
+                    else os.path.join(data['path'], sensor_file)
                 )
 
             # 只有当前基准帧在所有传感器中均成功匹配，
@@ -845,7 +1005,23 @@ class HPE_Dataset(Dataset):
         radar_low_bin_path = radar_low_path / 'Bin'
         radar_low_pc_path = radar_low_path / 'PC'
         radar_high_path = group_dir / 'dpct高位机'
-        radar_high_bin_path = radar_high_path / 'Bin'
+        if self.radar_bin_root is None:
+            radar_high_bin_path = radar_high_path / 'Bin'
+        else:
+            relative_group = group_dir.relative_to(self.root_path)
+            radar_high_bin_path = (
+                self.radar_bin_root
+                / relative_group
+                / 'dpct高位机'
+                / 'Bin'
+            )
+            pack_path = radar_high_bin_path / 'frames.binpack'
+            index_path = radar_high_bin_path / 'frames_index.npz'
+            if not pack_path.is_file() or not index_path.is_file():
+                print(
+                    "SSD 打包文件缺失，跳过当前数据组: "
+                    f"pack={pack_path}, index={index_path}"
+                )
         radar_high_pc_path = radar_high_path / 'PC'
         lidar_path = group_dir / 'robosense'
         realsense_path = group_dir / 'realsense' / 'undistorted_depth'
@@ -919,10 +1095,14 @@ class HPE_Dataset(Dataset):
         return self._copy_cached_data(cached_data)
 
     def _get_sensor_loader(self, sensor_name: str) -> Callable[[Path | str], Any]:
+        requires_radar_config = sensor_name in {'radar_low_bin', 'radar_high_bin'}
+        if requires_radar_config and self.radar_config is None:
+            raise ValueError(f'{sensor_name} 已启用，但未向 HPE_Dataset 传入 radar_config')
+
         get_data_function_dict = {
             'lidar': get_lidar_data,
-            'radar_low_bin': get_bin_data,
-            'radar_high_bin': get_bin_data,
+            'radar_low_bin': partial(get_bin_data, radar_config=self.radar_config),
+            'radar_high_bin': partial(get_bin_data, radar_config=self.radar_config),
             'radar_low_pc': get_pc_data,
             'radar_high_pc': get_pc_data,
             'gt': get_gt_data,
@@ -1133,6 +1313,13 @@ class HPE_Dataset(Dataset):
         if sensor_path is None:
             return None
 
+        if (
+            sensor_name == 'radar_high_bin'
+            and sensor_path
+            and all(isinstance(path, PackedBinFrame) for path in sensor_path)
+        ):
+            return self._get_packed_bin_sequence(sensor_path)
+
         load_fn = self._get_sensor_loader(sensor_name)
         data = []
         for path in sensor_path:
@@ -1145,6 +1332,39 @@ class HPE_Dataset(Dataset):
             )
         return data
 
+    def _get_packed_bin_sequence(
+        self,
+        frame_refs: List[PackedBinFrame],
+    ) -> List[np.ndarray]:
+        pack_paths = {ref.pack_path for ref in frame_refs}
+        if len(pack_paths) != 1:
+            raise ValueError("同一个时间窗口不能跨越多个 BIN 打包文件")
+
+        current_pid = os.getpid()
+        if self.packed_bin_cache_pid != current_pid:
+            self.packed_bin_cache.clear()
+            self.packed_bin_cache_pid = current_pid
+
+        pack_path = frame_refs[0].pack_path
+        if pack_path not in self.packed_bin_cache:
+            self.packed_bin_cache[pack_path] = np.memmap(
+                pack_path, mode='r', dtype=np.uint8,
+            )
+        packed = self.packed_bin_cache[pack_path]
+
+        output = []
+        for ref in frame_refs:
+            raw = packed[ref.offset:ref.offset + ref.length]
+            frame = bin_buffer_to_cube_range_fft(
+                raw,
+                self.radar_config,
+                source_name=ref.frame_name,
+            )
+            if frame is None:
+                raise ValueError(f"打包 BIN 帧大小错误: {ref.frame_name}")
+            output.append(frame)
+        return output
+
     def clear_data_cache(self) -> None:
         """
         清空点云和 GT 的内存缓存；不会影响标定和 npy 有效性缓存。
@@ -1152,6 +1372,7 @@ class HPE_Dataset(Dataset):
         self.pointcloud_cache.clear()
         self.gt_cache.clear()
         self.action_cache.clear()
+        self.packed_bin_cache.clear()
 
     def _load_calib_T(self, date: str) -> Dict[str, Dict[str, np.ndarray]]:
         """
@@ -1623,6 +1844,8 @@ class HPE_Dataset(Dataset):
 
 if __name__ == '__main__':
     """
+    radar_high_bin: torch.Size([B, T, 256, 64, 16])
+
     radar_high_pc
         padded: torch.Size([B, T, N, 6])
         mask:   torch.Size([B, T, N])
@@ -1648,36 +1871,24 @@ if __name__ == '__main__':
     """
     from matplotlib import pyplot as plt
     from matplotlib.patches import Rectangle
-    from preprocess.gtprocess import get_gt_detection_targets
-    from preprocess.radarprocess import Radar_Config, get_radar_res, range_cube_to_doppler_cube
-    from preprocess.radarprocess_RPM2 import SingleRadarProjectionConfig, range_cube_to_rpm_projection_maps, power_to_db
+    from preprocess.radarprocess import Radar_Config, get_radar_res
+    from preprocess.radarprocess_RPM2 import (
+        range_cube_to_rd_accumulated_angle_power,
+        range_cube_to_range_angle_power,
+        range_angle_power_to_cartesian_map,
+    )
+    from utils.COCO import COCO_SKELETON
 
     root_path = '/mnt/huawei'
     T = 4
     b = 0
-    projection_t_to_plot = 0
-    clutter_mode = 'chirp_mean'
-    # 因此对应 raw_t=1；其他模式的投影与原始帧同索引。
-    projection_time_start = 1 if clutter_mode == 'frame_difference' else 0
-    t = projection_t_to_plot + projection_time_start
-    if not 0 <= t < T:
-        raise IndexError(
-            f'待绘制投影帧超出时间范围：projection_t={projection_t_to_plot}, '
-            f'raw_t={t}, T={T}'
-        )
-    xy_x_limits = (0, 5.0)
-    xy_y_limits = (-2.0, 2.0)
-    xz_x_limits = (0, 5.0)
-    xz_z_limits = (-1.5, 1.5)
-    range_plot_limits = (0, 5.0)
-    pc_3d_x_limits = (0.0, 6.0)
-    pc_3d_y_limits = (-3.0, 3.0)
-    pc_3d_z_limits = (-3.0, 3.0)
+    t = -1
+    cartesian_size = (256, 256)
+    xyz_limits = ((0.0, 6.0), (-3.0, 3.0), (-2.0, 2.0))
+    output_path = 'radar_three_methods_with_gt_bbox.png'
 
     radar_config = Radar_Config()
-    projection_config = SingleRadarProjectionConfig()
-
-    dataset = HPE_Dataset(root_path, T=T)
+    dataset = HPE_Dataset(root_path, T=T, radar_config=radar_config)
     collate_fn = partial(
         collate_fn,
         max_points=300,
@@ -1693,8 +1904,206 @@ if __name__ == '__main__':
     )
 
     for batch_idx, samples in enumerate(dataloader):
-        for key, value in samples.items():
-            if isinstance(value, dict) and 'padded' in value:
-                print(f"{key}: padded {value['padded'].shape}, mask {value['mask'].shape}")
-            else:
-                print(f"{key}: {value.shape}")
+        # 可视化一个样本、一个时刻，避免三种角度算法同时处理整个 batch。
+        range_cube = samples['radar_high_bin'][b:b + 1, t:t + 1 if t != -1 else None]
+        gt_pose = samples['gt_for_high']['padded'][b, t].cpu().numpy()
+        bbox = samples['gt_for_high']['bbox'][b, t].cpu().numpy()
+        bbox_mask = samples['gt_for_high']['mask'][b, t].cpu().numpy()
+
+        range_res, _, _, _ = get_radar_res(radar_config)
+        range_axis = torch.arange(
+            range_cube.shape[2],
+            dtype=range_cube.real.dtype,
+            device=range_cube.device,
+        ) * range_res
+
+        fig, axes = plt.subplots(6, 4, figsize=(22, 27))
+        with torch.no_grad():
+            for row, method in enumerate(('bartlett', 'mvdr', 'music')):
+                radar_config.angle_method = method
+                projection_maps = []
+                for remove_static in (False, True):
+                    range_azi_power, azi_axis_rad = (
+                        range_cube_to_range_angle_power(
+                            range_cube,
+                            radar_config,
+                            plane='azi',
+                            remove_static=remove_static,
+                        )
+                    )
+                    horizontal_power, x_axis, y_axis = (
+                        range_angle_power_to_cartesian_map(
+                            range_azi_power,
+                            range_axis,
+                            azi_axis_rad,
+                            xyz_limits,
+                            cartesian_size,
+                            plane='horizontal',
+                        )
+                    )
+                    range_ele_power, ele_axis_rad = (
+                        range_cube_to_range_angle_power(
+                            range_cube,
+                            radar_config,
+                            plane='ele',
+                            remove_static=remove_static,
+                        )
+                    )
+                    vertical_power, vertical_x_axis, z_axis = (
+                        range_angle_power_to_cartesian_map(
+                            range_ele_power,
+                            range_axis,
+                            ele_axis_rad,
+                            xyz_limits,
+                            cartesian_size,
+                            plane='vertical',
+                        )
+                    )
+                    projection_maps.extend((
+                        horizontal_power[0, 0],
+                        vertical_power[0, 0],
+                    ))
+
+                # 三种算法的绝对尺度不同。每种算法内部用四幅图共同的
+                # 99.5% 分位值转相对 dB，兼顾前后可比性与异常峰值鲁棒性。
+                eps = torch.finfo(projection_maps[0].dtype).eps
+                method_reference = torch.quantile(
+                    torch.cat([power.reshape(-1) for power in projection_maps]),
+                    0.995,
+                ).clamp_min(eps)
+                projection_db = [
+                    (10.0 * torch.log10(
+                        power.clamp_min(method_reference * 1e-4)
+                        / method_reference
+                    ))
+                    .clamp(-40.0, 0.0)
+                    .cpu().numpy()
+                    for power in projection_maps
+                ]
+
+                x_values = x_axis.cpu().numpy()
+                y_values = y_axis.cpu().numpy()
+                vertical_x_values = vertical_x_axis.cpu().numpy()
+                z_values = z_axis.cpu().numpy()
+                titles = (
+                    'Raw XY', 'Raw XZ',
+                    'Clutter-removed XY', 'Clutter-removed XZ',
+                )
+
+                for col, (power_db, title) in enumerate(zip(projection_db, titles)):
+                    is_xy = col % 2 == 0
+                    if is_xy:
+                        extent = [
+                            x_values[0], x_values[-1],
+                            y_values[0], y_values[-1],
+                        ]
+                        ylabel = 'Lateral Y (m)'
+                    else:
+                        extent = [
+                            vertical_x_values[0], vertical_x_values[-1],
+                            z_values[0], z_values[-1],
+                        ]
+                        ylabel = 'Height Z (m)'
+
+                    # map 的维度依次为 [X,Y] 或 [X,Z]；转置后让 X
+                    # 对应图像横轴，Y/Z 对应纵轴。
+                    image = axes[row, col].imshow(
+                        power_db.T,
+                        extent=extent,
+                        origin='lower',
+                        aspect='auto',
+                        cmap='turbo',
+                        vmin=-40.0,
+                        vmax=0.0,
+                    )
+                    axes[row, col].set(
+                        title=f'{method.upper()} {title}',
+                        xlabel='Forward X (m)',
+                        ylabel=ylabel,
+                    )
+
+                    for person_idx in np.flatnonzero(bbox_mask):
+                        person_bbox = bbox[person_idx]
+                        joints = gt_pose[person_idx]
+                        joint_valid = np.isfinite(joints).all(axis=1)
+                        color = plt.get_cmap('tab10')(person_idx % 10)
+                        xmin, ymin, zmin, xmax, ymax, zmax = person_bbox
+                        lower = ymin if is_xy else zmin
+                        upper = ymax if is_xy else zmax
+                        axes[row, col].add_patch(Rectangle(
+                            (xmin, lower), xmax - xmin, upper - lower,
+                            fill=False, edgecolor=color, linewidth=2,
+                            linestyle='--',
+                        ))
+                        vertical_coord = joints[:, 1] if is_xy else joints[:, 2]
+                        axes[row, col].scatter(
+                            joints[joint_valid, 0],
+                            vertical_coord[joint_valid],
+                            s=14,
+                            color=color,
+                            edgecolors='white',
+                            linewidths=0.4,
+                            zorder=3,
+                        )
+                        for joint_a, joint_b in COCO_SKELETON:
+                            if not (joint_valid[joint_a] and joint_valid[joint_b]):
+                                continue
+                            axes[row, col].plot(
+                                [joints[joint_a, 0], joints[joint_b, 0]],
+                                [vertical_coord[joint_a], vertical_coord[joint_b]],
+                                color=color,
+                                linewidth=1.5,
+                                zorder=3,
+                            )
+
+                colorbar = fig.colorbar(
+                    image,
+                    ax=axes[row, :].tolist(),
+                    fraction=0.015,
+                    pad=0.01,
+                )
+                colorbar.set_label('Power relative to joint 99.5% level (dB)')
+
+            for method_idx, method in enumerate(('bartlett', 'mvdr', 'music')):
+                radar_config.angle_method = method
+                rd_projection_maps = []
+                for zero_doppler_weight in (1.0, 0.1):
+                    for plane, cartesian_plane in (('azi', 'horizontal'), ('ele', 'vertical')):
+                        rd_angle_power, rd_angle_axis = range_cube_to_rd_accumulated_angle_power(
+                            range_cube, radar_config, plane=plane, snr_threshold=4.0,
+                            topk_doppler=12, zero_doppler_weight=zero_doppler_weight,
+                            normalization_gamma=0.5,
+                        )
+                        rd_map, rd_x_axis, rd_vertical_axis = range_angle_power_to_cartesian_map(
+                            rd_angle_power, range_axis, rd_angle_axis, xyz_limits,
+                            cartesian_size, plane=cartesian_plane,
+                        )
+                        rd_projection_maps.append((rd_map[0, 0], rd_x_axis, rd_vertical_axis))
+
+                rd_reference = torch.quantile(torch.cat([item[0].reshape(-1) for item in rd_projection_maps]), 0.995).clamp_min(torch.finfo(rd_projection_maps[0][0].dtype).eps)
+                for col, (rd_map, rd_x_axis, rd_vertical_axis) in enumerate(rd_projection_maps):
+                    rd_db = (10.0 * torch.log10(rd_map.clamp_min(rd_reference * 1e-4) / rd_reference)).clamp(-40.0, 0.0).cpu().numpy()
+                    is_xy = col % 2 == 0
+                    rd_x_values, rd_vertical_values = rd_x_axis.cpu().numpy(), rd_vertical_axis.cpu().numpy()
+                    image = axes[method_idx + 3, col].imshow(rd_db.T, extent=[rd_x_values[0], rd_x_values[-1], rd_vertical_values[0], rd_vertical_values[-1]], origin='lower', aspect='auto', cmap='turbo', vmin=-40.0, vmax=0.0)
+                    rd_title = 'RD-selected' if col < 2 else 'RD-selected zero-Doppler suppressed'
+                    axes[method_idx + 3, col].set(title=f'{method.upper()} {rd_title} {"XY" if is_xy else "XZ"}', xlabel='Forward X (m)', ylabel='Lateral Y (m)' if is_xy else 'Height Z (m)')
+                    for person_idx in np.flatnonzero(bbox_mask):
+                        person_bbox, joints = bbox[person_idx], gt_pose[person_idx]
+                        joint_valid = np.isfinite(joints).all(axis=1)
+                        color = plt.get_cmap('tab10')(person_idx % 10)
+                        xmin, ymin, zmin, xmax, ymax, zmax = person_bbox
+                        lower, upper = (ymin, ymax) if is_xy else (zmin, zmax)
+                        axes[method_idx + 3, col].add_patch(Rectangle((xmin, lower), xmax - xmin, upper - lower, fill=False, edgecolor=color, linewidth=2, linestyle='--'))
+                        vertical_coord = joints[:, 1] if is_xy else joints[:, 2]
+                        axes[method_idx + 3, col].scatter(joints[joint_valid, 0], vertical_coord[joint_valid], s=14, color=color, edgecolors='white', linewidths=0.4, zorder=3)
+                        for joint_a, joint_b in COCO_SKELETON:
+                            if joint_valid[joint_a] and joint_valid[joint_b]:
+                                axes[method_idx + 3, col].plot([joints[joint_a, 0], joints[joint_b, 0]], [vertical_coord[joint_a], vertical_coord[joint_b]], color=color, linewidth=1.5, zorder=3)
+                fig.colorbar(image, ax=axes[method_idx + 3, :].tolist(), fraction=0.015, pad=0.01).set_label('Relative power (dB)')
+
+        fig.suptitle(f'Batch {batch_idx}, sample {b}, time {t}: radar + GT bbox')
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print(f'Saved (overwrite): {output_path}')

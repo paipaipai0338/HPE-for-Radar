@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 
 from data2datasets.load_json import get_meta_info
-from preprocess.radarprocess import get_bin_data, get_pc_data
+from preprocess.radarprocess import Radar_Config, get_bin_data, get_pc_data
 from preprocess.lidarprocess import get_lidar_data
 from preprocess.realsenseprocess import get_realsense_data
 from preprocess.gtprocess import get_gt_data
@@ -101,8 +101,9 @@ def collate_fn(batch, max_points=300, max_people=4):
 
 class HPE_Dataset(Dataset):
     
-    def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_bin', split_method='group', ratio=0.7, T=8, preload_cache=False):
+    def __init__(self, root_path='/mnt/huawei', sensor_config=None, mode='train', base_source='radar_high_bin', split_method='group', ratio=0.7, T=8, preload_cache=False, radar_config: Optional[Radar_Config] = None):
         super(HPE_Dataset, self).__init__()
+        self.radar_config = radar_config
         assert mode in ['train', 'val'], 'mode disnmatched'
         split_method = split_method.lower()
         assert split_method in ['person', 'group', 'sequence'], 'split_method has unmatched method'
@@ -737,10 +738,12 @@ class HPE_Dataset(Dataset):
         return self._copy_cached_data(cached_data)
 
     def _get_sensor_loader(self, sensor_name: str) -> Callable[[Path | str], Any]:
+        if 'bin' in sensor_name and self.radar_config is None:
+            raise ValueError(f'{sensor_name} 已启用，但未向 HPE_Dataset 传入 radar_config')
         get_data_function_dict = {
             'lidar': get_lidar_data,
-            'radar_low_bin': get_bin_data,
-            'radar_high_bin': get_bin_data,
+            'radar_low_bin': partial(get_bin_data, radar_config=self.radar_config),
+            'radar_high_bin': partial(get_bin_data, radar_config=self.radar_config),
             'radar_low_pc': get_pc_data,
             'radar_high_pc': get_pc_data,
             'gt': get_gt_data,
@@ -1118,7 +1121,7 @@ if __name__ == '__main__':
     radar_config = Radar_Config()
     projection_config = SingleRadarProjectionConfig()
 
-    dataset = HPE_Dataset(root_path, T=T)
+    dataset = HPE_Dataset(root_path, T=T, radar_config=radar_config)
     collate_fn = partial(
         collate_fn,
         max_points=300,

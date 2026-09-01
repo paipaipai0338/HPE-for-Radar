@@ -9,6 +9,7 @@ def build_model(model_name):
         'P4Transformer': 'models/P4Transformer',
         'RPM2': 'models/RPM2',
         'VoxelNeXt': 'models/VoxelNeXt',
+        'HRRadarPose': 'models/HRRadarPose',
     }
 
     if model_name not in model_dirs:

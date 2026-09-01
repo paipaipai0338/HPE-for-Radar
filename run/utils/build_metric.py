@@ -1,6 +1,8 @@
 import torch
 from metrics.pose import get_mpjpe, get_pampjpe, get_bone_length
 from metrics.detection import get_hungarian_match, get_bbox_iou, get_bbox_l1, get_objectness
+from metrics.RPM2_loss import get_center_heatmap_loss, get_box_size_loss, get_center_offset_loss, get_pose_loss
+from metrics.HRRadarPose_loss import get_body_center_loss, get_keypoint_offset_loss
 
 def _masked_mean_over_people(metric, mask):
     # metric, mask: [B, T, K]
@@ -24,11 +26,11 @@ class Metric:
     def __init__(
         self,
         cfg_metrics,
-        point_cloud_range,
+        xyz_limits,
         matching_bbox_l1_weight,
         matching_bbox_iou_weight,
     ):
-        self.point_cloud_range = point_cloud_range
+        self.xyz_limits = xyz_limits
         self.matching_bbox_l1_weight = float(matching_bbox_l1_weight)
         self.matching_bbox_iou_weight = float(
             matching_bbox_iou_weight
@@ -40,6 +42,12 @@ class Metric:
             'bbox_iou': get_bbox_iou,
             'bbox_l1':  get_bbox_l1,
             'objectness': get_objectness,
+            'rpm2_center_heatmap': get_center_heatmap_loss,
+            'rpm2_box_size': get_box_size_loss,
+            'rpm2_center_offset': get_center_offset_loss,
+            'rpm2_pose': get_pose_loss,
+            'hrradarpose_body_center': get_body_center_loss,
+            'hrradarpose_keypoint_offset': get_keypoint_offset_loss,
         }
         # 获取当前配置指标与权重
         self.cfg_metrics = {
@@ -123,7 +131,7 @@ class Metric:
                         bbox_pre,
                         bbox_gt,
                         gt_mask,
-                        self.point_cloud_range,
+                        self.xyz_limits,
                         bbox_l1_weight=self.matching_bbox_l1_weight,
                         bbox_iou_weight=self.matching_bbox_iou_weight,
                     )
@@ -143,7 +151,7 @@ class Metric:
                         bbox_pre,
                         bbox_gt,
                         matches,
-                        self.point_cloud_range,
+                        self.xyz_limits,
                     )
                     metric_value, metric_num = _masked_mean_over_people(
                         metric,
@@ -162,6 +170,66 @@ class Metric:
                     metric_value.detach().item() * metric_num
                 )
                 self.metrics_state[name]['num'] += metric_num
+            elif name.startswith('rpm2_'):
+                if name == 'rpm2_center_heatmap':
+                    metric_value = self.fun_call_dict[name](
+                        pre['center_heatmap'],
+                        pre['target_center_heatmap'],
+                    )
+                    metric_num = pre['target_center_heatmap'].numel()
+                elif name == 'rpm2_center_offset':
+                    metric_value = self.fun_call_dict[name](
+                        pre['center_offset_pre'],
+                        pre['target_center_offsets_sparse'],
+                        pre['target_center_indices'],
+                        pre['target_inside'],
+                    )
+                    metric_num = pre['target_inside'].sum().item()
+                elif name == 'rpm2_box_size':
+                    metric_value = self.fun_call_dict[name](
+                        pre['center_box_pre'],
+                        pre['target_center_boxes_sparse'],
+                        pre['target_center_indices'],
+                        pre['target_inside'],
+                    )
+                    metric_num = pre['target_inside'].sum().item()
+                elif name == 'rpm2_pose':
+                    pose_valid = pre['pose_valid'] & gt_mask
+                    metric_value = self.fun_call_dict[name](
+                        pose_pre,
+                        pose_gt,
+                        pose_valid,
+                    )
+                    metric_num = (
+                        pose_valid.sum().item() * pose_pre.shape[-2]
+                    )
+
+                self.metrics_state[name]['sum'] += (
+                    metric_value.detach().item() * metric_num
+                )
+                self.metrics_state[name]['num'] += metric_num
+            elif name.startswith('hrradarpose_'):
+                if name == 'hrradarpose_body_center':
+                    metric = self.fun_call_dict[name](
+                        pre['body_center'],
+                        gt['body_center'],
+                    )
+                    metric_value = metric.mean()
+                    metric_num = metric.numel()
+                elif name == 'hrradarpose_keypoint_offset':
+                    metric = self.fun_call_dict[name](
+                        pre['keypoint_offset'],
+                        gt['indices'],
+                        gt['keypoint_offset'],
+                        gt['hrradarpose_valid'],
+                    )
+                    metric_value, metric_num = _masked_mean_over_people(
+                        metric,
+                        gt['hrradarpose_valid'],
+                    )
+
+            self.metrics_state[name]['sum'] += metric_value.detach().item() * metric_num
+            self.metrics_state[name]['num'] += metric_num
 
             batch_metrics[name] = metric_value
             total_loss = total_loss + weight * metric_value

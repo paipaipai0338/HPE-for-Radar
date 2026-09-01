@@ -112,7 +112,7 @@ max_catastrophic_figures = 100
 
 loaded = torch.load(result_path, map_location='cpu')
 cfg = load_config(config_path)
-point_cloud_range = cfg['data']['point_cloud_range']
+xyz_limits = cfg['data']['xyz_limits']
 matching_cfg = cfg['task']['matching_for_hungarian']
 score_thresh = cfg['task']['val']['score_thresh']
 iou_thresh = cfg['task']['val']['iou_thresh']
@@ -182,12 +182,12 @@ if bbox_pre is not None and objectness_logits is not None:
         bbox_pre,
         bbox_gt,
         gt_mask,
-        point_cloud_range,
+        xyz_limits,
         bbox_l1_weight=matching_cfg['bbox_l1_weight'],
         bbox_iou_weight=matching_cfg['bbox_iou_weight'],
     )
     objectness = get_objectness(objectness_logits, gt_mask, matches)
-    bbox_l1 = get_bbox_l1(bbox_pre, bbox_gt, matches, point_cloud_range)
+    bbox_l1 = get_bbox_l1(bbox_pre, bbox_gt, matches, xyz_limits)
     bbox_iou_loss = get_bbox_iou(bbox_pre, bbox_gt, matches)
 
     objectness_mean = objectness.mean().item()

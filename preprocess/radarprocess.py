@@ -1,9 +1,15 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+import math
 import torch
 import numpy as np
+import os
 from typing import *
+
+# *****************************************************************************
+# Radar configuration
+# *****************************************************************************
 
 @dataclass  # dataclass 可理解为结构体类，加入装饰器(@dataclass)可省略  __init__, __repr__, __eq__ 等必要方法
 class Radar_Config:
@@ -32,8 +38,8 @@ class Radar_Config:
     azi_ant_indices: Tuple[int, ...] = (15, 14, 13, 12, 11, 10, 9, 8)   # 方位测算通道索引
     ele_ant_indices: Tuple[int, ...] = (8, 4, 0)                        # 俯仰测算通道索引
 
-    angle_method: Literal["bartlett", "mvdr", "music"] = "mvdr"
-    num_angle_beams: int = 512  # 角度谱点数
+    angle_method: Literal["bartlett", "mvdr", "music"] = "bartlett"
+    num_angle_beams: int = 128  # 角度谱点数
 
     # 依赖其他参数的属性（使用 field(init=False)）
     slope: float = None  # 调频率
@@ -73,8 +79,16 @@ class Radar_Config:
     
         return positions
 
+# *****************************************************************************
+# BIN decoding and sensor I/O
+# *****************************************************************************
+
 # 读取1DFFT函数
-def bin_to_cube_range_fft(file_path: Path|str, radar_config: Radar_Config) -> Optional[np.ndarray]:
+def bin_buffer_to_cube_range_fft(
+    raw: np.ndarray,
+    radar_config: Radar_Config,
+    source_name: str = '<buffer>',
+) -> Optional[np.ndarray]:
     def _pseudo_float_cplx_to_complex(pf_u32: np.ndarray) -> np.ndarray:
         pf = pf_u32.astype(np.uint32)
 
@@ -94,9 +108,9 @@ def bin_to_cube_range_fft(file_path: Path|str, radar_config: Radar_Config) -> Op
     num_ant = radar_config.Tx * radar_config.Rx
     use_range = num_samp // 2
     expected_bytes = use_range * num_chirp * num_ant * 4
-    raw = np.fromfile(file_path, dtype=np.uint8)
+    raw = np.asarray(raw, dtype=np.uint8).reshape(-1)
     if raw.size != expected_bytes:
-        print(f"[WARN] {os.path.basename(file_path)} size mismatch: "
+        print(f"[WARN] {source_name} size mismatch: "
               f"{raw.size} != {expected_bytes}, skip.")
         return None
     raw8 = raw.reshape(-1, 8)[:, ::-1].reshape(-1)
@@ -106,16 +120,28 @@ def bin_to_cube_range_fft(file_path: Path|str, radar_config: Radar_Config) -> Op
     adc_data_range_FFT = np.transpose(mcu_timing, (0, 2, 1))
     return adc_data_range_FFT
 
+
+def bin_to_cube_range_fft(file_path: Path|str, radar_config: Radar_Config) -> Optional[np.ndarray]:
+    raw = np.fromfile(file_path, dtype=np.uint8)
+    return bin_buffer_to_cube_range_fft(
+        raw,
+        radar_config,
+        source_name=os.path.basename(file_path),
+    )
+
 # 读取点云数据
 def get_pc_data(file_path: Path|str):
     data = np.load(file_path)
     return data
 
 # 读取谱图数据，利用bin_to_cube_range_fft封装
-def get_bin_data(file_path: Path|str):
-    radar_config = Radar_Config()
+def get_bin_data(file_path: Path|str, radar_config: Radar_Config):
     data = bin_to_cube_range_fft(file_path, radar_config)
     return data
+
+# *****************************************************************************
+# Radar resolution and coordinate axes
+# *****************************************************************************
 
 # 获取雷达分辨率
 def get_radar_res(
@@ -207,6 +233,388 @@ def get_radar_res(
     )
 
     return range_res, velocity_res, azi_angle_res_deg, ele_angle_res_deg
+
+
+# *****************************************************************************
+# Torch Doppler processing
+# *****************************************************************************
+
+def doppler_fft_torch(
+    range_cube: torch.Tensor,
+    radar_config: Radar_Config,
+    window: bool = True,
+    doppler_mode: Literal["normal", "firmware_tdm"] = "firmware_tdm",
+    window_periodic: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Return ``[B,T,R,D,M]`` Doppler data and its velocity axis."""
+    if range_cube.ndim != 5 or not range_cube.is_complex():
+        raise ValueError(
+            "range_cube 必须为复数 [B,T,R,C,M]，"
+            f"实际为 shape={tuple(range_cube.shape)}, dtype={range_cube.dtype}"
+        )
+
+    _, _, _, num_chirps, num_antennas = range_cube.shape
+    real_dtype = range_cube.real.dtype
+    device = range_cube.device
+    num_tx = int(getattr(radar_config, "num_tx", radar_config.Tx))
+    num_rx = int(getattr(radar_config, "num_rx", radar_config.Rx))
+    if num_tx <= 0 or num_rx <= 0 or num_antennas != num_tx * num_rx:
+        raise ValueError(
+            "Doppler FFT 要求输入天线数等于 Tx * Rx，"
+            f"实际 M={num_antennas}, Tx={num_tx}, Rx={num_rx}"
+        )
+
+    if doppler_mode == "normal":
+        if window:
+            doppler_window = torch.hann_window(
+                num_chirps,
+                periodic=window_periodic,
+                dtype=real_dtype,
+                device=device,
+            )
+            range_cube = range_cube * doppler_window.view(1, 1, 1, -1, 1)
+
+        doppler_cube = torch.fft.fftshift(
+            torch.fft.fft(range_cube, dim=3),
+            dim=3,
+        )
+        doppler_indices = (
+            torch.arange(num_chirps, dtype=real_dtype, device=device)
+            - num_chirps // 2
+        )
+        doppler_frequency = doppler_indices / num_chirps * radar_config.prf
+        velocity_axis = radar_config.lam / 2.0 * doppler_frequency
+        return doppler_cube, velocity_axis
+
+    if doppler_mode != "firmware_tdm":
+        raise ValueError(
+            "doppler_mode 必须为 'normal' 或 'firmware_tdm'，"
+            f"实际为 {doppler_mode!r}"
+        )
+
+    firmware_fft_size = num_chirps * num_tx
+    tx_indices = torch.div(
+        torch.arange(num_antennas, device=device),
+        num_rx,
+        rounding_mode="floor",
+    )
+
+    if window:
+        full_window = torch.hann_window(
+            firmware_fft_size,
+            periodic=window_periodic,
+            dtype=real_dtype,
+            device=device,
+        )
+        sample_indices = (
+            torch.arange(num_chirps, device=device)[:, None] * num_tx
+            + tx_indices[None, :]
+        )
+        antenna_windows = full_window[sample_indices]
+        range_cube = range_cube * antenna_windows.view(
+            1, 1, 1, num_chirps, num_antennas
+        )
+
+    doppler_cube = torch.fft.fftshift(
+        torch.fft.fft(range_cube, dim=3),
+        dim=3,
+    )
+    signed_bins = (
+        torch.arange(num_chirps, dtype=real_dtype, device=device)
+        - num_chirps // 2
+    )
+    phase = (
+        -2.0
+        * math.pi
+        * signed_bins[:, None]
+        * tx_indices.to(real_dtype)[None, :]
+        / firmware_fft_size
+    )
+    doppler_cube = doppler_cube * torch.exp(1j * phase).to(range_cube.dtype).view(
+        1, 1, 1, num_chirps, num_antennas
+    )
+
+    chirp_gap = float(getattr(radar_config, "chirp_gap", radar_config.chirp_time))
+    doppler_frequency = signed_bins / firmware_fft_size / chirp_gap
+    velocity_axis = radar_config.lam / 2.0 * doppler_frequency
+    return doppler_cube, velocity_axis
+
+
+# *****************************************************************************
+# Array geometry and steering vectors
+# *****************************************************************************
+
+def build_direction_vectors(
+    angle_axis_rad: torch.Tensor,
+    plane: Literal["azi", "ele"],
+) -> torch.Tensor:
+    """Build 1-D azimuth or elevation directions in x-forward coordinates."""
+    zeros = torch.zeros_like(angle_axis_rad)
+    if plane == "azi":
+        return torch.stack(
+            (torch.cos(angle_axis_rad), torch.sin(angle_axis_rad), zeros),
+            dim=-1,
+        )
+    if plane == "ele":
+        return torch.stack(
+            (torch.cos(angle_axis_rad), zeros, torch.sin(angle_axis_rad)),
+            dim=-1,
+        )
+    raise ValueError(f"plane 必须为 'azi' 或 'ele'，实际为 {plane!r}")
+
+
+def build_azimuth_elevation_directions(
+    azimuth_axis_rad: torch.Tensor,
+    elevation_axis_rad: torch.Tensor,
+) -> torch.Tensor:
+    """Build flattened joint azimuth/elevation direction vectors ``[K,3]``."""
+    azimuth_grid, elevation_grid = torch.meshgrid(
+        azimuth_axis_rad,
+        elevation_axis_rad,
+        indexing="ij",
+    )
+    return torch.stack(
+        (
+            torch.cos(elevation_grid) * torch.cos(azimuth_grid),
+            torch.cos(elevation_grid) * torch.sin(azimuth_grid),
+            torch.sin(elevation_grid),
+        ),
+        dim=-1,
+    ).reshape(-1, 3)
+
+
+def build_steering_matrix(
+    antenna_positions: torch.Tensor,
+    direction_vectors: torch.Tensor,
+    wavelength: float,
+    normalize: bool = False,
+) -> torch.Tensor:
+    """Return receive-combining weights ``[M,K]`` with positive phase."""
+    if antenna_positions.ndim != 2 or antenna_positions.shape[-1] != 3:
+        raise ValueError("antenna_positions 必须为 [M,3]")
+    if direction_vectors.ndim != 2 or direction_vectors.shape[-1] != 3:
+        raise ValueError("direction_vectors 必须为 [K,3]")
+    if wavelength <= 0:
+        raise ValueError("wavelength 必须大于 0")
+
+    relative_positions = antenna_positions - antenna_positions[:1]
+    path_difference = torch.einsum(
+        "mc,kc->mk",
+        relative_positions,
+        direction_vectors,
+    )
+    weights = torch.exp(
+        1j * (2.0 * math.pi / wavelength) * path_difference
+    )
+    if normalize:
+        weights = weights / float(antenna_positions.shape[0])
+    return weights
+
+
+# *****************************************************************************
+# DBF, Bartlett, MVDR and MUSIC
+# *****************************************************************************
+
+def conventional_dbf_power(
+    snapshots: torch.Tensor,
+    steering_weights: torch.Tensor,
+    direction_chunk_size: int = 256,
+) -> torch.Tensor:
+    """Beamform ``[...,M]`` snapshots and return power ``[...,K]``."""
+    if snapshots.shape[-1] != steering_weights.shape[0]:
+        raise ValueError("snapshot 天线维与 steering matrix 不匹配")
+    if direction_chunk_size <= 0:
+        raise ValueError("direction_chunk_size 必须大于 0")
+
+    output = torch.empty(
+        (*snapshots.shape[:-1], steering_weights.shape[1]),
+        dtype=snapshots.real.dtype,
+        device=snapshots.device,
+    )
+    for start in range(0, steering_weights.shape[1], direction_chunk_size):
+        stop = min(start + direction_chunk_size, steering_weights.shape[1])
+        beamformed = torch.einsum(
+            "...m,mk->...k",
+            snapshots,
+            steering_weights[:, start:stop],
+        )
+        output[..., start:stop] = beamformed.abs().square()
+    return output
+
+
+def bartlett_spectrum(
+    snapshots: torch.Tensor,
+    steering_weights: torch.Tensor,
+    snapshot_chunk_size: int = 8,
+) -> torch.Tensor:
+    """Return a Bartlett spectrum for snapshots shaped ``[...,S,M]``."""
+    if snapshot_chunk_size <= 0:
+        raise ValueError("snapshot_chunk_size 必须大于 0")
+    num_snapshots = snapshots.shape[-2]
+    num_antennas = snapshots.shape[-1]
+    power_sum = torch.zeros(
+        (*snapshots.shape[:-2], steering_weights.shape[1]),
+        dtype=snapshots.real.dtype,
+        device=snapshots.device,
+    )
+    for start in range(0, num_snapshots, snapshot_chunk_size):
+        stop = min(start + snapshot_chunk_size, num_snapshots)
+        spectrum_chunk = torch.einsum(
+            "...sm,mk->...sk",
+            snapshots[..., start:stop, :],
+            steering_weights,
+        )
+        power_sum += spectrum_chunk.abs().square().sum(dim=-2)
+    return power_sum / float(num_snapshots * num_antennas**2)
+
+
+def estimate_spatial_covariance(
+    snapshots: torch.Tensor,
+    forward_backward: bool = True,
+    diagonal_loading: float = 1e-2,
+) -> torch.Tensor:
+    """Estimate a loaded covariance matrix from ``[...,S,M]`` snapshots."""
+    num_snapshots = snapshots.shape[-2]
+    num_antennas = snapshots.shape[-1]
+    covariance = torch.einsum(
+        "...sm,...sn->...mn",
+        snapshots,
+        snapshots.conj(),
+    ) / float(num_snapshots)
+    covariance = 0.5 * (covariance + covariance.conj().transpose(-2, -1))
+
+    if forward_backward:
+        exchange = torch.eye(
+            num_antennas,
+            dtype=snapshots.dtype,
+            device=snapshots.device,
+        ).flip(0)
+        covariance_fb = torch.matmul(
+            torch.matmul(exchange, covariance.conj()),
+            exchange,
+        )
+        covariance = 0.5 * (covariance + covariance_fb)
+        covariance = 0.5 * (
+            covariance + covariance.conj().transpose(-2, -1)
+        )
+
+    eps = torch.finfo(snapshots.real.dtype).eps
+    trace_mean = covariance.diagonal(dim1=-2, dim2=-1).real.mean(dim=-1)
+    loading = diagonal_loading * trace_mean.clamp_min(eps) + eps
+    identity = torch.eye(
+        num_antennas,
+        dtype=snapshots.dtype,
+        device=snapshots.device,
+    )
+    return covariance + loading[..., None, None] * identity
+
+
+def mvdr_spectrum(
+    covariance: torch.Tensor,
+    steering_vector: torch.Tensor,
+) -> torch.Tensor:
+    """Return the MVDR spatial spectrum ``[...,K]``."""
+    eps = torch.finfo(covariance.real.dtype).eps
+    covariance_inverse = torch.linalg.inv(covariance)
+    denominator = torch.einsum(
+        "mk,...mn,nk->...k",
+        steering_vector.conj(),
+        covariance_inverse,
+        steering_vector,
+    ).real.clamp_min(eps)
+    return 1.0 / denominator
+
+
+def music_spectrum(
+    covariance: torch.Tensor,
+    steering_vector: torch.Tensor,
+    num_sources: int = 1,
+) -> torch.Tensor:
+    """Return a peak-normalized MUSIC spatial spectrum ``[...,K]``."""
+    num_antennas = covariance.shape[-1]
+    if not 0 < num_sources < num_antennas:
+        raise ValueError("num_sources 必须在 [1, M-1] 范围内")
+    eps = torch.finfo(covariance.real.dtype).eps
+    _, eigenvectors = torch.linalg.eigh(covariance)
+    noise_subspace = eigenvectors[..., :num_antennas - num_sources]
+    noise_projection = torch.einsum(
+        "...mq,mk->...qk",
+        noise_subspace.conj(),
+        steering_vector,
+    )
+    denominator = noise_projection.abs().square().sum(dim=-2).clamp_min(eps)
+    spectrum = 1.0 / denominator
+    return spectrum / spectrum.amax(dim=-1, keepdim=True).clamp_min(eps)
+
+
+def range_cube_to_range_angle_power(
+    range_cube: torch.Tensor,
+    radar_config: Radar_Config,
+    plane: Literal["azi", "ele"],
+    remove_static: bool = True,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Estimate a 1-D range-angle spectrum from ``[B,T,R,S,M]`` data."""
+    if range_cube.ndim != 5 or not range_cube.is_complex():
+        raise ValueError("range_cube 必须为复数 [B,T,R,S,M]")
+    if plane not in ("azi", "ele"):
+        raise ValueError(f"plane 必须为 'azi' 或 'ele'，实际为 {plane!r}")
+    if radar_config.angle_method not in ("bartlett", "mvdr", "music"):
+        raise ValueError(f"未知 angle_method={radar_config.angle_method}")
+
+    if remove_static:
+        range_cube = range_cube - range_cube.mean(dim=3, keepdim=True)
+
+    real_dtype = range_cube.real.dtype
+    device = range_cube.device
+    positions = torch.as_tensor(
+        radar_config.virtual_channel_positions,
+        dtype=real_dtype,
+        device=device,
+    )
+    fov = radar_config.azi_deg if plane == "azi" else radar_config.ele_deg
+    ant_indices = (
+        radar_config.azi_ant_indices
+        if plane == "azi"
+        else radar_config.ele_ant_indices
+    )
+    index_tensor = torch.as_tensor(
+        tuple(ant_indices),
+        dtype=torch.long,
+        device=device,
+    )
+    subarray_cube = torch.index_select(range_cube, dim=-1, index=index_tensor)
+    subarray_positions = torch.index_select(positions, dim=0, index=index_tensor)
+    angle_axis_rad = torch.linspace(
+        math.radians(fov[0]),
+        math.radians(fov[1]),
+        radar_config.num_angle_beams,
+        dtype=real_dtype,
+        device=device,
+    )
+    direction_vectors = build_direction_vectors(angle_axis_rad, plane)
+    steering_weights = build_steering_matrix(
+        subarray_positions,
+        direction_vectors,
+        radar_config.lam,
+    ).to(range_cube.dtype)
+
+    if radar_config.angle_method == "bartlett":
+        return bartlett_spectrum(subarray_cube, steering_weights), angle_axis_rad
+
+    covariance = estimate_spatial_covariance(subarray_cube)
+    steering_vector = steering_weights.conj()
+    if radar_config.angle_method == "mvdr":
+        spectrum = mvdr_spectrum(covariance, steering_vector)
+    else:
+        spectrum = music_spectrum(covariance, steering_vector, num_sources=1)
+        range_power = subarray_cube.abs().square().mean(dim=(-1, -2))
+        spectrum = spectrum * range_power.unsqueeze(-1)
+    return spectrum, angle_axis_rad
+
+
+# *****************************************************************************
+# Legacy NumPy Doppler and angle processing
+# *****************************************************************************
 
 # 对range_cube 在chirp维度做FFT，返回原始与对消后的数据
 def doppler_fft(

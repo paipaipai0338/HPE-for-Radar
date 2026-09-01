@@ -11,7 +11,9 @@ class VoxelNeXt(nn.Module):
     def __init__(
         self,
         num_point_features: int = 3,
-        point_cloud_range: Sequence[float] = (0.0, -3.0, -2.0, 6.0, 3.0, 2.0),
+        xyz_limits: Sequence[Sequence[float]] = (
+            (0.0, 6.0), (-3.0, 3.0), (-2.0, 2.0)
+        ),
         voxel_size: Sequence[float] = (0.025, 0.025, 0.1),
         append_time: bool = False,
         append_xyz: bool = False,
@@ -29,7 +31,7 @@ class VoxelNeXt(nn.Module):
         Args:
             num_point_features: Number of non-xyz channels in input C.
                 For xyz-only input, set this to 0.
-            point_cloud_range: [x_min, y_min, z_min, x_max, y_max, z_max].
+            xyz_limits: [[x_min, x_max], [y_min, y_max], [z_min, z_max]].
             voxel_size: [vx, vy, vz].
             append_time: Append the voxelizer's local frame index. Leave this
                 disabled for frame-wise detection because each flattened
@@ -53,7 +55,7 @@ class VoxelNeXt(nn.Module):
             raise ValueError(f"max_people must be positive, got {max_people}")
 
         self.voxelizer = DynamicMeanVoxelizer(
-            point_cloud_range=point_cloud_range,
+            xyz_limits=xyz_limits,
             voxel_size=voxel_size,
             append_time=append_time,
             append_xyz=append_xyz,
@@ -76,7 +78,7 @@ class VoxelNeXt(nn.Module):
             ffn_dim=query_ffn_dim,
             dropout=query_dropout,
             max_people=max_people,
-            point_cloud_range=point_cloud_range,
+            xyz_limits=xyz_limits,
         )
         self.max_people = int(max_people)
 
