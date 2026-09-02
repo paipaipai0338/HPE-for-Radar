@@ -28,6 +28,7 @@ def prepare_bin_input(samples, input_key, device, model, cfg_data, cfg_model, ra
             radar_config=radar_config,
             xyz_limits=cfg_data['xyz_limits'],
             map_size=cfg_data['map_size'],
+            remove_static=cfg_data['remove_static'],
         )
     elif cfg_model['name'] == 'HRRadarPose':
         (
@@ -39,7 +40,7 @@ def prepare_bin_input(samples, input_key, device, model, cfg_data, cfg_model, ra
         ) = range_cube_to_range_doppler_azi_ele(
             range_cube=radar_input,
             radar_config=radar_config,
-            remove_static=False,
+            remove_static=cfg_data['remove_static'],
         )
         doppler_xyz, x_axis, y_axis, z_axis = (
             range_doppler_azi_ele_to_doppler_xyz(

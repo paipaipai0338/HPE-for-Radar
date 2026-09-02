@@ -424,7 +424,7 @@ class HPE_Dataset(Dataset):
                 group_data_path = entry['group_data_path']
                 for group in valid_group:
                     frame = len(group_data_path[group][base_source])
-                    starts = list(range(0, frame - T + 1, 4))
+                    starts = list(range(0, frame - T + 1, T))
                     windows = [(start, start + T) for start in starts]
                     for start_idx, end_idx in windows:
                         window_by_sensor = {}

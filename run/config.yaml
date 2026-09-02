@@ -35,6 +35,8 @@ data:
     map_size: [256, 256]
     # HRRadarPose
     cube_size: [96, 96, 32]
+    # BIN 预处理：在频移 FFT/角度谱计算前扣除 chirp 维复数均值
+    remove_static: false
 model:
     name: HRRadarPose
 
