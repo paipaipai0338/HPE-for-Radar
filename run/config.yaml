@@ -11,7 +11,7 @@ data:
     base_source: radar_high_bin
     ratio: 0.7
     T: 1
-    split_method: person
+    split_method: group
     max_points: 300
     max_people: 4
     num_workers: 8
@@ -47,7 +47,9 @@ task:
     output: gt_for_high
     device: 1
     seed: 42
-    batch_size: 1
+    batch_size: 4
+    # 数值精度: FP32 / FP16 / BF16
+    precision: BF16
     # 匈牙利匹配
     matching_for_hungarian:
         bbox_l1_weight: 5.0
@@ -60,7 +62,7 @@ task:
         warmup_epoch: 10
         resume:
           enabled: false
-          checkpoint_path: none
+          checkpoint_path: /home/pai/Huawei/experiments/HRRadarPose/20260901_150207/checkpoint/last.pth
         metrics:
             # Pose loss
             MPJPE: 0

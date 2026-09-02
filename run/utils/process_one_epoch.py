@@ -4,6 +4,21 @@ from tqdm import tqdm
 from preprocess.radarprocess_RPM2 import range_cube_to_rpm2_maps
 from preprocess.radarpreprocess_HRRadarPose import range_cube_to_range_doppler_azi_ele, range_doppler_azi_ele_to_doppler_xyz
 
+
+def get_autocast_dtype(precision):
+    precision = str(precision).upper()
+    try:
+        return {
+            'FP32': None,
+            'FP16': torch.float16,
+            'BF16': torch.bfloat16,
+        }[precision]
+    except KeyError as error:
+        raise ValueError(
+            f"precision 必须为 FP32、FP16 或 BF16，当前为: {precision}"
+        ) from error
+
+
 @torch.no_grad()
 def prepare_bin_input(samples, input_key, device, model, cfg_data, cfg_model, radar_config):
     radar_input = samples[input_key].to(device, non_blocking=True)
@@ -44,8 +59,9 @@ def prepare_bin_input(samples, input_key, device, model, cfg_data, cfg_model, ra
     return torch.log10(radar_power.clamp_min(torch.finfo(radar_power.dtype).tiny))
 
 
-def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_task, cfg_model, radar_config):
+def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_task, cfg_model, radar_config, scaler=None):
     model.train()
+    autocast_dtype = get_autocast_dtype(cfg_task.get('precision', 'FP32'))
     for samples in tqdm(dataloader, total=len(dataloader)):
         # 获取模型输入
         input_key = cfg_task['input']
@@ -121,7 +137,12 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
 
         optimizer.zero_grad(set_to_none=True)
 
-        pre = model(model_input)
+        with torch.autocast(
+            device_type=device.type,
+            dtype=autocast_dtype,
+            enabled=autocast_dtype is not None,
+        ):
+            pre = model(model_input)
 
         if 'pc' in input_key:
             instance_pose = pre['pose']
@@ -142,8 +163,13 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
                 f'训练 loss 出现 NaN 或 Inf: {loss.item()}'
             )
 
-        loss.backward()
-        optimizer.step()
+        if scaler is None:
+            loss.backward()
+            optimizer.step()
+        else:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
     epoch_metric = metric.epoch_end()
 
@@ -151,6 +177,7 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
 
 def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_model, radar_config):
     model.eval()
+    autocast_dtype = get_autocast_dtype(cfg_task.get('precision', 'FP32'))
     with torch.no_grad():
         for samples in tqdm(dataloader, total=len(dataloader)):
             input_key = cfg_task['input']
@@ -225,7 +252,12 @@ def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_mod
                 gt['keypoint_offset'] = keypoint_offset
                 gt['hrradarpose_valid'] = target_valid
 
-            pre = model(model_input)
+            with torch.autocast(
+                device_type=device.type,
+                dtype=autocast_dtype,
+                enabled=autocast_dtype is not None,
+            ):
+                pre = model(model_input)
 
             if 'pc' in input_key:
                 instance_pose = pre['pose']

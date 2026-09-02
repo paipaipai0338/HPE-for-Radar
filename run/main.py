@@ -16,7 +16,7 @@ from run.utils.build_model import build_model
 from run.utils.model_init import model_init
 from run.utils.build_metric import Metric
 from run.utils.build_experiment import build_experiment, save_radar_config
-from run.utils.process_one_epoch import train_one_epoch, val_one_epoch, prepare_bin_input
+from run.utils.process_one_epoch import train_one_epoch, val_one_epoch, prepare_bin_input, get_autocast_dtype
 from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint
 from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_warmup
 
@@ -54,6 +54,9 @@ def main():
     cfg_model = cfg['model']
     cfg_task = cfg['task']
     cfg_radar = cfg['radar']
+    precision = str(cfg_task.get('precision', 'FP32')).upper()
+    get_autocast_dtype(precision)
+    cfg_task['precision'] = precision
     if args.init_lr is not None:
         cfg_task['train']['init_lr'] = args.init_lr
     if args.epochs is not None:
@@ -158,6 +161,11 @@ def main():
             lr=cfg_task['train']['init_lr'],
             betas=(0.9, 0.999)
         )
+        scaler = (
+            torch.amp.GradScaler(device.type)
+            if precision == 'FP16'
+            else None
+        )
         scheduler = get_cosine_schedule_with_warmup(
             optimizer,
             num_epochs=num_epoch,
@@ -178,7 +186,7 @@ def main():
                 'fig': experiment_dir / 'fig',
                 'config': experiment_dir / 'config',
             }
-            start_epoch, best_metric = load_training_checkpoint(checkpoint_path, model, optimizer, scheduler, metric, device)
+            start_epoch, best_metric = load_training_checkpoint(checkpoint_path, model, optimizer, scheduler, metric, device, scaler)
         else:
             start_epoch = 0
             best_metric = float('inf')
@@ -203,6 +211,7 @@ def main():
             write_log(log_path, "Start new training")
 
         write_log(log_path, f"Experiment description: {cfg_experiment['description']}")
+        write_log(log_path, f"Precision: {precision}")
         write_log(log_path, f"Best metric: {best_metric_name}: {best_metric}")
 
         for epoch in range(start_epoch, cfg_task['train']['epoch']):
@@ -217,6 +226,7 @@ def main():
                 cfg_task,
                 cfg_model,
                 radar_config,
+                scaler,
             )
             
             scheduler.step()
@@ -250,7 +260,7 @@ def main():
             if current < best_metric:
                 previous_best = best_metric
                 best_metric = current
-                save_checkpoint(paths['checkpoint'] / 'best.pth', epoch, model, optimizer, scheduler, metric, best_metric)
+                save_checkpoint(paths['checkpoint'] / 'best.pth', epoch, model, optimizer, scheduler, metric, best_metric, scaler)
                 message = (
                         f"Best checkpoint updated | "
                         f"{best_metric_name}: "
@@ -260,7 +270,7 @@ def main():
                     )
                 write_log(log_path, message)
                 print(message)
-            save_checkpoint(paths['checkpoint'] / 'last.pth', epoch, model, optimizer, scheduler, metric, best_metric)
+            save_checkpoint(paths['checkpoint'] / 'last.pth', epoch, model, optimizer, scheduler, metric, best_metric, scaler)
 
 
     elif cfg_task['stage'] == 'val':

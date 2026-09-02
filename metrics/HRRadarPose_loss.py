@@ -5,7 +5,8 @@ def get_body_center_loss(C_pre, C_gt, alpha=2, beta=4):
     # C_pre     B, T, 1, X, Y, Z
     # C_gt      B, T, 1, X, Y, Z
     # loss      B, T
-    C_pre = C_pre.clamp(min=1e-6, max=1 - 1e-6)
+    C_pre = C_pre.float().clamp(min=1e-6, max=1 - 1e-6)
+    C_gt = C_gt.float()
     pos_mask = C_gt.eq(1)
     neg_mask = C_gt.lt(1)
 
@@ -40,9 +41,9 @@ def get_keypoint_offset_loss(K_pre, indices_gt, keypoint_offset_gt, valid):
     pred = torch.gather(pred, dim=2, index=gather_idx)
 
     # [B,T,K,J,3]
-    pred = pred.reshape(B, T, K, J, 3)
+    pred = pred.reshape(B, T, K, J, 3).float()
+    keypoint_offset_gt = keypoint_offset_gt.float()
 
     # 每个 person 的所有关节坐标 L1；无效 person 不参与后续聚合。
     loss = torch.norm(pred - keypoint_offset_gt, dim=-1).mean(-1)
     return loss.masked_fill(~valid, 0.0)
-
