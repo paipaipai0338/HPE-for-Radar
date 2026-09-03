@@ -10,6 +10,7 @@ def build_model(model_name):
         'RPM2': 'models/RPM2',
         'VoxelNeXt': 'models/VoxelNeXt',
         'HRRadarPose': 'models/HRRadarPose',
+        'ResNet3D': 'models/ResNet3D',
     }
 
     if model_name not in model_dirs:

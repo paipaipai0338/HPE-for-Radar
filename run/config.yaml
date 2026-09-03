@@ -1,5 +1,5 @@
 experiment:
-  description: HRRadarPose baseline using high radar bin
+  description: ResNet3D baseline using high radar bin
   output_path: /home/pai/Huawei/experiments
 
 data:
@@ -33,12 +33,12 @@ data:
         - [-2.0, 2.0]
     # RPM2
     map_size: [256, 256]
-    # HRRadarPose
+    # HRRadarPose ResNet3D
     cube_size: [96, 96, 32]
     # BIN 预处理：在频移 FFT/角度谱计算前扣除 chirp 维复数均值
-    remove_static: false
+    remove_static: true
 model:
-    name: HRRadarPose
+    name: ResNet3D
 
 radar:
     angle_method: bartlett
@@ -49,17 +49,18 @@ task:
     output: gt_for_high
     device: 1
     seed: 42
-    batch_size: 4
+    batch_size: 8
     # 数值精度: FP32 / FP16 / BF16
     precision: BF16
     # 匈牙利匹配
     matching_for_hungarian:
+        pose_matching_by_hip: true
         bbox_l1_weight: 5.0
         bbox_iou_weight: 2.0
     # 坐标归一化，仅适配于点云
     center_on_hip: false
     train:
-        epoch: 500
+        epoch: 100
         init_lr: 0.001
         warmup_epoch: 10
         resume:
@@ -67,9 +68,10 @@ task:
           checkpoint_path: /home/pai/Huawei/experiments/HRRadarPose/20260901_150207/checkpoint/last.pth
         metrics:
             # Pose loss
-            MPJPE: 0
+            MPJPE: 1
             PAMPJPE: 0
             Bone_Length: 0
+            BCE: 1
             # Detection loss
             bbox_iou: 0
             bbox_l1: 0
@@ -80,8 +82,8 @@ task:
             rpm2_box_size: 0
             rpm2_pose: 0
             # HRRadarPose loss
-            hrradarpose_body_center: 1.0
-            hrradarpose_keypoint_offset: 1.0
+            hrradarpose_body_center: 0
+            hrradarpose_keypoint_offset: 0
         best_metric: loss
         shuffle: true
     val:
@@ -91,9 +93,10 @@ task:
         iou_thresh: 0.7
         metrics:
             # Pose loss
-            MPJPE: 0
+            MPJPE: 1
             PAMPJPE: 0
             Bone_Length: 0
+            BCE: 1
             # Detection loss
             bbox_iou : 0
             bbox_l1: 0
@@ -104,5 +107,5 @@ task:
             rpm2_box_size: 0
             rpm2_pose: 0
             # HRRadarPose loss
-            hrradarpose_body_center: 1.0
-            hrradarpose_keypoint_offset: 1.0
+            hrradarpose_body_center: 0
+            hrradarpose_keypoint_offset: 0

@@ -30,7 +30,7 @@ def prepare_bin_input(samples, input_key, device, model, cfg_data, cfg_model, ra
             map_size=cfg_data['map_size'],
             remove_static=cfg_data['remove_static'],
         )
-    elif cfg_model['name'] == 'HRRadarPose':
+    elif cfg_model['name'] in ('HRRadarPose', 'ResNet3D'):
         (
             range_doppler_azi_ele,
             range_axis,
@@ -56,8 +56,7 @@ def prepare_bin_input(samples, input_key, device, model, cfg_data, cfg_model, ra
     else:
         raise ValueError(f"不支持 BIN 输入的模型: {cfg_model['name']}")
 
-    # 与 BIN 可视化保持一致：只取 log10(P)，不乘 10、不做归一化。
-    return torch.log10(radar_power.clamp_min(torch.finfo(radar_power.dtype).tiny))
+    return radar_power.clamp_min(torch.finfo(radar_power.dtype).tiny)
 
 
 def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_task, cfg_model, radar_config, scaler=None):

@@ -1,6 +1,7 @@
 import random
 import sys
 import os
+import json
 import pickle
 import time
 import torch
@@ -254,6 +255,9 @@ class HPE_Dataset(Dataset):
     _ROTATION_ROLL_RANGE_DEG = (-5.0, 5.0)
     _ROTATION_PITCH_RANGE_DEG = (-10.0, 10.0)
     _ROTATION_YAW_RANGE_DEG = (-5.0, 5.0)
+    DEFAULT_BAD_BIN_FRAMES_PATH = Path(__file__).with_name(
+        'bad_bin_frames.json'
+    )
     
     def __init__(
         self,
@@ -269,6 +273,9 @@ class HPE_Dataset(Dataset):
         enable_action=False,
         radar_config: Optional[Radar_Config] = None,
         radar_bin_root: Optional[Union[str, Path]] = None,
+        bad_bin_frames_path: Optional[Union[str, Path]] = (
+            DEFAULT_BAD_BIN_FRAMES_PATH
+        ),
         max_groups: Optional[int] = None,
     ):
         super(HPE_Dataset, self).__init__()
@@ -293,6 +300,9 @@ class HPE_Dataset(Dataset):
         self.radar_config = radar_config
         self.radar_bin_root = (
             None if radar_bin_root is None else Path(radar_bin_root)
+        )
+        self.bad_bin_frames = self._load_bad_bin_frames(
+            bad_bin_frames_path
         )
         self.base_source = base_source
         self.ratio = ratio
@@ -424,7 +434,7 @@ class HPE_Dataset(Dataset):
                 group_data_path = entry['group_data_path']
                 for group in valid_group:
                     frame = len(group_data_path[group][base_source])
-                    starts = list(range(0, frame - T + 1, T))
+                    starts = list(range(0, frame - T + 1, 4))
                     windows = [(start, start + T) for start in starts]
                     for start_idx, end_idx in windows:
                         window_by_sensor = {}
@@ -446,6 +456,84 @@ class HPE_Dataset(Dataset):
 
         if self.preload_cache:
             self.preload_data_cache()
+
+    @staticmethod
+    def _load_bad_bin_frames(
+        manifest_path: Optional[Union[str, Path]],
+    ) -> Dict[Tuple[str, str, str, str], Dict[str, Any]]:
+        if manifest_path is None:
+            return {}
+
+        manifest_path = Path(manifest_path)
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"坏 BIN 帧清单不存在: {manifest_path}"
+            )
+        with manifest_path.open('r', encoding='utf-8') as file:
+            manifest = json.load(file)
+        if manifest.get('schema_version') != 1:
+            raise ValueError(
+                "坏 BIN 帧清单 schema_version 必须为 1，"
+                f"实际为 {manifest.get('schema_version')}"
+            )
+        records = manifest.get('bad_frames')
+        if not isinstance(records, list):
+            raise ValueError("坏 BIN 帧清单缺少 bad_frames 列表")
+
+        lookup = {}
+        required = {
+            'date', 'group', 'sensor', 'frame_name',
+            'frame_index', 'bad_type',
+        }
+        for record_index, record in enumerate(records):
+            if not isinstance(record, dict) or not required <= record.keys():
+                raise ValueError(
+                    f"bad_frames[{record_index}] 字段不完整"
+                )
+            if record['bad_type'] not in {'numeric', 'length'}:
+                raise ValueError(
+                    f"bad_frames[{record_index}].bad_type 无效: "
+                    f"{record['bad_type']}"
+                )
+            if not isinstance(record['frame_index'], int) or record['frame_index'] < 0:
+                raise ValueError(
+                    f"bad_frames[{record_index}].frame_index 必须为非负整数"
+                )
+            key = (
+                str(record['date']),
+                str(record['group']),
+                str(record['sensor']),
+                str(record['frame_name']),
+            )
+            if key in lookup:
+                raise ValueError(
+                    f"坏 BIN 帧清单存在重复记录: {key}"
+                )
+            lookup[key] = record
+        return lookup
+
+    @staticmethod
+    def _get_bin_frame_manifest_key(
+        file_path: Union[str, Path, PackedBinFrame],
+    ) -> Optional[Tuple[str, str, str, str]]:
+        path = Path(
+            file_path.pack_path
+            if isinstance(file_path, PackedBinFrame)
+            else file_path
+        )
+        try:
+            marker = path.parts.index('data_collection')
+            date = path.parts[marker - 1]
+            group = path.parts[marker + 1]
+            sensor = path.parts[marker + 2]
+        except (ValueError, IndexError):
+            return None
+        frame_name = (
+            file_path.frame_name
+            if isinstance(file_path, PackedBinFrame)
+            else path.name
+        )
+        return date, group, sensor, frame_name
 
     def _display_meta_info(self, meta_info: Dict) -> None:
         '''Dict[str(person_id), List]
@@ -558,7 +646,16 @@ class HPE_Dataset(Dataset):
             * 4
         )
 
-        if isinstance(file_path, PackedBinFrame):
+        manifest_key = self._get_bin_frame_manifest_key(file_path)
+        bad_record = self.bad_bin_frames.get(manifest_key)
+        if bad_record is not None:
+            valid = False
+            error = (
+                "listed in bad_bin_frames.json: "
+                f"bad_type={bad_record['bad_type']}, "
+                f"frame_index={bad_record['frame_index']}"
+            )
+        elif isinstance(file_path, PackedBinFrame):
             actual_bytes = file_path.length
             valid = actual_bytes == expected_bytes
             error = f'size mismatch: {actual_bytes} != {expected_bytes}'

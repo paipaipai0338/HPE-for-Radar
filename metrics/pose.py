@@ -7,12 +7,127 @@ import torch
 import numpy as np
 from typing import Tuple
 import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
 
 from utils.COCO import COCO_SKELETON
 
+
+def get_pose_hungarian_match(
+    pose_pre: torch.Tensor,
+    pose_gt: torch.Tensor,
+    gt_mask: torch.Tensor,
+    hip_joint_indices=(11, 12),
+):
+    """按髋中心距离逐帧建立预测 query 与有效 GT 的一一匹配。"""
+    if pose_pre.ndim != 5 or pose_gt.ndim != 5:
+        raise ValueError(
+            "pose_pre and pose_gt must be [B, T, K, J, 3], "
+            f"got {tuple(pose_pre.shape)} and {tuple(pose_gt.shape)}"
+        )
+    if pose_pre.shape[:2] != pose_gt.shape[:2]:
+        raise ValueError("pose_pre and pose_gt B,T dimensions differ")
+    if pose_pre.shape[-2:] != pose_gt.shape[-2:]:
+        raise ValueError("pose_pre and pose_gt joint dimensions differ")
+    if pose_pre.shape[-1] != 3:
+        raise ValueError("pose coordinates must have size 3")
+    if gt_mask.shape != pose_gt.shape[:3]:
+        raise ValueError(
+            "gt_mask must match pose_gt B,T,K dimensions, "
+            f"got {tuple(gt_mask.shape)} and {tuple(pose_gt.shape)}"
+        )
+    if pose_pre.device != pose_gt.device or pose_pre.device != gt_mask.device:
+        raise ValueError("pose_pre, pose_gt and gt_mask must share device")
+
+    left_hip, right_hip = hip_joint_indices
+    if not (
+        0 <= left_hip < pose_pre.shape[-2]
+        and 0 <= right_hip < pose_pre.shape[-2]
+    ):
+        raise ValueError(
+            f"hip_joint_indices are out of range: {hip_joint_indices}"
+        )
+
+    with torch.no_grad():
+        pred_hip = (
+            pose_pre[..., left_hip, :] + pose_pre[..., right_hip, :]
+        ) / 2
+        gt_hip = (
+            pose_gt[..., left_hip, :] + pose_gt[..., right_hip, :]
+        ) / 2
+        # SciPy/NumPy 不支持 BF16，因此匹配代价固定使用 FP32。
+        cost_cpu = torch.cdist(
+            pred_hip.float().flatten(0, 1),
+            gt_hip.float().flatten(0, 1),
+        ).cpu().numpy()
+        valid_gt_cpu = gt_mask.bool().flatten(0, 1).cpu().numpy()
+
+    num_queries = pose_pre.shape[2]
+    matches = []
+    for frame_idx, frame_valid_gt in enumerate(valid_gt_cpu):
+        valid_gt_idx = np.flatnonzero(frame_valid_gt)
+        if valid_gt_idx.size > num_queries:
+            raise ValueError(
+                f"Frame {frame_idx} contains {valid_gt_idx.size} people, "
+                f"but only {num_queries} queries are available"
+            )
+        if valid_gt_idx.size == 0:
+            empty = torch.empty(0, dtype=torch.long, device=pose_pre.device)
+            matches.append((empty, empty))
+            continue
+
+        frame_cost = cost_cpu[frame_idx][:, valid_gt_idx]
+        if not np.isfinite(frame_cost).all():
+            raise ValueError(
+                f"Frame {frame_idx} hip matching cost contains NaN or Inf"
+            )
+        pred_idx, local_gt_idx = linear_sum_assignment(frame_cost)
+        matches.append(
+            (
+                torch.as_tensor(
+                    pred_idx, dtype=torch.long, device=pose_pre.device
+                ),
+                torch.as_tensor(
+                    valid_gt_idx[local_gt_idx],
+                    dtype=torch.long,
+                    device=pose_pre.device,
+                ),
+            )
+        )
+    return matches
+
+
+def apply_pose_matches(
+    pose_pre: torch.Tensor,
+    pose_gt: torch.Tensor,
+    matches,
+):
+    """将匹配预测写入 GT 槽位，并生成预测 query 顺序的 BCE target。"""
+    if pose_pre.shape[:2] != pose_gt.shape[:2]:
+        raise ValueError("pose_pre and pose_gt B,T dimensions differ")
+    expected_frames = pose_pre.shape[0] * pose_pre.shape[1]
+    if len(matches) != expected_frames:
+        raise ValueError(
+            f"Expected {expected_frames} frame matches, got {len(matches)}"
+        )
+
+    flat_pose_pre = pose_pre.flatten(0, 1)
+    flat_pose_matched = pose_pre.new_zeros(pose_gt.shape).flatten(0, 1)
+    confidence_target = torch.zeros(
+        pose_pre.shape[:3], dtype=torch.bool, device=pose_pre.device
+    ).flatten(0, 1)
+    for frame_idx, (pred_idx, gt_idx) in enumerate(matches):
+        flat_pose_matched[frame_idx, gt_idx] = flat_pose_pre[
+            frame_idx, pred_idx
+        ]
+        confidence_target[frame_idx, pred_idx] = True
+
+    return (
+        flat_pose_matched.reshape_as(pose_gt),
+        confidence_target.reshape(pose_pre.shape[:3]),
+    )
+
 def get_bce(confidence: torch.tensor, gt_mask: torch.tensor, eps: float=1e-3) -> torch.tensor:
     '''由于模型人数不定，预先给出最大估计人数 max_people，人数需要依赖模型输出的confidence判决'''
-    '''已抛弃'''
     if confidence.shape != gt_mask.shape:
         raise ValueError(
             f"confidence and gt_mask must have same shape, "

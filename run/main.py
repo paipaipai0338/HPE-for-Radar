@@ -132,18 +132,28 @@ def main():
         }
         # 指标构建
         cfg_matching = cfg_task['matching_for_hungarian']
+        pose_matching_by_hip = cfg_matching.get(
+            'pose_matching_by_hip',
+            False,
+        )
+        if not isinstance(pose_matching_by_hip, bool):
+            raise TypeError(
+                "matching_for_hungarian.pose_matching_by_hip must be bool"
+            )
         metric = {
             'train': Metric(
                 cfg_task['train']['metrics'],
                 cfg_data['xyz_limits'],
                 cfg_matching['bbox_l1_weight'],
                 cfg_matching['bbox_iou_weight'],
+                pose_matching_by_hip=pose_matching_by_hip,
             ),
             'val': Metric(
                 cfg_task['val']['metrics'],
                 cfg_data['xyz_limits'],
                 cfg_matching['bbox_l1_weight'],
                 cfg_matching['bbox_iou_weight'],
+                pose_matching_by_hip=pose_matching_by_hip,
             ),
         }
         best_metric_name = cfg_task['train']['best_metric'].lower()
