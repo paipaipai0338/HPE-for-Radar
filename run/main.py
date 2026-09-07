@@ -136,6 +136,10 @@ def main():
             'pose_matching_by_hip',
             False,
         )
+        pose_confidence_weight = cfg_matching.get(
+            'pose_confidence_weight',
+            0.0,
+        )
         if not isinstance(pose_matching_by_hip, bool):
             raise TypeError(
                 "matching_for_hungarian.pose_matching_by_hip must be bool"
@@ -147,6 +151,7 @@ def main():
                 cfg_matching['bbox_l1_weight'],
                 cfg_matching['bbox_iou_weight'],
                 pose_matching_by_hip=pose_matching_by_hip,
+                pose_confidence_weight=pose_confidence_weight,
             ),
             'val': Metric(
                 cfg_task['val']['metrics'],
@@ -154,6 +159,7 @@ def main():
                 cfg_matching['bbox_l1_weight'],
                 cfg_matching['bbox_iou_weight'],
                 pose_matching_by_hip=pose_matching_by_hip,
+                pose_confidence_weight=pose_confidence_weight,
             ),
         }
         best_metric_name = cfg_task['train']['best_metric'].lower()
@@ -299,6 +305,7 @@ def main():
         load_model_checkpoint(cfg_task['val']['checkpoint_path'], model, device)
 
         pose_pre = []
+        confidence_pre = []
         pose_gt = []
         gt_valid = []
         pc = []
@@ -411,6 +418,10 @@ def main():
                 if pose is not None:
                     pose_pre.append(pose.detach().cpu())
 
+                confidence = pre.get('confidence')
+                if confidence is not None:
+                    confidence_pre.append(confidence.detach().cpu())
+
                 bbox = pre.get('bbox')
                 if bbox is not None:
                     bbox_pre.append(bbox.detach().cpu())
@@ -449,6 +460,7 @@ def main():
             if bin_inputs else None
         )
         pose_pre = torch.concatenate(pose_pre, dim=0) if pose_pre else None
+        confidence_pre = (torch.concatenate(confidence_pre, dim=0) if confidence_pre else None)
         pose_gt = torch.concatenate(pose_gt, dim=0)
         gt_valid = torch.concatenate(gt_valid, dim=0)
         high_to_low_R = (
@@ -478,6 +490,7 @@ def main():
             'input_key': cfg_task['input'],
             'target_key': cfg_task['output'],
             'pose_pre': pose_pre,
+            'confidence_pre': confidence_pre,
             'bbox_pre': bbox_pre,
             'objectness_logits': objectness_logits,
             'action_logits': action_logits,

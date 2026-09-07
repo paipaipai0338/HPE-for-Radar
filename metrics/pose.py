@@ -16,9 +16,11 @@ def get_pose_hungarian_match(
     pose_pre: torch.Tensor,
     pose_gt: torch.Tensor,
     gt_mask: torch.Tensor,
+    confidence: torch.Tensor = None,
+    confidence_weight: float = 0.0,
     hip_joint_indices=(11, 12),
 ):
-    """按髋中心距离逐帧建立预测 query 与有效 GT 的一一匹配。"""
+    """按髋中心距离和 confidence 逐帧匹配预测 query 与有效 GT。"""
     if pose_pre.ndim != 5 or pose_gt.ndim != 5:
         raise ValueError(
             "pose_pre and pose_gt must be [B, T, K, J, 3], "
@@ -37,6 +39,22 @@ def get_pose_hungarian_match(
         )
     if pose_pre.device != pose_gt.device or pose_pre.device != gt_mask.device:
         raise ValueError("pose_pre, pose_gt and gt_mask must share device")
+    if confidence is not None:
+        if confidence.shape != pose_pre.shape[:3]:
+            raise ValueError(
+                "confidence must match pose_pre B,T,K dimensions, "
+                f"got {tuple(confidence.shape)} and {tuple(pose_pre.shape)}"
+            )
+        if confidence.device != pose_pre.device:
+            raise ValueError("confidence and pose_pre must share device")
+    confidence_weight = float(confidence_weight)
+    if confidence_weight < 0 or not np.isfinite(confidence_weight):
+        raise ValueError(
+            "confidence_weight must be finite and non-negative, "
+            f"got {confidence_weight}"
+        )
+    if confidence_weight > 0 and confidence is None:
+        raise ValueError("confidence is required when confidence_weight > 0")
 
     left_hip, right_hip = hip_joint_indices
     if not (
@@ -59,6 +77,11 @@ def get_pose_hungarian_match(
             pred_hip.float().flatten(0, 1),
             gt_hip.float().flatten(0, 1),
         ).cpu().numpy()
+        if confidence_weight > 0:
+            confidence_cost = (
+                1.0 - confidence.detach().float().flatten(0, 1)
+            ).cpu().numpy()
+            cost_cpu += confidence_weight * confidence_cost[:, :, None]
         valid_gt_cpu = gt_mask.bool().flatten(0, 1).cpu().numpy()
 
     num_queries = pose_pre.shape[2]

@@ -97,7 +97,14 @@ class ResNet3D(nn.Module):
             nn.LeakyReLU(inplace=True),
             nn.Linear(num_channels[-1] // 2, num_channels[-1] // 2),
             nn.LeakyReLU(inplace=True),
-            nn.Linear(num_channels[-1] // 2, max_people * num_joints * 4),
+            nn.Linear(num_channels[-1] // 2, max_people * num_joints * 3),
+        )
+        self.confidence_head = nn.Sequential(
+            nn.Linear(num_channels[-1], num_channels[-1] // 2),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(num_channels[-1] // 2, num_channels[-1] // 2),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(num_channels[-1] // 2, max_people),
         )
 
     def forward(self, model_input):
@@ -145,9 +152,8 @@ class ResNet3D(nn.Module):
             if add_residual:
                 x = x + shortcut(residual)
                 residual = x
-        out = self.pose_head(self.pool(x).flatten(1)).view(x.size(0), self.max_people, self.num_joints, -1)
-        pose = out[..., :3]
-        confidence = torch.sigmoid(out[..., -1].mean(dim=-1))
+        pose = self.pose_head(self.pool(x).flatten(1)).view(x.size(0), self.max_people, self.num_joints, -1)
+        confidence = torch.sigmoid(self.confidence_head(self.pool(x).flatten(1)).view(x.size(0), self.max_people))
         if restore_time:
             pose = pose.reshape(batch_size, num_frames, self.max_people, self.num_joints, 3)
             confidence = confidence.reshape(batch_size, num_frames, self.max_people)

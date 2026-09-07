@@ -55,6 +55,7 @@ task:
     # 匈牙利匹配
     matching_for_hungarian:
         pose_matching_by_hip: true
+        pose_confidence_weight: 0.1
         bbox_l1_weight: 5.0
         bbox_iou_weight: 2.0
     # 坐标归一化，仅适配于点云
@@ -68,7 +69,8 @@ task:
           checkpoint_path: /home/pai/Huawei/experiments/HRRadarPose/20260901_150207/checkpoint/last.pth
         metrics:
             # Pose loss
-            MPJPE: 1
+            Positive_MPJPE: 1
+            Negative_MPJPE: 0.05
             PAMPJPE: 0
             Bone_Length: 0
             BCE: 1
@@ -87,13 +89,14 @@ task:
         best_metric: loss
         shuffle: true
     val:
-        checkpoint_path: none
+        checkpoint_path: /home/pai/Huawei/experiments/ResNet3D/20260903_151742/checkpoint/last.pth
         shuffle: false
         score_thresh: 0.1
         iou_thresh: 0.7
         metrics:
             # Pose loss
-            MPJPE: 1
+            Positive_MPJPE: 1
+            Negative_MPJPE: 1
             PAMPJPE: 0
             Bone_Length: 0
             BCE: 1

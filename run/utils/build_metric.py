@@ -37,6 +37,7 @@ class Metric:
         matching_bbox_l1_weight,
         matching_bbox_iou_weight,
         pose_matching_by_hip=False,
+        pose_confidence_weight=0.0,
     ):
         if not isinstance(pose_matching_by_hip, bool):
             raise TypeError("pose_matching_by_hip must be bool")
@@ -46,8 +47,12 @@ class Metric:
             matching_bbox_iou_weight
         )
         self.pose_matching_by_hip = pose_matching_by_hip
+        self.pose_confidence_weight = float(pose_confidence_weight)
+        if self.pose_confidence_weight < 0:
+            raise ValueError("pose_confidence_weight must be non-negative")
         self.fun_call_dict = {
-            'mpjpe': get_mpjpe,
+            'positive_mpjpe': get_mpjpe,
+            'negative_mpjpe': get_mpjpe,
             'pampjpe': get_pampjpe,
             'bone_length': get_bone_length,
             'bce': get_bce,
@@ -126,7 +131,10 @@ class Metric:
         pose_pre_for_metric = pose_pre
         confidence_target = gt_mask
 
-        pose_metric_names = {'mpjpe', 'pampjpe', 'bone_length', 'bce'}
+        pose_metric_names = {
+            'positive_mpjpe', 'negative_mpjpe',
+            'pampjpe', 'bone_length', 'bce'
+        }
         if self.pose_matching_by_hip and (
             pose_metric_names & self.cfg_metrics.keys()
         ):
@@ -139,6 +147,8 @@ class Metric:
                 pose_pre,
                 pose_gt,
                 gt_mask,
+                confidence=confidence_pre,
+                confidence_weight=self.pose_confidence_weight,
             )
             pose_pre_for_metric, confidence_target = apply_pose_matches(
                 pose_pre,
@@ -147,7 +157,7 @@ class Metric:
             )
 
         for name, weight in self.cfg_metrics.items():
-            if name in ['mpjpe', 'pampjpe', 'bone_length']:
+            if name in ['positive_mpjpe', 'pampjpe', 'bone_length']:
                 assert pose_pre is not None, 'pose_pre is None'
                 metric = self.fun_call_dict[name](
                     pose_pre_for_metric, pose_gt, type='coco'
@@ -160,6 +170,18 @@ class Metric:
                     metric_value.detach().item() * metric_num
                 )
                 self.metrics_state[name]['num'] += metric_num
+            elif name == 'negative_mpjpe':
+                if pose_pre is None:
+                    raise ValueError("negative_mpjpe requires pre['pose']")
+                metric = self.fun_call_dict[name](
+                    pose_pre,
+                    torch.zeros_like(pose_pre),
+                    type='coco',
+                )
+                metric_value, metric_num = _masked_mean_over_people(
+                    metric,
+                    ~confidence_target,
+                )
             elif name in ['bbox_iou', 'bbox_l1', 'objectness']:
                 assert bbox_pre is not None, 'bbox_pre is None'
                 assert objectness_logits_pre is not None, 'objectness_logits_pre is None'
