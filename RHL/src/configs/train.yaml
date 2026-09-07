@@ -1,0 +1,141 @@
+pipeline:
+  EXP_ROOT: "test_exps"
+  EXP_NAME: "exp_001"    # 实验名称，必须设置
+  CKPT_SAVE_PATH: "ckpt"    # 模型参数保存的相对路径
+  LOGS_DIR: "log"           # 训练日志保存的相对路径
+  VAL_RATIO: 0.1          # 数据集划分比例
+  GRAD_ACCUM_STEPS: 8     # 梯度累加步数（HF）
+  START_TIME: null        # 脚本开始时间
+  RESUME: False           # 是否恢复训练
+  BF_16: True
+  epochs: 35   #训练总伦次
+  batch_size: 2 #训练batch大小
+  dataset:
+    - type: "PocHuPsenSif"
+      params:
+        root_dir: "data/dataset"
+        date_tag: "20260715"
+        group_tags: ["group_011"]
+        sensor_tag: "dpct高位机"
+        label_tag: "label"
+        pc_tag: "PC"
+  augmentation:
+    max_num_transforms: 5
+    shuffle_order: True
+    pipeline:
+      - type: "RandomYawRotation"
+        params:
+          angle_range: [-30.0, 30.0]
+          p: 0.8
+      - type: "RandomPitchRotation"
+        params:
+          angle_range: [-15.0, 15.0]
+          p: 0.8
+      - type: "RandomRollRotation"
+        params:
+          angle_range: [-15.0, 15.0]
+          p: 0.8
+      - type: "RandomTranslationX"
+        params:
+          offset_range: [-0.2, 0.2]
+          p: 0.8
+      - type: "RandomTranslationY"
+        params:
+          offset_range: [-0.2, 0.2]
+          p: 0.8
+      - type: "RandomTranslationZ"
+        params:
+          offset_range: [-0.2, 0.2]
+          p: 0.8
+      - type: "RandomPointDropout"
+        params:
+          dropout_ratio_range: [0.05, 0.3]
+          p: 0.8
+      - type: "RandomPointJitter"
+        params:
+          std: 0.02
+          p: 0.8
+      - type: "RandomHorizontalFlip"
+        params:
+          p: 0.8
+      - type: "RandomVerticalFlip"
+        params:
+          p: 0.8
+  loss:
+    - type: "QueryBCEClassificationLoss"
+      params:
+        base_weight: 1.0
+        schedule_type: "constant"
+        max_steps: null
+        max_steps_ratio: null
+    - type: "VoxelInstanceMaskFocalLoss"
+      params:
+        base_weight: 1.0
+        alpha: 0.25
+        gamma: 2.0
+        schedule_type: "constant"
+        max_steps: null
+        max_steps_ratio: null
+    - type: "VoxelSemanticOccupancyFocalLoss"
+      params:
+        base_weight: 1.0
+        alpha: 0.25
+        gamma: 2.0
+        schedule_type: "constant"
+        max_steps: null
+        max_steps_ratio: null
+    - type: "VoxelInstanceMaskDiceLoss"
+      params:
+        base_weight: 1.0
+        schedule_type: "constant"
+        max_steps: null
+        max_steps_ratio: null
+    - type: "VoxelSemanticOccupancyDiceLoss"
+      params:
+        base_weight: 1.0
+        schedule_type: "constant"
+        max_steps: null
+        max_steps_ratio: null
+    - type: "LayerWiseBBoxL1Loss"
+      params:
+        base_weight: 1.0
+        layer_weights: [0.25, 0.5, 1.0]
+        loss_type: "l1"
+        schedule_type: "constant"
+        max_steps: null
+        max_steps_ratio: null
+    - type: "LayerWiseBBoxGIoULoss"
+      params:
+        base_weight: 1.0
+        layer_weights: [0.25, 0.5, 1.0]
+        schedule_type: "constant"
+        max_steps: null
+        max_steps_ratio: null
+  optimizer:
+    type: "AdamW"
+    params:
+      lr: 1.0e-4
+      weight_decay: 0.05
+      betas: [0.9,0.999]
+      eps: 1.0e-8
+      groups: 
+        model.voxel_feature_precoder: 
+          lr: 1.0e-4
+          weight_decay: 0.05
+        model.voxel_feature_encoder: 
+          lr: 1.0e-4
+          weight_decay: 0.05
+        model.state_decoder: 
+          lr: 2.0e-4
+          weight_decay: 0.05
+        model.mask_decoder: 
+          lr: 1.0e-4
+          weight_decay: 0.05
+  lr_scheduler:
+    type: ["LinearLR", "CosineAnnealingLR"]
+    params:
+      - start_factor: 0.01
+        steps: null
+        steps_ratio: 0.02
+      - steps: null
+        steps_ratio: 1.0

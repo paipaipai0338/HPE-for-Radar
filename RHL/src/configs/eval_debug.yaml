@@ -1,0 +1,10 @@
+pipeline:
+  dataset:
+    - type: "PocHuPsenSif_for_eval"
+      params:
+        root_dir: "/mnt/huawei"
+        date_tag: "20260811"
+        group_tags: ["group_031"]
+        sensor_tag: "dpct高位机"
+        pc_tag: "PC"
+        consider_invalid: True

@@ -1,4 +1,5 @@
 import random
+import io
 import sys
 import os
 import json
@@ -29,7 +30,7 @@ from preprocess.gtprocess import get_gt_boxes, get_gt_data
 
 
 @dataclass(frozen=True)
-class PackedBinFrame:
+class PackedFrame:
     pack_path: str
     frame_name: str
     timestamp_ns: int
@@ -250,10 +251,10 @@ def collate_fn(
 class HPE_Dataset(Dataset):
 
     FILE_READ_MAX_ATTEMPTS = 5
-    FILE_READ_RETRY_BASE_DELAY_SEC = 0.05
+    FILE_READ_RETRY_BASE_DELAY_SEC = 0.03
     MIN_RADAR_POINTS_PER_FRAME = 20
     _ROTATION_ROLL_RANGE_DEG = (-5.0, 5.0)
-    _ROTATION_PITCH_RANGE_DEG = (-10.0, 10.0)
+    _ROTATION_PITCH_RANGE_DEG = (-5.0, 5.0)
     _ROTATION_YAW_RANGE_DEG = (-5.0, 5.0)
     DEFAULT_BAD_BIN_FRAMES_PATH = Path(__file__).with_name(
         'bad_bin_frames.json'
@@ -272,11 +273,11 @@ class HPE_Dataset(Dataset):
         enable_rotation=False,
         enable_action=False,
         radar_config: Optional[Radar_Config] = None,
-        radar_bin_root: Optional[Union[str, Path]] = None,
         bad_bin_frames_path: Optional[Union[str, Path]] = (
             DEFAULT_BAD_BIN_FRAMES_PATH
         ),
         max_groups: Optional[int] = None,
+        packed_data_root: Optional[Union[str, Path]] = None,
     ):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
@@ -298,11 +299,11 @@ class HPE_Dataset(Dataset):
         self.enable_rotation = enable_rotation
         self.enable_action = enable_action
         self.radar_config = radar_config
-        self.radar_bin_root = (
-            None if radar_bin_root is None else Path(radar_bin_root)
-        )
         self.bad_bin_frames = self._load_bad_bin_frames(
             bad_bin_frames_path
+        )
+        self.packed_data_root = (
+            None if packed_data_root is None else Path(packed_data_root)
         )
         self.base_source = base_source
         self.ratio = ratio
@@ -326,7 +327,7 @@ class HPE_Dataset(Dataset):
         self.packed_bin_cache_pid = os.getpid()
 
         # 加载元信息
-        json_path = self.root_path / 'data description.json'
+        json_path = self._source_file('data description.json')
         self.meta_info = get_meta_info(json_path)
         if split_method == 'person':
             person_ids = (
@@ -384,6 +385,7 @@ class HPE_Dataset(Dataset):
         }
         self.cached_sensor_names = {
             'radar_high_pc',
+            'radar_low_pc',
             'gt',
         }
         # 更新 meta_info
@@ -434,7 +436,7 @@ class HPE_Dataset(Dataset):
                 group_data_path = entry['group_data_path']
                 for group in valid_group:
                     frame = len(group_data_path[group][base_source])
-                    starts = list(range(0, frame - T + 1, 4))
+                    starts = list(range(0, frame - T + 1, T))
                     windows = [(start, start + T) for start in starts]
                     for start_idx, end_idx in windows:
                         window_by_sensor = {}
@@ -514,11 +516,11 @@ class HPE_Dataset(Dataset):
 
     @staticmethod
     def _get_bin_frame_manifest_key(
-        file_path: Union[str, Path, PackedBinFrame],
+        file_path: Union[str, Path, PackedFrame],
     ) -> Optional[Tuple[str, str, str, str]]:
         path = Path(
             file_path.pack_path
-            if isinstance(file_path, PackedBinFrame)
+            if isinstance(file_path, PackedFrame)
             else file_path
         )
         try:
@@ -530,7 +532,7 @@ class HPE_Dataset(Dataset):
             return None
         frame_name = (
             file_path.frame_name
-            if isinstance(file_path, PackedBinFrame)
+            if isinstance(file_path, PackedFrame)
             else path.name
         )
         return date, group, sensor, frame_name
@@ -577,10 +579,10 @@ class HPE_Dataset(Dataset):
             return self.npy_valid_cache[cache_key]
 
         try:
-            array = np.load(
-                cache_key,
-                mmap_mode="r",
-                allow_pickle=False,
+            array = (
+                self._load_packed_frame(file_path)
+                if isinstance(file_path, PackedFrame)
+                else np.load(cache_key, mmap_mode="r", allow_pickle=False)
             )
 
             # 确保至少读取并解析 header
@@ -626,7 +628,7 @@ class HPE_Dataset(Dataset):
     def _is_valid_radar_bin(
         self,
         sensor_name: str,
-        file_path: Union[str, PackedBinFrame],
+        file_path: Union[str, PackedFrame],
     ) -> bool:
         cache_key = file_path
         if cache_key in self.bin_valid_cache:
@@ -655,7 +657,7 @@ class HPE_Dataset(Dataset):
                 f"bad_type={bad_record['bad_type']}, "
                 f"frame_index={bad_record['frame_index']}"
             )
-        elif isinstance(file_path, PackedBinFrame):
+        elif isinstance(file_path, PackedFrame):
             actual_bytes = file_path.length
             valid = actual_bytes == expected_bytes
             error = f'size mismatch: {actual_bytes} != {expected_bytes}'
@@ -729,7 +731,10 @@ class HPE_Dataset(Dataset):
                     # 构建数据目录路径
                     group_dir = self.root_path / date / 'data_collection' / group_name
                     
-                    if not group_dir.exists():
+                    if not group_dir.exists() and not (
+                        self.packed_data_root is not None
+                        and (self.packed_data_root / group_dir.relative_to(self.root_path)).is_dir()
+                    ):
                         print(f"目录不存在: Person id:{person_id}, Date:{date}, Group:{group_dir}")
                         continue
                     
@@ -792,7 +797,7 @@ class HPE_Dataset(Dataset):
             """
             times = []
             for file in files:
-                if isinstance(file, PackedBinFrame):
+                if isinstance(file, PackedFrame):
                     times.append(unix_to_datetime(file.timestamp_ns * 1e-9))
                     continue
                 base = Path(file).stem
@@ -812,14 +817,11 @@ class HPE_Dataset(Dataset):
             if not dir_path or not suffix or not Path(dir_path).is_dir():
                 return [], []
 
-            if (
-                sensor_name == 'radar_high_bin'
-                and self.radar_bin_root is not None
-            ):
-                pack_path = Path(dir_path) / 'frames.binpack'
-                index_path = Path(dir_path) / 'frames_index.npz'
-                if not pack_path.is_file() or not index_path.is_file():
-                    return [], []
+            pack_name = {'.bin': 'frames.binpack', '.npy': 'frames.pcpack',
+                         '.pkl': 'frames.gtpack'}.get(suffix)
+            pack_path = Path(dir_path) / pack_name if pack_name else None
+            index_path = Path(dir_path) / 'frames_index.npz'
+            if pack_path is not None and pack_path.is_file() and index_path.is_file():
                 with np.load(index_path, allow_pickle=False) as index:
                     required = {'frame_names', 'timestamps_ns', 'offsets', 'lengths'}
                     missing = required - set(index.files)
@@ -832,7 +834,7 @@ class HPE_Dataset(Dataset):
 
                 count = len(names)
                 if not (len(timestamps) == len(offsets) == len(lengths) == count):
-                    raise ValueError(f"打包 BIN 索引字段长度不一致: {index_path}")
+                    raise ValueError(f"打包索引字段长度不一致: {index_path}")
                 pack_size = pack_path.stat().st_size
                 if count and (
                     offsets[0] != 0
@@ -840,10 +842,10 @@ class HPE_Dataset(Dataset):
                     or np.any(offsets[1:] != offsets[:-1] + lengths[:-1])
                     or offsets[-1] + lengths[-1] != pack_size
                 ):
-                    raise ValueError(f"打包 BIN offset/length 非连续或越界: {index_path}")
+                    raise ValueError(f"打包 offset/length 非连续或越界: {index_path}")
 
                 refs = [
-                    PackedBinFrame(
+                    PackedFrame(
                         pack_path=str(pack_path),
                         frame_name=str(names[idx]),
                         timestamp_ns=int(timestamps[idx]),
@@ -1081,7 +1083,7 @@ class HPE_Dataset(Dataset):
                 sensor_file = data['files'][sensor_idx]
                 frame_paths[name] = (
                     sensor_file
-                    if isinstance(sensor_file, PackedBinFrame)
+                    if isinstance(sensor_file, PackedFrame)
                     else os.path.join(data['path'], sensor_file)
                 )
 
@@ -1093,47 +1095,39 @@ class HPE_Dataset(Dataset):
 
         return result
 
-    def _build_sensor_paths(self, group_dir: Path) -> Dict[str, Optional[Path]]:
-        """
-        构建传感器路径字典
-        """
-        sensor_paths = {}
-        radar_low_path = group_dir / 'dpct低位机'
-        radar_low_bin_path = radar_low_path / 'Bin'
-        radar_low_pc_path = radar_low_path / 'PC'
-        radar_high_path = group_dir / 'dpct高位机'
-        if self.radar_bin_root is None:
-            radar_high_bin_path = radar_high_path / 'Bin'
-        else:
-            relative_group = group_dir.relative_to(self.root_path)
-            radar_high_bin_path = (
-                self.radar_bin_root
-                / relative_group
-                / 'dpct高位机'
-                / 'Bin'
-            )
-            pack_path = radar_high_bin_path / 'frames.binpack'
-            index_path = radar_high_bin_path / 'frames_index.npz'
-            if not pack_path.is_file() or not index_path.is_file():
-                print(
-                    "SSD 打包文件缺失，跳过当前数据组: "
-                    f"pack={pack_path}, index={index_path}"
-                )
-        radar_high_pc_path = radar_high_path / 'PC'
-        lidar_path = group_dir / 'robosense'
-        realsense_path = group_dir / 'realsense' / 'undistorted_depth'
-        gt_path = group_dir / 'camera results' / 'smoothed 3D'
+    def _source_file(self, relative_path: Union[str, Path]) -> Path:
+        """优先读取 SSD 中的辅助文件，缺失时回退到原始数据目录。"""
+        if self.packed_data_root is not None:
+            packed_path = self.packed_data_root / relative_path
+            if packed_path.is_file():
+                return packed_path
+        return self.root_path / relative_path
 
-        sensor_paths = {
-            'lidar': lidar_path if self.sensor_config['lidar'] else None,
-            'radar_low_bin': radar_low_bin_path if self.sensor_config['radar_low_bin'] else None,
-            'radar_high_bin': radar_high_bin_path if self.sensor_config['radar_high_bin'] else None,
-            'radar_low_pc': radar_low_pc_path if self.sensor_config['radar_low_pc'] else None,
-            'radar_high_pc': radar_high_pc_path if self.sensor_config['radar_high_pc'] else None,
-            'gt': gt_path if self.sensor_config['gt'] else None,
-            'realsense': realsense_path if self.sensor_config['realsense'] else None,
-        }
-        
+    def _build_sensor_paths(self, group_dir: Path) -> Dict[str, Optional[Path]]:
+        """按组、按传感器选择完整打包文件；缺失时使用原始目录。"""
+        sensor_paths = {}
+        for sensor_name, (relative_dir, pack_name) in {
+            'radar_high_bin': ('dpct高位机/Bin', 'frames.binpack'),
+            'radar_low_bin': ('dpct低位机/Bin', 'frames.binpack'),
+            'radar_high_pc': ('dpct高位机/PC', 'frames.pcpack'),
+            'radar_low_pc': ('dpct低位机/PC', 'frames.pcpack'),
+            'gt': ('camera results/smoothed 3D', 'frames.gtpack'),
+            'lidar': ('robosense', None),
+            'realsense': ('realsense/undistorted_depth', None),
+        }.items():
+            if not self.sensor_config.get(sensor_name):
+                sensor_paths[sensor_name] = None
+                continue
+            directory = group_dir / relative_dir
+            if self.packed_data_root is not None:
+                packed_dir = (self.packed_data_root
+                              / group_dir.relative_to(self.root_path) / relative_dir)
+                if pack_name is not None:
+                    if (packed_dir / pack_name).is_file() and (packed_dir / 'frames_index.npz').is_file():
+                        directory = packed_dir
+                elif packed_dir.is_dir():
+                    directory = packed_dir
+            sensor_paths[sensor_name] = directory
         return sensor_paths
 
     def _copy_cached_data(self, data: Any) -> Any:
@@ -1160,6 +1154,8 @@ class HPE_Dataset(Dataset):
         path: Path | str,
         load_fn: Callable[[Path | str], Any],
     ) -> Optional[Any]:
+        if isinstance(path, PackedFrame):
+            return None
         path_key = str(path)
         cache = self._get_cache_for_sensor(sensor_name)
 
@@ -1187,7 +1183,8 @@ class HPE_Dataset(Dataset):
         )
 
         if cached_data is None:
-            return load_fn(path)
+            return (self._load_packed_frame(path)
+                    if isinstance(path, PackedFrame) else load_fn(path))
 
         return self._copy_cached_data(cached_data)
 
@@ -1221,14 +1218,15 @@ class HPE_Dataset(Dataset):
         """
         gt_path = Path(gt_path)
         action_dir = gt_path.parent.parent / 'action label'
-        pkl_path = action_dir / f'{gt_path.stem}.pkl'
-        npz_path = action_dir / f'{gt_path.stem}.npz'
-
-        if pkl_path.exists():
-            return pkl_path
-        if npz_path.exists():
-            return npz_path
-        return pkl_path
+        relative_dir = action_dir.relative_to(self.root_path)
+        for source_root in (self.packed_data_root, self.root_path):
+            if source_root is None:
+                continue
+            for suffix in ('.pkl', '.npz'):
+                candidate = source_root / relative_dir / f'{gt_path.stem}{suffix}'
+                if candidate.is_file():
+                    return candidate
+        return action_dir / f'{gt_path.stem}.pkl'
 
     def _load_gt_action_frame(
         self,
@@ -1240,6 +1238,11 @@ class HPE_Dataset(Dataset):
         action pkl 支持 ``{'labels': ..., 'valid': ...}``；其中 valid
         不参与筛选，人体有效性统一由 GT 是否缺失/包含非有限关节决定。
         """
+        packed_gt = gt_path if isinstance(gt_path, PackedFrame) else None
+        if packed_gt is not None:
+            gt_path = (self.root_path
+                       / Path(packed_gt.pack_path).relative_to(self.packed_data_root).parent
+                       / packed_gt.frame_name)
         gt_path = Path(gt_path)
         action_path = self._get_action_path(gt_path)
 
@@ -1258,7 +1261,8 @@ class HPE_Dataset(Dataset):
                 load_once=load_once,
             )
 
-        raw_gt = load_pickle(gt_path)
+        raw_gt = (self._load_packed_frame(packed_gt, raw_gt=True)
+                  if packed_gt is not None else load_pickle(gt_path))
 
         if action_path.suffix.lower() == '.npz':
             def load_action_npz() -> Dict[str, np.ndarray]:
@@ -1380,7 +1384,7 @@ class HPE_Dataset(Dataset):
 
     def preload_data_cache(self) -> None:
         """
-        在主进程中预热点云和 GT 缓存。
+        在主进程中预热原始小文件的点云和 GT 缓存；SSD 打包帧跳过。
 
         Linux 默认 fork worker 时，这些只读缓存的数据 buffer 可以被子进程共享。
         """
@@ -1391,6 +1395,8 @@ class HPE_Dataset(Dataset):
             seen_paths = set()
             for window_paths in path_windows:
                 for path in window_paths:
+                    if isinstance(path, PackedFrame):
+                        continue
                     path_key = str(path)
                     if path_key in seen_paths:
                         continue
@@ -1411,9 +1417,9 @@ class HPE_Dataset(Dataset):
             return None
 
         if (
-            sensor_name == 'radar_high_bin'
+            sensor_name in {'radar_high_bin', 'radar_low_bin'}
             and sensor_path
-            and all(isinstance(path, PackedBinFrame) for path in sensor_path)
+            and all(isinstance(path, PackedFrame) for path in sensor_path)
         ):
             return self._get_packed_bin_sequence(sensor_path)
 
@@ -1429,29 +1435,43 @@ class HPE_Dataset(Dataset):
             )
         return data
 
-    def _get_packed_bin_sequence(
-        self,
-        frame_refs: List[PackedBinFrame],
-    ) -> List[np.ndarray]:
-        pack_paths = {ref.pack_path for ref in frame_refs}
-        if len(pack_paths) != 1:
-            raise ValueError("同一个时间窗口不能跨越多个 BIN 打包文件")
-
+    def _packed_bytes(self, ref: PackedFrame) -> np.ndarray:
         current_pid = os.getpid()
         if self.packed_bin_cache_pid != current_pid:
             self.packed_bin_cache.clear()
             self.packed_bin_cache_pid = current_pid
 
-        pack_path = frame_refs[0].pack_path
+        pack_path = ref.pack_path
         if pack_path not in self.packed_bin_cache:
             self.packed_bin_cache[pack_path] = np.memmap(
                 pack_path, mode='r', dtype=np.uint8,
             )
         packed = self.packed_bin_cache[pack_path]
 
+        return packed[ref.offset:ref.offset + ref.length]
+
+    def _load_packed_frame(self, ref: PackedFrame, raw_gt=False) -> np.ndarray:
+        raw = self._packed_bytes(ref)
+        if ref.frame_name.lower().endswith('.npy'):
+            return np.load(io.BytesIO(raw.tobytes()), allow_pickle=False)
+        if ref.frame_name.lower().endswith('.pkl'):
+            gt = pickle.loads(raw)
+            return gt if raw_gt else gt[~np.isnan(gt).any(axis=(1, 2))]
+        return bin_buffer_to_cube_range_fft(
+            raw, self.radar_config, source_name=ref.frame_name,
+        )
+
+    def _get_packed_bin_sequence(
+        self,
+        frame_refs: List[PackedFrame],
+    ) -> List[np.ndarray]:
+        pack_paths = {ref.pack_path for ref in frame_refs}
+        if len(pack_paths) != 1:
+            raise ValueError("同一个时间窗口不能跨越多个 BIN 打包文件")
+
         output = []
         for ref in frame_refs:
-            raw = packed[ref.offset:ref.offset + ref.length]
+            raw = self._packed_bytes(ref)
             frame = bin_buffer_to_cube_range_fft(
                 raw,
                 self.radar_config,
@@ -1480,20 +1500,11 @@ class HPE_Dataset(Dataset):
         if date in self.calib_cache:
             return self.calib_cache[date]
 
-        calib_path = self.root_path / date / 'calib'
-
-        if not calib_path.exists():
-            raise FileNotFoundError(
-                f"标定目录不存在: {calib_path}"
-            )
-
-        low_path = (
-            calib_path
-            / 'extrinsic_img_to_radar_low.npz'
+        low_path = self._source_file(
+            Path(date) / 'calib/extrinsic_img_to_radar_low.npz'
         )
-        high_path = (
-            calib_path
-            / 'extrinsic_img_to_radar_high.npz'
+        high_path = self._source_file(
+            Path(date) / 'calib/extrinsic_img_to_radar_high.npz'
         )
 
         if not low_path.exists():
@@ -1861,7 +1872,10 @@ class HPE_Dataset(Dataset):
                         sensor_name,
                         paths,
                     )
-                date = paths[0].split('/')[3]
+                first = paths[0]
+                frame_path = Path(first.pack_path if isinstance(first, PackedFrame) else first)
+                source_root = self.packed_data_root if isinstance(first, PackedFrame) else self.root_path
+                date = frame_path.relative_to(source_root).parts[0]
             else:
                 data = self._get_sensor_data_from_path(
                     sensor_name,

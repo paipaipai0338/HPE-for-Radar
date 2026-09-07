@@ -1,79 +1,90 @@
 experiment:
-  description: ResNet3D baseline using high radar bin
+  description: P4Transformer baseline using high radar pc
   output_path: /home/pai/Huawei/experiments
 
 data:
     # NAS 地址
     root_path: /mnt/huawei
-    # SSD Bin 地址
-    radar_bin_root: /mnt/ssd/Huawei
+    # 优先读取 SSD 打包数据；缺少对应打包文件或索引时回退到 root_path
+    packed_data_root: /mnt/ssd/Huawei
     # 时钟基准
-    base_source: radar_high_bin
+    base_source: radar_high_pc
+    # train / total
     ratio: 0.7
-    T: 1
-    split_method: group
-    max_points: 300
+    # consist time step
+    T: 8
+    # 数据划分方式
+    split_method: person
+    # 每帧点云最大数量
+    max_points: 200
+    # 每帧估计最大人数
     max_people: 4
     num_workers: 8
+    # 仅预加载原始 PC/GT 小文件，SSD 打包帧跳过
     preload_cache: true
+    # 是否获取行为标签
     enable_action: false
+    # 是否对点云进行 俯仰、偏航、横滚 的集合增强
     enable_rotation_train: false
     enable_rotation_val: false
+    # 获取数据配置
     sensor_config:
         lidar: false
         radar_low_bin: false
-        radar_high_bin: true
+        radar_high_bin: false
         radar_low_pc: false
-        radar_high_pc: false
+        radar_high_pc: true
         gt: true
         realsense: false
+    # 检测范围
     xyz_limits:
         - [0.0, 6.0]
         - [-3.0, 3.0]
         - [-2.0, 2.0]
-    # RPM2
+    # RPM2 数据处理结果shape
     map_size: [256, 256]
-    # HRRadarPose ResNet3D
+    # HRRadarPose ResNet3D 数据处理结果shape
     cube_size: [96, 96, 32]
-    # BIN 预处理：在频移 FFT/角度谱计算前扣除 chirp 维复数均值
+    # BIN 预处理：在频移 FFT/角度谱计算前是否减去 chirp 维复数均值
     remove_static: true
 model:
-    name: ResNet3D
+    name: P4Transformer
 
 radar:
+    # 测角方法 [bartlett, mvdr, music]
     angle_method: bartlett
 
 task:
-    stage: train
-    input: radar_high_bin
+    stage: val
+    input: radar_high_pc
     output: gt_for_high
-    device: 1
+    device: 0
     seed: 42
-    batch_size: 8
+    batch_size: 64
     # 数值精度: FP32 / FP16 / BF16
     precision: BF16
     # 匈牙利匹配
     matching_for_hungarian:
-        pose_matching_by_hip: true
+        pose_matching_by_hip: false
         pose_confidence_weight: 0.1
         bbox_l1_weight: 5.0
         bbox_iou_weight: 2.0
     # 坐标归一化，仅适配于点云
     center_on_hip: false
     train:
-        epoch: 100
+        epoch: 500
         init_lr: 0.001
         warmup_epoch: 10
         resume:
           enabled: false
-          checkpoint_path: /home/pai/Huawei/experiments/HRRadarPose/20260901_150207/checkpoint/last.pth
+          checkpoint_path: none
         metrics:
             # Pose loss
             Positive_MPJPE: 1
-            Negative_MPJPE: 0.05
+            Negative_MPJPE: 0
             PAMPJPE: 0
             Bone_Length: 0
-            BCE: 1
+            BCE: 0
             # Detection loss
             bbox_iou: 0
             bbox_l1: 0
@@ -89,17 +100,17 @@ task:
         best_metric: loss
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/ResNet3D/20260903_151742/checkpoint/last.pth
+        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260814_170610/checkpoint/best.pth
         shuffle: false
         score_thresh: 0.1
         iou_thresh: 0.7
         metrics:
             # Pose loss
             Positive_MPJPE: 1
-            Negative_MPJPE: 1
+            Negative_MPJPE: 0
             PAMPJPE: 0
             Bone_Length: 0
-            BCE: 1
+            BCE: 0
             # Detection loss
             bbox_iou : 0
             bbox_l1: 0

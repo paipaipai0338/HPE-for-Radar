@@ -70,7 +70,6 @@ def main():
         args.max_val_groups,
     )):
         cfg_data['preload_cache'] = False
-    radar_bin_root = cfg_data.get('radar_bin_root')
     # 判断模型重复值是否相等
     model_config_path = (Path(__file__).resolve().parents[1] / 'models' / cfg_model['name'] / 'model_config.yaml')
     cfg_model_arch = load_config(model_config_path)
@@ -111,8 +110,8 @@ def main():
     if cfg_task['stage'] == 'train':
         # 获取dataloader
         dataset = {
-            'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_train'], radar_config=radar_config, radar_bin_root=radar_bin_root, max_groups=args.max_train_groups),
-            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, radar_bin_root=radar_bin_root, max_groups=args.max_val_groups),
+            'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_train'], radar_config=radar_config, packed_data_root=cfg_data.get('packed_data_root'), max_groups=args.max_train_groups),
+            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, packed_data_root=cfg_data.get('packed_data_root'), max_groups=args.max_val_groups),
         }
         for split, max_samples in (
             ('train', args.max_train_samples),
@@ -294,7 +293,7 @@ def main():
 
         # 获取dataloader
         dataset = {
-            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, radar_bin_root=radar_bin_root),
+            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, packed_data_root=cfg_data.get('packed_data_root')),
         }
         collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
         dataloader = {

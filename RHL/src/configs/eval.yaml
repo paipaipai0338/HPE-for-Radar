@@ -1,0 +1,170 @@
+pipeline:
+  dataset:
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260703"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260706"
+    #     group_tags: ["group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260707"
+    #     group_tags: ["group_011", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260708"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260709"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046", "group_047"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260710"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_020", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046", "group_047", "group_048"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    - type: "PocHuPsenSif_for_eval"
+      params:
+        root_dir: "/mnt/huawei"
+        date_tag: "20260714"
+        group_tags: ["group_011", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046", "group_047", "group_048", "group_049", "group_050", "group_051"]
+        sensor_tag: "dpct高位机"
+        pc_tag: "PC"
+        consider_invalid: True
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260715"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260716"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260717"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260718"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260719"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260720"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260721"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260722"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260723"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260727"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260728"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_030", "group_032"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    # - type: "PocHuPsenSif_for_eval"
+    #   params:
+    #     root_dir: "/mnt/huawei"
+    #     date_tag: "20260730"
+    #     group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037", "group_038", "group_039", "group_040", "group_041", "group_042", "group_043", "group_044", "group_045", "group_046", "group_047", "group_048"]
+    #     sensor_tag: "dpct高位机"
+    #     pc_tag: "PC"
+    #     consider_invalid: False
+    - type: "PocHuPsenSif_for_eval"
+      params:
+        root_dir: "/mnt/huawei"
+        date_tag: "20260811"
+        group_tags: ["group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032","group_037"]
+        sensor_tag: "dpct高位机"
+        pc_tag: "PC"
+        consider_invalid: True
+    - type: "PocHuPsenSif_for_eval"
+      params:
+        root_dir: "/mnt/huawei"
+        date_tag: "20260814"
+        group_tags: ["group_011", "group_012", "group_013", "group_014", "group_015", "group_016", "group_017", "group_018", "group_019", "group_020", "group_021", "group_022", "group_023", "group_024", "group_025", "group_026", "group_027", "group_028", "group_029", "group_030", "group_031", "group_032", "group_033", "group_034", "group_035", "group_036", "group_037"]
+        sensor_tag: "dpct高位机"
+        pc_tag: "PC"
+        consider_invalid: True
