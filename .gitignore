@@ -64,3 +64,7 @@ fig/
 *.jpeg
 *.mp4
 *.avi
+
+# Local RHL and WSC modules
+RHL/
+WSC/
