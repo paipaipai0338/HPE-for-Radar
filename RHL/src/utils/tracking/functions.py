@@ -5,6 +5,7 @@ import math
 from typing import Optional, Union
 
 
+
 # 建立新目标
 def set_target(
     tracking_info: TrackingInfo,
@@ -17,21 +18,13 @@ def set_target(
     for det_rst in det_rsts:
         if det_rst.best_id != -1:
             continue
+        
         # 判断目标当前检测位置是否位于 核心区域
-        
-        x = det_rst.bbox_center[0]
-        y = det_rst.bbox_center[1]
-        
-        in_core_area = False
-        if (
-            tracking_alg_param.core_area.xback <= x <= tracking_alg_param.core_area.xfront and 
-            tracking_alg_param.core_area.yright <= y <= tracking_alg_param.core_area.yleft
-            ):
-            in_core_area = True
+        in_core_area = det_rst.is_in_core_area(core_area=tracking_alg_param.core_area)
         if not in_core_area:
-            establish_target_points_thresh = 0.35 * tracking_alg_param.establish_target_points_thresh
+            establish_target_points_thresh = tracking_alg_param.establish_target_points_thresh_boundary_area
         else:
-            establish_target_points_thresh = tracking_alg_param.establish_target_points_thresh
+            establish_target_points_thresh = tracking_alg_param.establish_target_points_thresh_core_area
         if len(det_rst.association_points) < establish_target_points_thresh:
             det_rst.discard = True
             continue
@@ -75,8 +68,7 @@ def set_target(
                 isTargetStatic = 0,
                 useStaticAssist = 0,
                 delete_flag = 0,
-                gC_det = 0.0,
-                establish_target_points_thresh=establish_target_points_thresh,
+                gC_det = 0.0
             )
         )
         ID+=1
@@ -456,8 +448,16 @@ def target_associate_greedy(
         gate_limits = trk.gate_limits
         e_thresh = trk.euclidean_distance_threshold
         t_uid = str(trk.uid)
+        trk_speed = math.sqrt(trk.S_apriori_hat[3]**2 + trk.S_apriori_hat[4]**2 + trk.S_apriori_hat[5]**2)
 
         for d_idx, det in enumerate(det_rsts):
+            det_speed = math.sqrt(
+                det.center_state[3]**2 + det.center_state[4]**2 + det.center_state[5]**2
+            ) if det.center_state is not None else 0.0
+            if trk_speed < 0.2 and det_speed > 0.5:
+                continue
+            if trk_speed > 0.5 and det_speed < 0.2:
+                continue
             offset = trk.S_apriori_hat[:3] - det.bbox_center
             if (abs(offset[0]) > gate_limits[0] or 
                 abs(offset[1]) > gate_limits[1] or 
@@ -546,7 +546,7 @@ def track_event(
                 
                 # 根据是否在场景内以及边界条件，动态计算允许连续漏检的最大帧数门限 (thre)
                 if inScene:
-                    thre = 30
+                    thre = tracking_alg_param.active2freeThre
                 else:
                     # 不在场景内（已出界）：默认生存阈值
                     thre = tracking_alg_param.active2freeThre  # 通常为 30
@@ -651,7 +651,13 @@ def kalman_update_active(
 
     HPH = kalman_stats.H @ tracking_target.P_apriori_hat @ kalman_stats.H.T
 
-    if associate_points_num >= tracking_alg_param.minpts:
+    in_core_area = det_rst.is_in_core_area(core_area=tracking_alg_param.core_area)
+    if in_core_area:
+        updata_minpts = tracking_alg_param.minpts_core_area
+    else:
+        updata_minpts = tracking_alg_param.minpts_boundary_area
+
+    if associate_points_num >= updata_minpts:
         alpha = (tracking_target.estNumOfPoints - associate_points_num) / ((tracking_target.estNumOfPoints - 1) * associate_points_num)
         # 目标状态测量噪声协方差，并非单一点，而是所有点组成的整体目标
         Rc = (1.0 / associate_points_num) * Rm + alpha * tracking_target.gD
@@ -671,12 +677,17 @@ def kalman_update_active(
         # 关联点不足，直接沿用先验预测值（观测不可靠不更新）
         tracking_target.S_hat[:] = tracking_target.S_apriori_hat
         tracking_target.P_hat[:, :] = tracking_target.P_apriori_hat
-        
+
+    if in_core_area:
+        hit_points_thresh = 0.8 * tracking_alg_param.establish_target_points_thresh_core_area
+    else:
+        hit_points_thresh = 0.8 * tracking_alg_param.establish_target_points_thresh_boundary_area
     if isinstance(tracking_target, TempTargetType):
-        if associate_points_num > 0.8 * tracking_target.establish_target_points_thresh:
+        if associate_points_num > hit_points_thresh:
             tracking_target.hit_count += 1
         else:
             tracking_target.hit_count -= 1
+            tracking_target.hit_count = max(0, tracking_target.hit_count)
 
     if tracking_target.isTargetStatic == 1:
         tracking_target.S_hat[0] = tracking_target.S_apriori_saved[0]

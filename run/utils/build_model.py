@@ -11,6 +11,8 @@ def build_model(model_name):
         'VoxelNeXt': 'models/VoxelNeXt',
         'HRRadarPose': 'models/HRRadarPose',
         'ResNet3D': 'models/ResNet3D',
+        'P4TransformerMlp': 'models/P4TransformerMlp',
+        'ConvNeXtV2': 'models/ConvNeXtV2',
     }
 
     if model_name not in model_dirs:

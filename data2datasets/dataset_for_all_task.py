@@ -2,6 +2,7 @@ import random
 import io
 import sys
 import os
+import errno
 import json
 import pickle
 import time
@@ -253,9 +254,9 @@ class HPE_Dataset(Dataset):
     FILE_READ_MAX_ATTEMPTS = 5
     FILE_READ_RETRY_BASE_DELAY_SEC = 0.03
     MIN_RADAR_POINTS_PER_FRAME = 20
-    _ROTATION_ROLL_RANGE_DEG = (-5.0, 5.0)
-    _ROTATION_PITCH_RANGE_DEG = (-5.0, 5.0)
-    _ROTATION_YAW_RANGE_DEG = (-5.0, 5.0)
+    _ROTATION_ROLL_RANGE_DEG = (-2.0, 2.0)
+    _ROTATION_PITCH_RANGE_DEG = (-2.0, 2.0)
+    _ROTATION_YAW_RANGE_DEG = (-2.0, 2.0)
     DEFAULT_BAD_BIN_FRAMES_PATH = Path(__file__).with_name(
         'bad_bin_frames.json'
     )
@@ -269,6 +270,7 @@ class HPE_Dataset(Dataset):
         split_method='group',
         ratio=0.7,
         T=8,
+        acc_frame=0,
         preload_cache=True,
         enable_rotation=False,
         enable_action=False,
@@ -293,6 +295,8 @@ class HPE_Dataset(Dataset):
                 "enable_action 必须为 bool，"
                 f"实际为 {type(enable_action).__name__}"
             )
+        if isinstance(acc_frame, bool) or not isinstance(acc_frame, int) or acc_frame < 0:
+            raise ValueError("acc_frame 必须为非负整数")
 
         self.root_path = Path(root_path)
         self.mode = mode
@@ -308,6 +312,7 @@ class HPE_Dataset(Dataset):
         self.base_source = base_source
         self.ratio = ratio
         self.T = T
+        self.acc_frame = acc_frame
         self.action_label = [
             'stand',
             'sit_squat',
@@ -330,10 +335,13 @@ class HPE_Dataset(Dataset):
         json_path = self._source_file('data description.json')
         self.meta_info = get_meta_info(json_path)
         if split_method == 'person':
+            # 预筛选与后续划分共用同一份人员名单。
+            train_person_ids = {'0', '1', '2', '5', '6', '7', '8'}
+            val_person_ids = {'3', '4'}
             person_ids = (
-                {'0', '1', '2', '3', '5'}
+                train_person_ids
                 if mode == 'train'
-                else {'4', '6', '7', '8'}
+                else val_person_ids
             )
             self.meta_info = {
                 person_id: person_data
@@ -395,9 +403,6 @@ class HPE_Dataset(Dataset):
         self.meta_info_splited = {'train': copy.deepcopy(self.meta_info), 'val': copy.deepcopy(self.meta_info)}
         if split_method == 'person':
             # 按人来划分
-            train_person_ids = {'0', '1', '2', '3', '5'}
-            val_person_ids = {'4', '6', '7', '8'}
-
             self.meta_info_splited['train'] = {
                 person_id: person_data
                 for person_id, person_data in self.meta_info.items()
@@ -423,13 +428,12 @@ class HPE_Dataset(Dataset):
         elif split_method == 'sequence':
             # 按照序列来划分
             pass
-        self._display_meta_info(self.meta_info)
-        self._display_meta_info(self.meta_info_splited['train'])
-        self._display_meta_info(self.meta_info_splited['val'])
+        self._display_meta_info(self.meta_info_splited[mode])
 
         # meta_info 展平按 T 划分
         self.mode_meta_info = self.meta_info_splited[mode]
         self.data_path_list = {k: [] for k in self.sensor_config if self.sensor_config[k]}
+        self.acc_path_list = {k: [] for k in self.data_path_list if k in {'radar_high_pc', 'radar_low_pc'}}
         for person_id, person_data in self.mode_meta_info.items():
             for entry in person_data:
                 valid_group = entry['valid_group']
@@ -451,6 +455,12 @@ class HPE_Dataset(Dataset):
                         for sensor_name, window_files in window_by_sensor.items():
                             # 将文件路径列表添加到 data_path_list 中
                             self.data_path_list[sensor_name].append(window_files)
+                            if sensor_name in self.acc_path_list:
+                                all_files = group_data_path[group][sensor_name]
+                                history = all_files[max(0, start_idx - acc_frame):start_idx]
+                                # 历史坏帧不应使当前有效窗口失效。
+                                history = [p for p in history if self._is_valid_npy(sensor_name, p)]
+                                self.acc_path_list[sensor_name].append(history)
 
         if self.skip_bad_samples > 0:
             print(f"跳过损坏样本窗口数: {self.skip_bad_samples}")
@@ -733,7 +743,9 @@ class HPE_Dataset(Dataset):
                     
                     if not group_dir.exists() and not (
                         self.packed_data_root is not None
-                        and (self.packed_data_root / group_dir.relative_to(self.root_path)).is_dir()
+                        and self._packed_path_exists(
+                            self.packed_data_root / group_dir.relative_to(self.root_path), directory=True
+                        )
                     ):
                         print(f"目录不存在: Person id:{person_id}, Date:{date}, Group:{group_dir}")
                         continue
@@ -1095,11 +1107,22 @@ class HPE_Dataset(Dataset):
 
         return result
 
+    @staticmethod
+    def _packed_path_exists(path: Path, directory: bool = False) -> bool:
+        """SSD 路径无法读取时，允许调用方使用原始数据目录。"""
+        try:
+            return path.is_dir() if directory else path.is_file()
+        except OSError as exc:
+            if exc.errno != errno.EIO:
+                raise
+            print(f"SSD 读取失败，回退到原始数据目录: {path} ({exc})")
+            return False
+
     def _source_file(self, relative_path: Union[str, Path]) -> Path:
         """优先读取 SSD 中的辅助文件，缺失时回退到原始数据目录。"""
         if self.packed_data_root is not None:
             packed_path = self.packed_data_root / relative_path
-            if packed_path.is_file():
+            if self._packed_path_exists(packed_path):
                 return packed_path
         return self.root_path / relative_path
 
@@ -1123,9 +1146,10 @@ class HPE_Dataset(Dataset):
                 packed_dir = (self.packed_data_root
                               / group_dir.relative_to(self.root_path) / relative_dir)
                 if pack_name is not None:
-                    if (packed_dir / pack_name).is_file() and (packed_dir / 'frames_index.npz').is_file():
+                    if (self._packed_path_exists(packed_dir / pack_name)
+                            and self._packed_path_exists(packed_dir / 'frames_index.npz')):
                         directory = packed_dir
-                elif packed_dir.is_dir():
+                elif self._packed_path_exists(packed_dir, directory=True):
                     directory = packed_dir
             sensor_paths[sensor_name] = directory
         return sensor_paths
@@ -1224,7 +1248,8 @@ class HPE_Dataset(Dataset):
                 continue
             for suffix in ('.pkl', '.npz'):
                 candidate = source_root / relative_dir / f'{gt_path.stem}{suffix}'
-                if candidate.is_file():
+                if (self._packed_path_exists(candidate) if source_root == self.packed_data_root
+                        else candidate.is_file()):
                     return candidate
         return action_dir / f'{gt_path.stem}.pkl'
 
@@ -1847,6 +1872,14 @@ class HPE_Dataset(Dataset):
 
         return rotated_sequence
 
+    @staticmethod
+    def _accumulate_pointcloud_sequence(frames: List[np.ndarray], history_count: int, acc_frame: int) -> List[np.ndarray]:
+        """当前帧与同组前 acc_frame 帧直接拼接，不改变时间维长度。"""
+        return [
+            np.concatenate(frames[max(0, history_count + i - acc_frame):history_count + i + 1], axis=0)
+            for i in range(len(frames) - history_count)
+        ]
+
     def __len__(self) -> int:
         return len(self.data_path_list[self.base_source])
 
@@ -1881,6 +1914,10 @@ class HPE_Dataset(Dataset):
                     sensor_name,
                     paths,
                 )
+                if sensor_name in self.acc_path_list and self.acc_frame:
+                    history_paths = self.acc_path_list[sensor_name][idx]
+                    history = self._get_sensor_data_from_path(sensor_name, history_paths)
+                    data = self._accumulate_pointcloud_sequence(history + data, len(history), self.acc_frame)
                 samples[sensor_name] = data
         
         calib = self._load_calib_T(date)
@@ -1893,9 +1930,14 @@ class HPE_Dataset(Dataset):
         R_high_to_low = calib['high_to_low']['R']
         t_high_to_low = calib['high_to_low']['t']
 
+        # 新增人体增广始终使用未扰动的低位机重力坐标系。
+        R_high_to_gravity = R_high_to_low.copy()
+        t_high_to_gravity = t_high_to_low.copy()
+
         if self.enable_rotation:
             # 雷达安装角在一个 T 帧窗口内固定；高低雷达使用同一个 A。
             rotation = self._sample_rotation_matrix()
+            R_high_to_gravity = R_high_to_gravity @ rotation.T
 
             for radar_key in (
                 'radar_high_pc',
@@ -1939,6 +1981,9 @@ class HPE_Dataset(Dataset):
                 t=t_low,
             )
         )
+
+        samples['high_to_gravity_R'] = [R_high_to_gravity.copy() for _ in range(self.T)]
+        samples['high_to_gravity_t'] = [t_high_to_gravity.copy() for _ in range(self.T)]
 
         samples['high_to_low_R'] = [
             R_high_to_low.copy()

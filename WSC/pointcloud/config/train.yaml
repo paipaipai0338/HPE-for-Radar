@@ -1,0 +1,66 @@
+dataset:
+  root: /mnt/huawei
+  train_dates: ["20260703", "20260706", "20260707", "20260708", "20260709", "20260710", "20260716", "20260718", "20260719"]
+  val_dates: ["20260717"]
+  group_start_index: 11
+  max_points: 128
+  sequence_length: 8
+  train_window_stride: 1
+  val_window_stride: 1
+  max_sync_delta_seconds: 0.10
+  max_frame_gap_seconds: 0.18
+  cache_associated_points: true
+  sample_index_cache_dir: outputs/pointcloud/cache/sample_index
+  association_cache_dir: outputs/pointcloud/cache/association_high_pose_box_xy_expansion
+  association_mode: high_pose_box
+  coordinate_frame: low
+  preserve_z_height: true
+  high_pose_box_padding: 0.15
+  high_pose_box_min_points: 40
+  high_pose_box_xy_radius: 0.20
+  high_pose_box_z_radius: 0.25
+
+augmentation:
+  enabled: true
+  yaw_range_degrees: [-120, 120]
+  tilt_range_degrees: [-3, 3]
+  coordinate_noise_std: 0.01
+  point_dropout_range: [0.0, 0.10]
+  local_dropout_probability: 0
+  local_dropout_max_fraction: 0
+  minimum_retained_points: 32
+
+model:
+  coordinate_scale: 1.0
+  doppler_scale: 2.5
+  use_doppler: false
+  point_feature_dim: 64
+  frame_feature_dim: 128
+  shape_feature_dim: 32
+  shape_statistic_dim: 8
+  use_shape_statistics: true
+  use_compact_statistics: false
+  use_point_count: false
+  spatial_encoder: pointnet
+  edge_neighbor_count: 8
+  temporal_layer_count: 3
+  temporal_kernel_size: 2
+  dropout: 0.15
+
+training:
+  device: cuda:1
+  batch_size: 64
+  num_workers: 4
+  prefetch_factor: 2
+  log_interval: 20
+  epochs: 40
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  auxiliary_loss_weight: 0
+  focal_gamma: 1.0
+  scheduler_factor: 0.5
+  scheduler_patience: 3
+  min_learning_rate: 0.000001
+  early_stopping_patience: 10
+  random_seed: 42
+  output_dir: outputs/pointcloud/runs/model_pointnet_8dim_t8_xy_expansion_0719_exp2_z

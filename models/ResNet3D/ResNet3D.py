@@ -14,11 +14,12 @@ class ConvBlock(nn.Module):
             groups=groups,
             bias=False,
         )
-        self.bn = nn.BatchNorm3d(out_channels)
+        # self.bn = nn.BatchNorm3d(out_channels)
         self.act = nn.LeakyReLU(negative_slope=0.1, inplace=True)
 
     def forward(self, x):
-        return self.act(self.bn(self.conv(x)))
+        # return self.act(self.bn(self.conv(x)))
+        return self.act(self.conv(x))
 
 
 class ResNet3D(nn.Module):

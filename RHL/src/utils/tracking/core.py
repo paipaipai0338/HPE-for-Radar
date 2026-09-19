@@ -2,9 +2,7 @@ import numpy as np
 from dataclasses import dataclass,field
 from enum import IntEnum
 
-ID=1                    # 跟踪目标编号
-
-temp_ID = 1                 # 临时目标编号
+ID = 1                    # 跟踪目标编号
 
 @dataclass
 class TrackState(IntEnum):
@@ -36,7 +34,6 @@ class TargetType:
     allocationTime: np.int32 = 0
 
     Center: np.ndarray = field(default_factory=lambda: np.zeros(6, dtype=np.float32))
-    correlationPoints: np.ndarray = field(default_factory=lambda: np.empty((0,6), dtype=np.float32)) 
 
     S_hat: np.ndarray = field(default_factory=lambda: np.zeros(6, dtype=np.float32))            # 状态估计 【x,y,z,vx,vy,vz】
     S_apriori_hat: np.ndarray = field(default_factory=lambda: np.zeros(6, dtype=np.float32))    # 状态预测  【x,y,z,vx,vy,vz】
@@ -77,14 +74,13 @@ class TargetType:
             f"  detect2activeCount: {self.detect2activeCount}\n"
             f"  active2freeCount: {self.active2freeCount}\n")
 
+
 @dataclass
 class TempTargetType(TargetType):
     hit_count: int = 0
     is2target: bool = False     # 是否已成为正式 跟踪对象
 
     remove: bool = False        # 是否删除该临时对象
-    
-    establish_target_points_thresh: int = 1000        # 该临时目标建立的点数阈值
 
     def __repr__(self):
         return (f"TempTargetType:\n"
@@ -92,6 +88,7 @@ class TempTargetType(TargetType):
             f"  hit_count: {self.hit_count}\n"
             f"  is2target: {self.is2target}\n"
             f"  remove:     {self.remove}\n")
+
 
 
 @dataclass
@@ -119,18 +116,24 @@ class TrackingAlgParam:
 
     gate_limits: np.ndarray = field(default_factory=lambda: np.array([1.0, 1.0, 1.0, 1000, 1000, 1000], dtype=np.float16))
 
-    establish_target_points_thresh: int = 60        # 新目标建立所需最少点数
+    establish_target_points_thresh_core_area: int = 100        # 新目标建立所需最少点数(核心区域)
+    establish_target_points_thresh_boundary_area: int = 25    # 新目标建立所需最少点数（边界区域）
+
+
     pointsThre: np.int16 = 5       # detect→active 点数
     det2actThre: np.int16 = 7      # DETECTION→ACTIVE 帧数
-    det2freeThre: np.int16 = 10    # DETECTION→FREE 帧数
-    
+    det2freeThre: np.int16 = 15    # DETECTION→FREE 帧数
+
     temp2formatThre: int = 5            # 临时对象 转换为 正式对象 所需至少连续命中次数
 
     static2freeThre: np.int16 = 50
-    active2freeThre: np.int16 = 30
+    active2freeThre: np.int16 = 15
     active2outThre: np.int16 = 5
 
-    minpts: np.int16 = 10           # 卡尔曼更新所需要最少的目标点数
+    minpts_core_area: np.int16 = 10           # 卡尔曼更新所需要目标的最少点数（核心区域）
+    minpts_boundary_area: np.int16 = 3        # 卡尔曼更新所需要目标的最少点数（边界区域）
+
+
     adjDistThre: float = 0.75        # 新建目标与已有目标邻接判断距离阈值（小于该阈值则不新建目标）
 
     gain: float = 15              # 马氏距离门限
@@ -140,11 +143,11 @@ class TrackingAlgParam:
     spreadMin: np.ndarray = field(default_factory=lambda: np.full(6, 0.25, dtype=np.float32))
 
     box: BoxType = field(default_factory=BoxType)
-    
+
     core_area: CoreArea = field(default_factory=CoreArea)
 
     sizeSmoothFactor: float = 0.2       # 最终 size = sizeSmoothFactor * 旧 size + (1 - sizeSmoothFactor) 新 size
-    
+
     Rc_scale: float = 1.0   # 测量噪声协方差系数，小于 1.0 时，卡尔曼更新倾向于测量（模型预测），大于 1.0 时，卡尔曼更新倾向于卡尔曼预测的结果
 
 @dataclass
@@ -160,10 +163,22 @@ class DetectionTarget:
 
     point_mask: np.ndarray = None               # 该目标在当前输入点云中的布尔掩码，形状: (N,), bool
     point_indices: np.ndarray = None            # 属于该目标的点在全局点云中的下标索引，形状: (M,), int64
-    
+
+
     # debug
     mp_distance: dict = field(default_factory=dict)
     e_distance: dict = field(default_factory=dict)
+
+    def is_in_core_area(self, core_area: CoreArea):
+        x = self.bbox_center[0]
+        y = self.bbox_center[1]
+        in_core_area = False
+        if (
+            core_area.xback <= x <= core_area.xfront and 
+            core_area.yright <= y <= core_area.yleft
+            ):
+            in_core_area = True
+        return in_core_area
 
     def __repr__(self):
         mp_dist_info=""
@@ -172,13 +187,15 @@ class DetectionTarget:
         e_dist_info=""
         for uid in self.e_distance:
             e_dist_info += f"uid:   {uid}\ndist:    {self.e_distance[uid]:.2f}\n"
-        return (f"DetRes:\n"
+        return (
+            f"DetRes:\n"
             f"  best_id: {self.best_id}\n"
             f"  association_points_num: {len(self.association_points)}\n"
             f"  center_state:{np.round(self.center_state[:3], 2)}\n"
             f"  mp_distance: \n{mp_dist_info}"
             f"  e_distance: \n{e_dist_info}"
-            f"  discard: {self.discard}\n")
+            f"  discard: {self.discard}\n"
+        )
 
 
 class TrackingInfo:
@@ -203,6 +220,7 @@ class TrackingInfo:
             target for target in self.temp_targets 
             if not target.remove
         ]
+
 
 
 class KalmanStats:

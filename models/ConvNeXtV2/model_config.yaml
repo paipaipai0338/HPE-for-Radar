@@ -1,0 +1,13 @@
+num_joints: 17
+in_chans: 3
+depths: [2, 2, 2, 2]
+dims: [64, 128, 256, 256]
+drop_path_rate: 0.0
+head_init_scale: 1.0
+
+# Keep these equal to run/config.yaml; run/main.py checks the match.
+xyz_limits:
+  - [0.0, 6.0]
+  - [-3.0, 3.0]
+  - [-2.0, 2.0]
+map_size: [256, 256]

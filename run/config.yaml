@@ -1,11 +1,11 @@
 experiment:
-  description: P4Transformer baseline using high radar pc
+  description: P4Transformer fine-tuning from 20260916_135555 best checkpoint with Pose_Direction and Time_Smoothness
   output_path: /home/pai/Huawei/experiments
 
 data:
     # NAS 地址
     root_path: /mnt/huawei
-    # 优先读取 SSD 打包数据；缺少对应打包文件或索引时回退到 root_path
+    # 优先读取 SSD 打包数据；缺失时回退到 root_path
     packed_data_root: /mnt/ssd/Huawei
     # 时钟基准
     base_source: radar_high_pc
@@ -13,6 +13,8 @@ data:
     ratio: 0.7
     # consist time step
     T: 8
+    # 每帧点云额外拼接同组前 acc_frame 帧，0 表示不积累
+    acc_frame: 2
     # 数据划分方式
     split_method: person
     # 每帧点云最大数量
@@ -25,8 +27,17 @@ data:
     # 是否获取行为标签
     enable_action: false
     # 是否对点云进行 俯仰、偏航、横滚 的集合增强
-    enable_rotation_train: false
+    enable_rotation_train: true
     enable_rotation_val: false
+    # 每个单人窗口在原始低位机重力坐标系中共享平移与绕 z 轴旋转
+    person_geometry_augmentation:
+        enabled_train: true
+        enabled_val: false
+        yaw_range_deg: [-180.0, 180.0]
+        translation_ranges:
+            - [-1.0, 1.0]
+            - [-1.0, 1.0]
+            - [0.0, 0.0]
     # 获取数据配置
     sensor_config:
         lidar: false
@@ -49,13 +60,15 @@ data:
     remove_static: true
 model:
     name: P4Transformer
+    # 可填 checkpoint 路径，仅加载完全匹配的模型权重；null 不加载，resume 优先
+    init_checkpoint: /home/pai/Huawei/experiments/P4Transformer/20260917_142506/checkpoint/best.pth
 
 radar:
     # 测角方法 [bartlett, mvdr, music]
     angle_method: bartlett
 
 task:
-    stage: val
+    stage: train
     input: radar_high_pc
     output: gt_for_high
     device: 0
@@ -70,10 +83,10 @@ task:
         bbox_l1_weight: 5.0
         bbox_iou_weight: 2.0
     # 坐标归一化，仅适配于点云
-    center_on_hip: false
+    center_on_pointcloud: false
     train:
         epoch: 500
-        init_lr: 0.001
+        init_lr: 0.0001
         warmup_epoch: 10
         resume:
           enabled: false
@@ -81,6 +94,10 @@ task:
         metrics:
             # Pose loss
             Positive_MPJPE: 1
+            # 三维朝向 1-cosine；FP32 计算
+            Pose_Direction: 0.1
+            # 相邻帧平均关节位移平方；初始权重，可按训练效果调整
+            Time_Smoothness: 0.1
             Negative_MPJPE: 0
             PAMPJPE: 0
             Bone_Length: 0
@@ -100,13 +117,15 @@ task:
         best_metric: loss
         shuffle: true
     val:
-        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260814_170610/checkpoint/best.pth
+        checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20260909_191752/checkpoint/best.pth
         shuffle: false
         score_thresh: 0.1
         iou_thresh: 0.7
         metrics:
             # Pose loss
             Positive_MPJPE: 1
+            Pose_Direction: 0.1
+            Time_Smoothness: 0.1
             Negative_MPJPE: 0
             PAMPJPE: 0
             Bone_Length: 0

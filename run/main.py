@@ -3,7 +3,7 @@ from pathlib import Path
 from functools import partial
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from preprocess.radarprocess import Radar_Config
@@ -16,8 +16,8 @@ from run.utils.build_model import build_model
 from run.utils.model_init import model_init
 from run.utils.build_metric import Metric
 from run.utils.build_experiment import build_experiment, save_radar_config
-from run.utils.process_one_epoch import train_one_epoch, val_one_epoch, prepare_bin_input, get_autocast_dtype
-from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint
+from run.utils.process_one_epoch import train_one_epoch, val_one_epoch, prepare_bin_input, get_autocast_dtype, center_cropped_pointcloud
+from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint, load_init_checkpoint
 from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_warmup
 
 # from data2datasets.dataset import HPE_Dataset, collate_fn as dataset_collate_fn
@@ -29,19 +29,7 @@ from data2datasets.dataset_for_all_task import HPE_Dataset, collate_fn as datase
 
 def parse_args():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--config",
-        type=str,
-        default='/home/pai/Huawei/run/config.yaml',
-    )
-    parser.add_argument("--init-lr", type=float)
-    parser.add_argument("--epochs", type=int)
-    parser.add_argument("--warmup-epochs", type=int)
-    parser.add_argument("--max-train-samples", type=int)
-    parser.add_argument("--max-val-samples", type=int)
-    parser.add_argument("--max-train-groups", type=int)
-    parser.add_argument("--max-val-groups", type=int)
+    parser.add_argument("--config", type=str, default='/home/pai/Huawei/run/config.yaml',)
     return parser.parse_args()
 
 
@@ -49,52 +37,33 @@ def main():
     # 加载 cfg
     args = parse_args()
     cfg = load_config(args.config)
-    cfg_experiment = cfg['experiment']
-    cfg_data = cfg['data']
-    cfg_model = cfg['model']
-    cfg_task = cfg['task']
-    cfg_radar = cfg['radar']
-    precision = str(cfg_task.get('precision', 'FP32')).upper()
+    precision = str(cfg['task']['precision']).upper()
     get_autocast_dtype(precision)
-    cfg_task['precision'] = precision
-    if args.init_lr is not None:
-        cfg_task['train']['init_lr'] = args.init_lr
-    if args.epochs is not None:
-        cfg_task['train']['epoch'] = args.epochs
-    if args.warmup_epochs is not None:
-        cfg_task['train']['warmup_epoch'] = args.warmup_epochs
-    if any(value is not None for value in (
-        args.max_train_samples,
-        args.max_val_samples,
-        args.max_train_groups,
-        args.max_val_groups,
-    )):
-        cfg_data['preload_cache'] = False
+    cfg['task']['precision'] = precision
     # 判断模型重复值是否相等
-    model_config_path = (Path(__file__).resolve().parents[1] / 'models' / cfg_model['name'] / 'model_config.yaml')
+    model_config_path = (Path(__file__).resolve().parents[1] / 'models' / cfg['model']['name'] / 'model_config.yaml')
     cfg_model_arch = load_config(model_config_path)
     if 'max_people' in cfg_model_arch:
-        assert cfg_data['max_people'] == cfg_model_arch['max_people'],  'max_people mismatch: 'f'data={cfg_data["max_people"]}, 'f'model={cfg_model_arch["max_people"]}'
+        assert cfg['data']['max_people'] == cfg_model_arch['max_people'], 'max_people mismatch: ' f'data={cfg["data"]["max_people"]}, model={cfg_model_arch["max_people"]}'
 
     if 'xyz_limits' in cfg_model_arch:
-        assert cfg_data['xyz_limits'] == cfg_model_arch['xyz_limits'], 'xyz_limits mismatch: 'f'data={cfg_data["xyz_limits"]}, 'f'model={cfg_model_arch["xyz_limits"]}'
+        assert cfg['data']['xyz_limits'] == cfg_model_arch['xyz_limits'], 'xyz_limits mismatch: ' f'data={cfg["data"]["xyz_limits"]}, model={cfg_model_arch["xyz_limits"]}'
 
     if 'map_size' in cfg_model_arch:
-        assert cfg_data['map_size'] == cfg_model_arch['map_size'], 'map_size mismatch: 'f'data={cfg_data["map_size"]}, 'f'model={cfg_model_arch["map_size"]}'
+        assert cfg['data']['map_size'] == cfg_model_arch['map_size'], 'map_size mismatch: ' f'data={cfg["data"]["map_size"]}, model={cfg_model_arch["map_size"]}'
 
     if 'cube_size' in cfg_model_arch:
-        assert cfg_data['cube_size'] == cfg_model_arch['cube_size'], 'cube_size mismatch: 'f'data={cfg_data["cube_size"]}, 'f'model={cfg_model_arch["cube_size"]}'
+        assert cfg['data']['cube_size'] == cfg_model_arch['cube_size'], 'cube_size mismatch: ' f'data={cfg["data"]["cube_size"]}, model={cfg_model_arch["cube_size"]}'
 
     # 固定随机种子
-    set_seed(cfg_task['seed'])
+    set_seed(cfg['task']['seed'])
 
     # 获取device
-    device_id = cfg_task['device']
-    device = set_device(device_id)
+    device = set_device(cfg['task']['device'])
 
     # 配置雷达config
     radar_config = Radar_Config()
-    for k, v in cfg_radar.items():
+    for k, v in cfg['radar'].items():
         if hasattr(radar_config, k):
             setattr(radar_config, k, v)
         else:
@@ -102,78 +71,63 @@ def main():
     radar_config.__post_init__()
 
     # 获取模型
-    model = build_model(cfg_model['name'])
+    model = build_model(cfg['model']['name'])
     model = model.to(device)
     model = model_init(model)
 
     # train
-    if cfg_task['stage'] == 'train':
+    if cfg['task']['stage'] == 'train':
+        init_checkpoint = cfg['model'].get('init_checkpoint')
+        if init_checkpoint and not cfg['task']['train']['resume']['enabled']:
+            load_init_checkpoint(init_checkpoint, model)
+
         # 获取dataloader
         dataset = {
-            'train': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='train', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_train'], radar_config=radar_config, packed_data_root=cfg_data.get('packed_data_root'), max_groups=args.max_train_groups),
-            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, packed_data_root=cfg_data.get('packed_data_root'), max_groups=args.max_val_groups),
+            'train': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='train', base_source=cfg['data']['base_source'], split_method=cfg['data']['split_method'], ratio=cfg['data']['ratio'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], enable_rotation=cfg['data']['enable_rotation_train'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root']),
+            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], split_method=cfg['data']['split_method'], ratio=cfg['data']['ratio'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], enable_rotation=cfg['data']['enable_rotation_val'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root']),
         }
-        for split, max_samples in (
-            ('train', args.max_train_samples),
-            ('val', args.max_val_samples),
-        ):
-            if max_samples is not None:
-                if max_samples <= 0:
-                    raise ValueError(f"--max-{split}-samples must be positive")
-                generator = torch.Generator().manual_seed(cfg_task['seed'])
-                indices = torch.randperm(len(dataset[split]), generator=generator)[:max_samples]
-                dataset[split] = Subset(dataset[split], indices.tolist())
-                print(f"{split} subset: {len(dataset[split])} samples")
-        collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
+        for split in ('train', 'val'):
+            if len(dataset[split]) == 0:
+                raise ValueError(
+                    f"{split} 数据集为空，无法训练或验证。请检查 data.root_path、"
+                    "data description.json、split_method 对应的人员/组划分，"
+                    "以及数据过滤后是否仍有有效样本。"
+                )
+        collate_fn = partial(dataset_collate_fn, max_points=cfg['data']['max_points'], max_people=cfg['data']['max_people'])
         dataloader = {
-            'train': DataLoader(dataset['train'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['train']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
-            'val': DataLoader(dataset['val'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['val']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
+            'train': DataLoader(dataset['train'], batch_size=cfg['task']['batch_size'], collate_fn=collate_fn, shuffle=cfg['task']['train']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
+            'val': DataLoader(dataset['val'], batch_size=cfg['task']['batch_size'], collate_fn=collate_fn, shuffle=cfg['task']['val']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
         }
         # 指标构建
-        cfg_matching = cfg_task['matching_for_hungarian']
-        pose_matching_by_hip = cfg_matching.get(
-            'pose_matching_by_hip',
-            False,
-        )
-        pose_confidence_weight = cfg_matching.get(
-            'pose_confidence_weight',
-            0.0,
-        )
-        if not isinstance(pose_matching_by_hip, bool):
-            raise TypeError(
-                "matching_for_hungarian.pose_matching_by_hip must be bool"
-            )
         metric = {
             'train': Metric(
-                cfg_task['train']['metrics'],
-                cfg_data['xyz_limits'],
-                cfg_matching['bbox_l1_weight'],
-                cfg_matching['bbox_iou_weight'],
-                pose_matching_by_hip=pose_matching_by_hip,
-                pose_confidence_weight=pose_confidence_weight,
+                cfg['task']['train']['metrics'],
+                cfg['data']['xyz_limits'],
+                cfg['task']['matching_for_hungarian']['bbox_l1_weight'],
+                cfg['task']['matching_for_hungarian']['bbox_iou_weight'],
+                pose_matching_by_hip=cfg['task']['matching_for_hungarian']['pose_matching_by_hip'],
+                pose_confidence_weight=cfg['task']['matching_for_hungarian']['pose_confidence_weight'],
             ),
             'val': Metric(
-                cfg_task['val']['metrics'],
-                cfg_data['xyz_limits'],
-                cfg_matching['bbox_l1_weight'],
-                cfg_matching['bbox_iou_weight'],
-                pose_matching_by_hip=pose_matching_by_hip,
-                pose_confidence_weight=pose_confidence_weight,
+                cfg['task']['val']['metrics'],
+                cfg['data']['xyz_limits'],
+                cfg['task']['matching_for_hungarian']['bbox_l1_weight'],
+                cfg['task']['matching_for_hungarian']['bbox_iou_weight'],
+                pose_matching_by_hip=cfg['task']['matching_for_hungarian']['pose_matching_by_hip'],
+                pose_confidence_weight=cfg['task']['matching_for_hungarian']['pose_confidence_weight'],
             ),
         }
-        best_metric_name = cfg_task['train']['best_metric'].lower()
+        best_metric_name = cfg['task']['train']['best_metric'].lower()
         if best_metric_name != 'loss':
             raise ValueError(
                 "best_metric 必须设置为 loss，"
-                f"当前为: {cfg_task['train']['best_metric']}"
+                f"当前为: {cfg['task']['train']['best_metric']}"
             )
 
         # 优化器与学习率调度
-        num_epoch = cfg_task['train']['epoch']
-        warmup_epoch = cfg_task['train']['warmup_epoch']
         optimizer = torch.optim.AdamW(
             params=model.parameters(),
-            lr=cfg_task['train']['init_lr'],
+            lr=cfg['task']['train']['init_lr'],
             betas=(0.9, 0.999)
         )
         scaler = (
@@ -183,14 +137,14 @@ def main():
         )
         scheduler = get_cosine_schedule_with_warmup(
             optimizer,
-            num_epochs=num_epoch,
-            warmup_epoch=warmup_epoch,
+            num_epochs=cfg['task']['train']['epoch'],
+            warmup_epoch=cfg['task']['train']['warmup_epoch'],
             min_lr=1e-10,
         )
 
         # retraining checkpoint, metric, start_epoch, best_metric 加载
-        if cfg_task['train']['resume']['enabled']:
-            checkpoint_path = Path(cfg_task['train']['resume']['checkpoint_path'])
+        if cfg['task']['train']['resume']['enabled']:
+            checkpoint_path = Path(cfg['task']['train']['resume']['checkpoint_path'])
             if not checkpoint_path.exists():
                 raise FileNotFoundError(f"checkpoint 不存在: {checkpoint_path}")
             experiment_dir = checkpoint_path.parent.parent if checkpoint_path.parent.name == 'checkpoint' else checkpoint_path.parent
@@ -206,8 +160,8 @@ def main():
             start_epoch = 0
             best_metric = float('inf')
             paths = build_experiment(
-                output_root=cfg_experiment['output_path'],
-                model_name=cfg_model['name'],
+                output_root=cfg['experiment']['output_path'],
+                model_name=cfg['experiment'].get('group', cfg['model']['name']),
                 source_config_path=args.config,
                 model=model,
             )
@@ -219,17 +173,17 @@ def main():
         fig_path = paths['fig'] / 'fig.png'
         write_log(log_path, "=" * 80)
 
-        if cfg_task['train']['resume']['enabled']:
+        if cfg['task']['train']['resume']['enabled']:
             write_log(log_path, f"Resume training from: {checkpoint_path}")
             write_log(log_path, f"Start epoch: {start_epoch + 1}")
         else:
             write_log(log_path, "Start new training")
 
-        write_log(log_path, f"Experiment description: {cfg_experiment['description']}")
+        write_log(log_path, f"Experiment description: {cfg['experiment']['description']}")
         write_log(log_path, f"Precision: {precision}")
         write_log(log_path, f"Best metric: {best_metric_name}: {best_metric}")
 
-        for epoch in range(start_epoch, cfg_task['train']['epoch']):
+        for epoch in range(start_epoch, cfg['task']['train']['epoch']):
             epoch_lr = optimizer.param_groups[0]['lr']
             train_metrics, metric['train'] = train_one_epoch(
                 model,
@@ -237,9 +191,9 @@ def main():
                 optimizer,
                 metric['train'],
                 device,
-                cfg_data,
-                cfg_task,
-                cfg_model,
+                cfg['data'],
+                cfg['task'],
+                cfg['model'],
                 radar_config,
                 scaler,
             )
@@ -251,18 +205,18 @@ def main():
                 dataloader['val'],
                 metric['val'],
                 device,
-                cfg_data,
-                cfg_task,
-                cfg_model,
+                cfg['data'],
+                cfg['task'],
+                cfg['model'],
                 radar_config,
             )
             val_metrics['loss'] = sum(
-                weight * val_metrics[name]
+                weight * val_metrics.get(name, 0.0)
                 for name, weight in metric['val'].cfg_metrics.items()
             )
 
             message = (
-                f"Epoch {epoch + 1}/{num_epoch} | "
+                f"Epoch {epoch + 1}/{cfg['task']['train']['epoch']} | "
                 f"lr={epoch_lr:.10f} | "
                 f"train={train_metrics} | "
                 f"val={val_metrics}"
@@ -288,20 +242,20 @@ def main():
             save_checkpoint(paths['checkpoint'] / 'last.pth', epoch, model, optimizer, scheduler, metric, best_metric, scaler)
 
 
-    elif cfg_task['stage'] == 'val':
+    elif cfg['task']['stage'] == 'val':
         # 只做结果保存 后续分析见 /home/pai/Huawei/run/check.py
 
         # 获取dataloader
         dataset = {
-            'val': HPE_Dataset(root_path=cfg_data['root_path'], sensor_config=cfg_data['sensor_config'], mode='val', base_source=cfg_data['base_source'], split_method=cfg_data['split_method'], ratio=cfg_data['ratio'], T=cfg_data['T'], preload_cache=cfg_data.get('preload_cache', False), enable_action=cfg_data.get('enable_action', True), enable_rotation=cfg_data['enable_rotation_val'], radar_config=radar_config, packed_data_root=cfg_data.get('packed_data_root')),
+            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], split_method=cfg['data']['split_method'], ratio=cfg['data']['ratio'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], enable_rotation=cfg['data']['enable_rotation_val'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root']),
         }
-        collate_fn = partial(dataset_collate_fn, max_points=cfg_data['max_points'], max_people=cfg_data['max_people'])
+        collate_fn = partial(dataset_collate_fn, max_points=cfg['data']['max_points'], max_people=cfg['data']['max_people'])
         dataloader = {
-            'val': DataLoader(dataset['val'], batch_size=cfg_task['batch_size'], collate_fn=collate_fn, shuffle=cfg_task['val']['shuffle'], num_workers=cfg_data['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
+            'val': DataLoader(dataset['val'], batch_size=cfg['task']['batch_size'], collate_fn=collate_fn, shuffle=cfg['task']['val']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
         }
 
         # best/last checkpoint 加载 
-        load_model_checkpoint(cfg_task['val']['checkpoint_path'], model, device)
+        load_model_checkpoint(cfg['task']['val']['checkpoint_path'], model, device)
 
         pose_pre = []
         confidence_pre = []
@@ -321,16 +275,14 @@ def main():
         model.eval()
         with torch.no_grad():
             for samples in tqdm(dataloader['val'], total=len(dataloader['val'])):
-                input_key = cfg_task['input']
-                target_key = cfg_task['output']
                 model_input = {}
-                if 'pc' in input_key:
-                    model_input['input'] = samples[input_key]['padded'].to(device, non_blocking=True)
-                    model_input['mask'] = samples[input_key]['mask'].to(device, non_blocking=True)
+                if 'pc' in cfg['task']['input']:
+                    model_input['input'] = samples[cfg['task']['input']]['padded'].to(device, non_blocking=True)
+                    model_input['mask'] = samples[cfg['task']['input']]['mask'].to(device, non_blocking=True)
 
                     # wrapper 将dataset取出的多人按照 mask 进行筛选，有效 mask 则按照bbox筛选点云，无效略过；将多人维度合并到batch中构建全新的batch
-                    person_mask = samples[cfg_task['output']]['mask'].to(device, non_blocking=True)
-                    person_bbox = samples[cfg_task['output']]['bbox'].to(device, non_blocking=True)
+                    person_mask = samples[cfg['task']['output']]['mask'].to(device, non_blocking=True)
+                    person_bbox = samples[cfg['task']['output']]['bbox'].to(device, non_blocking=True)
 
                     points = model_input['input']
                     point_mask = model_input['mask']
@@ -356,14 +308,10 @@ def main():
                     if not valid_instance_mask.any():
                         continue
 
-                    if cfg_task['center_on_hip']:
-                        gt_pose = samples[target_key]['padded'].to(device)
-                        # 髋部中心: [B,T,K,3]
-                        hip_center = (gt_pose[..., 11, :] + gt_pose[..., 12, :]) / 2
-                        # 已裁剪点云: [B,K,T,N,D]
-                        center = hip_center.permute(0, 2, 1, 3).unsqueeze(3)
-                        centered_xyz = cropped_points[..., :3] - center
-                        cropped_points = torch.cat([centered_xyz, cropped_points[..., 3:]],dim=-1)
+                    if cfg['task']['center_on_pointcloud']:
+                        cropped_points, pointcloud_center = center_cropped_pointcloud(
+                            cropped_points, cropped_mask
+                        )
                     cropped_points = cropped_points.masked_fill(~cropped_mask.unsqueeze(-1), 0.0)
                     pc_for_save = cropped_points.permute(0, 2, 1, 3, 4).contiguous()
                     pc_valid_for_save = cropped_mask.permute(0, 2, 1, 3).contiguous()
@@ -372,31 +320,36 @@ def main():
                 else:
                     model_input['input'] = prepare_bin_input(
                         samples,
-                        input_key,
+                        cfg['task']['input'],
                         device,
                         model,
-                        cfg_data,
-                        cfg_model,
+                        cfg['data'],
+                        cfg['model'],
                         radar_config,
                     )
                     bin_for_save = model_input['input']
 
                 gt = {
-                    'padded': samples[target_key]['padded'].to(device, non_blocking=True),
-                    'mask': samples[target_key]['mask'].to(device, non_blocking=True),
-                    'bbox': samples[target_key]['bbox'].to(device, non_blocking=True),
+                    'padded': samples[cfg['task']['output']]['padded'].to(device, non_blocking=True),
+                    'mask': samples[cfg['task']['output']]['mask'].to(device, non_blocking=True),
+                    'bbox': samples[cfg['task']['output']]['bbox'].to(device, non_blocking=True),
                 }
-                if cfg_task['center_on_hip'] and 'pc' in input_key:
-                    gt['padded'] -= hip_center[:, :, :, None, :]
-                if 'action' in samples[target_key]:
-                    gt['action'] = samples[target_key]['action'].to(
+                if cfg['task']['center_on_pointcloud'] and 'pc' in cfg['task']['input']:
+                    gt['padded'] = (gt['padded'] - pointcloud_center.unsqueeze(-2)).masked_fill(
+                        ~gt['mask'][..., None, None], 0.0
+                    )
+                    gt['bbox'] = (gt['bbox'] - pointcloud_center.repeat(1, 1, 1, 2)).masked_fill(
+                        ~gt['mask'].unsqueeze(-1), 0.0
+                    )
+                if 'action' in samples[cfg['task']['output']]:
+                    gt['action'] = samples[cfg['task']['output']]['action'].to(
                         device, non_blocking=True
                     )
                 model_input['gt'] = gt
 
                 pre = model(model_input)
 
-                if 'pc' in input_key:
+                if 'pc' in cfg['task']['input']:
                     instance_pose = pre['pose']
                     if instance_pose.shape[2] != 1:
                         raise ValueError(
@@ -407,7 +360,7 @@ def main():
                     pose = instance_pose.new_zeros(B, K, T, instance_pose.shape[2], instance_pose.shape[3])
                     pose[valid_instance_mask] = instance_pose
                     pre['pose'] = pose.permute(0, 2, 1, 3, 4).contiguous()
-                if 'pc' in input_key:
+                if 'pc' in cfg['task']['input']:
                     pc.append(pc_for_save.detach().cpu())
                     pc_valid.append(pc_valid_for_save.detach().cpu())
                 else:
@@ -486,8 +439,8 @@ def main():
         )
 
         results = {
-            'input_key': cfg_task['input'],
-            'target_key': cfg_task['output'],
+            'input_key': cfg['task']['input'],
+            'target_key': cfg['task']['output'],
             'pose_pre': pose_pre,
             'confidence_pre': confidence_pre,
             'bbox_pre': bbox_pre,
@@ -505,14 +458,14 @@ def main():
             'high_to_low_R': high_to_low_R,
             'high_to_low_t': high_to_low_t,
         }
-        if 'pc' in cfg_task['input']:
+        if 'pc' in cfg['task']['input']:
             results['pc'] = pc
             results['pc_valid'] = pc_valid
         else:
             results['bin'] = bin_inputs
         torch.save(results, '/home/pai/Huawei/run/result.pkl')
     else:
-        raise ValueError(f"cfg_task['stage'] dismatched, got {cfg_task['stage']}")
+        raise ValueError(f"cfg['task']['stage'] dismatched, got {cfg['task']['stage']}")
 
 
 if __name__ == "__main__":

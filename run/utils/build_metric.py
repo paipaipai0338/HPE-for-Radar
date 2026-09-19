@@ -3,9 +3,13 @@ from metrics.pose import (
     apply_pose_matches,
     get_bce,
     get_bone_length,
+    get_center_mpjpe,
     get_mpjpe,
     get_pampjpe,
+    get_pose_direction,
     get_pose_hungarian_match,
+    get_relative_pose_mpjpe,
+    get_time_smoothness,
 )
 from metrics.detection import get_hungarian_match, get_bbox_iou, get_bbox_l1, get_objectness
 from metrics.RPM2_loss import get_center_heatmap_loss, get_box_size_loss, get_center_offset_loss, get_pose_loss
@@ -26,7 +30,7 @@ def _masked_mean_over_people(metric, mask):
         metric_sum = metric.masked_select(mask).sum()
         return metric_sum / metric_num, metric_num.item()
 
-    return metric.sum() * 0.0, 0
+    return metric.masked_select(mask).sum() * 0.0, 0
 
 
 class Metric:
@@ -52,9 +56,13 @@ class Metric:
             raise ValueError("pose_confidence_weight must be non-negative")
         self.fun_call_dict = {
             'positive_mpjpe': get_mpjpe,
+            'center_mpjpe': get_center_mpjpe,
+            'relative_pose_mpjpe': get_relative_pose_mpjpe,
             'negative_mpjpe': get_mpjpe,
             'pampjpe': get_pampjpe,
             'bone_length': get_bone_length,
+            'pose_direction': get_pose_direction,
+            'time_smoothness': get_time_smoothness,
             'bce': get_bce,
             'bbox_iou': get_bbox_iou,
             'bbox_l1':  get_bbox_l1,
@@ -98,9 +106,9 @@ class Metric:
         }
 
     def load_state_dict(self, state_dict):
-        self.metrics_epoch_history = state_dict.get(
-            "metrics_epoch_history",
-            self.metrics_epoch_history,
+        # Keep initialized histories for metrics added since the checkpoint.
+        self.metrics_epoch_history.update(
+            state_dict.get("metrics_epoch_history", {})
         )
         
     def calculate_batch(self, pre, gt):
@@ -132,8 +140,9 @@ class Metric:
         confidence_target = gt_mask
 
         pose_metric_names = {
-            'positive_mpjpe', 'negative_mpjpe',
-            'pampjpe', 'bone_length', 'bce'
+            'positive_mpjpe', 'center_mpjpe', 'relative_pose_mpjpe',
+            'negative_mpjpe',
+            'pampjpe', 'bone_length', 'bce', 'time_smoothness', 'pose_direction'
         }
         if self.pose_matching_by_hip and (
             pose_metric_names & self.cfg_metrics.keys()
@@ -157,7 +166,10 @@ class Metric:
             )
 
         for name, weight in self.cfg_metrics.items():
-            if name in ['positive_mpjpe', 'pampjpe', 'bone_length']:
+            if name in [
+                'positive_mpjpe', 'center_mpjpe',
+                'relative_pose_mpjpe', 'pampjpe', 'bone_length'
+            ]:
                 assert pose_pre is not None, 'pose_pre is None'
                 metric = self.fun_call_dict[name](
                     pose_pre_for_metric, pose_gt, type='coco'
@@ -170,6 +182,22 @@ class Metric:
                     metric_value.detach().item() * metric_num
                 )
                 self.metrics_state[name]['num'] += metric_num
+            elif name == 'pose_direction':
+                assert pose_pre is not None, 'pose_pre is None'
+                metric = self.fun_call_dict[name](
+                    pose_pre_for_metric, pose_gt, type='coco'
+                )
+                metric_value, metric_num = _masked_mean_over_people(
+                    metric, gt_mask.bool() & torch.isfinite(metric)
+                )
+            elif name == 'time_smoothness':
+                assert pose_pre is not None, 'pose_pre is None'
+                metric = self.fun_call_dict[name](
+                    pose_pre_for_metric, pose_gt, type='coco'
+                )
+                metric_value, metric_num = _masked_mean_over_people(
+                    metric, gt_mask[:, 1:].bool() & gt_mask[:, :-1].bool()
+                )
             elif name == 'negative_mpjpe':
                 if pose_pre is None:
                     raise ValueError("negative_mpjpe requires pre['pose']")

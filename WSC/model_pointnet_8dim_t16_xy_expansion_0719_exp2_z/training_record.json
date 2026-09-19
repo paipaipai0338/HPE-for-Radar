@@ -1,0 +1,1267 @@
+{
+  "config": {
+    "dataset": {
+      "root": "/mnt/huawei",
+      "train_dates": [
+        "20260703",
+        "20260706",
+        "20260707",
+        "20260708",
+        "20260709",
+        "20260710",
+        "20260716",
+        "20260718",
+        "20260719"
+      ],
+      "val_dates": [
+        "20260717"
+      ],
+      "group_start_index": 11,
+      "max_points": 128,
+      "sequence_length": 16,
+      "train_window_stride": 1,
+      "val_window_stride": 1,
+      "max_sync_delta_seconds": 0.1,
+      "max_frame_gap_seconds": 0.18,
+      "cache_associated_points": true,
+      "sample_index_cache_dir": "outputs/pointcloud/cache/sample_index",
+      "association_cache_dir": "outputs/pointcloud/cache/association_high_pose_box_xy_expansion",
+      "association_mode": "high_pose_box",
+      "coordinate_frame": "low",
+      "preserve_z_height": true,
+      "high_pose_box_padding": 0.15,
+      "high_pose_box_min_points": 40,
+      "high_pose_box_xy_radius": 0.2,
+      "high_pose_box_z_radius": 0.25
+    },
+    "augmentation": {
+      "enabled": true,
+      "yaw_range_degrees": [
+        -120,
+        120
+      ],
+      "tilt_range_degrees": [
+        -3,
+        3
+      ],
+      "coordinate_noise_std": 0.01,
+      "point_dropout_range": [
+        0.0,
+        0.1
+      ],
+      "local_dropout_probability": 0,
+      "local_dropout_max_fraction": 0,
+      "minimum_retained_points": 32
+    },
+    "model": {
+      "coordinate_scale": 1.0,
+      "doppler_scale": 2.5,
+      "use_doppler": false,
+      "point_feature_dim": 64,
+      "frame_feature_dim": 128,
+      "shape_feature_dim": 32,
+      "shape_statistic_dim": 8,
+      "use_shape_statistics": true,
+      "use_compact_statistics": false,
+      "use_point_count": false,
+      "spatial_encoder": "pointnet",
+      "edge_neighbor_count": 8,
+      "temporal_layer_count": 4,
+      "temporal_kernel_size": 2,
+      "dropout": 0.15
+    },
+    "training": {
+      "device": "cuda:1",
+      "batch_size": 64,
+      "num_workers": 4,
+      "prefetch_factor": 2,
+      "log_interval": 20,
+      "epochs": 40,
+      "learning_rate": 0.0001,
+      "weight_decay": 1e-05,
+      "auxiliary_loss_weight": 0,
+      "focal_gamma": 1.0,
+      "scheduler_factor": 0.5,
+      "scheduler_patience": 3,
+      "min_learning_rate": 1e-06,
+      "early_stopping_patience": 10,
+      "random_seed": 42,
+      "output_dir": "outputs/pointcloud/runs/model_pointnet_8dim_t16_xy_expansion_0719_exp2_z"
+    }
+  },
+  "model_config": {
+    "sequence_length": 16,
+    "coordinate_scale": 1.0,
+    "doppler_scale": 2.5,
+    "use_doppler": false,
+    "point_feature_dim": 64,
+    "frame_feature_dim": 128,
+    "shape_feature_dim": 32,
+    "shape_statistic_dim": 8,
+    "use_shape_statistics": true,
+    "use_compact_statistics": false,
+    "use_point_count": false,
+    "spatial_encoder": "pointnet",
+    "edge_neighbor_count": 8,
+    "temporal_layer_count": 4,
+    "temporal_kernel_size": 2,
+    "dropout": 0.15,
+    "class_count": 4
+  },
+  "best_epoch": 8,
+  "best_val_macro_f1": 0.9470005035400391,
+  "history": [
+    {
+      "epoch": 1,
+      "learning_rate": 0.0001,
+      "train_loss": 0.2148224115371704,
+      "val_loss": 0.12608742713928223,
+      "val_accuracy": 0.9327484369277954,
+      "val_macro_f1": 0.9144636392593384,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9871158003807068,
+          "recall": 0.9642153382301331,
+          "f1": 0.9755311608314514,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9506781697273254,
+          "recall": 0.9387868046760559,
+          "f1": 0.9446950554847717,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9518317580223083,
+          "recall": 0.9653669595718384,
+          "f1": 0.9585515856742859,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.7553699016571045,
+          "recall": 0.804320216178894,
+          "f1": 0.779076874256134,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6359,
+          54,
+          0,
+          182
+        ],
+        [
+          46,
+          8481,
+          20,
+          487
+        ],
+        [
+          0,
+          0,
+          4209,
+          151
+        ],
+        [
+          37,
+          386,
+          193,
+          2532
+        ]
+      ]
+    },
+    {
+      "epoch": 2,
+      "learning_rate": 0.0001,
+      "train_loss": 0.1367051601409912,
+      "val_loss": 0.1385706514120102,
+      "val_accuracy": 0.9301119446754456,
+      "val_macro_f1": 0.9059779644012451,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9756060838699341,
+          "recall": 0.9884760975837708,
+          "f1": 0.981998860836029,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9356359839439392,
+          "recall": 0.9445428252220154,
+          "f1": 0.9400683045387268,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.931215763092041,
+          "recall": 0.9750000238418579,
+          "f1": 0.9526050090789795,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8003610372543335,
+          "recall": 0.7042566537857056,
+          "f1": 0.7492396235466003,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6519,
+          19,
+          0,
+          57
+        ],
+        [
+          85,
+          8533,
+          28,
+          388
+        ],
+        [
+          0,
+          1,
+          4251,
+          108
+        ],
+        [
+          78,
+          567,
+          286,
+          2217
+        ]
+      ]
+    },
+    {
+      "epoch": 3,
+      "learning_rate": 0.0001,
+      "train_loss": 0.1195388063788414,
+      "val_loss": 0.12570592761039734,
+      "val_accuracy": 0.937200129032135,
+      "val_macro_f1": 0.9168769121170044,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9833585619926453,
+          "recall": 0.985595166683197,
+          "f1": 0.9844756126403809,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9332975149154663,
+          "recall": 0.9618109464645386,
+          "f1": 0.9473397731781006,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9796260595321655,
+          "recall": 0.9373853206634521,
+          "f1": 0.9580402970314026,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.7908046245574951,
+          "recall": 0.7649301290512085,
+          "f1": 0.7776521444320679,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6500,
+          12,
+          0,
+          83
+        ],
+        [
+          59,
+          8689,
+          5,
+          281
+        ],
+        [
+          0,
+          0,
+          4087,
+          273
+        ],
+        [
+          51,
+          609,
+          80,
+          2408
+        ]
+      ]
+    },
+    {
+      "epoch": 4,
+      "learning_rate": 0.0001,
+      "train_loss": 0.11012572795152664,
+      "val_loss": 0.10532301664352417,
+      "val_accuracy": 0.9461036324501038,
+      "val_macro_f1": 0.9299004077911377,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.972069501876831,
+          "recall": 0.9921152591705322,
+          "f1": 0.9819900989532471,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9810860753059387,
+          "recall": 0.9359087944030762,
+          "f1": 0.9579651355743408,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9298893213272095,
+          "recall": 0.9825688004493713,
+          "f1": 0.955503523349762,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8198679685592651,
+          "recall": 0.828462541103363,
+          "f1": 0.8241428732872009,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6543,
+          9,
+          0,
+          43
+        ],
+        [
+          95,
+          8455,
+          30,
+          454
+        ],
+        [
+          0,
+          0,
+          4284,
+          76
+        ],
+        [
+          93,
+          154,
+          293,
+          2608
+        ]
+      ]
+    },
+    {
+      "epoch": 5,
+      "learning_rate": 0.0001,
+      "train_loss": 0.10290606319904327,
+      "val_loss": 0.09330245852470398,
+      "val_accuracy": 0.9495612978935242,
+      "val_macro_f1": 0.9341645240783691,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9797083735466003,
+          "recall": 0.9883244633674622,
+          "f1": 0.9839975833892822,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.980532169342041,
+          "recall": 0.9422183036804199,
+          "f1": 0.9609934687614441,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9231921434402466,
+          "recall": 0.9896789193153381,
+          "f1": 0.955280065536499,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8389261960983276,
+          "recall": 0.8338627815246582,
+          "f1": 0.8363867998123169,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6518,
+          17,
+          0,
+          60
+        ],
+        [
+          71,
+          8512,
+          52,
+          399
+        ],
+        [
+          0,
+          0,
+          4315,
+          45
+        ],
+        [
+          64,
+          152,
+          307,
+          2625
+        ]
+      ]
+    },
+    {
+      "epoch": 6,
+      "learning_rate": 0.0001,
+      "train_loss": 0.09690527617931366,
+      "val_loss": 0.09418392926454544,
+      "val_accuracy": 0.9501664042472839,
+      "val_macro_f1": 0.9363623261451721,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9802651405334473,
+          "recall": 0.9866565465927124,
+          "f1": 0.9834504723548889,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9689440727233887,
+          "recall": 0.9497454166412354,
+          "f1": 0.9592486619949341,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9704856872558594,
+          "recall": 0.957798182964325,
+          "f1": 0.964100182056427,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.814426839351654,
+          "recall": 0.8643583059310913,
+          "f1": 0.8386500477790833,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6507,
+          14,
+          0,
+          74
+        ],
+        [
+          77,
+          8580,
+          13,
+          364
+        ],
+        [
+          0,
+          2,
+          4176,
+          182
+        ],
+        [
+          54,
+          259,
+          114,
+          2721
+        ]
+      ]
+    },
+    {
+      "epoch": 7,
+      "learning_rate": 0.0001,
+      "train_loss": 0.09315624833106995,
+      "val_loss": 0.08914017677307129,
+      "val_accuracy": 0.9505985975265503,
+      "val_macro_f1": 0.9374685883522034,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9768768548965454,
+          "recall": 0.9865049123764038,
+          "f1": 0.9816672801971436,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9795048832893372,
+          "recall": 0.9416648149490356,
+          "f1": 0.9602121710777283,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9651376008987427,
+          "recall": 0.9651376008987427,
+          "f1": 0.9651376008987427,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8079836964607239,
+          "recall": 0.8808767199516296,
+          "f1": 0.8428571820259094,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6506,
+          8,
+          0,
+          81
+        ],
+        [
+          93,
+          8507,
+          8,
+          426
+        ],
+        [
+          0,
+          0,
+          4208,
+          152
+        ],
+        [
+          61,
+          170,
+          144,
+          2773
+        ]
+      ]
+    },
+    {
+      "epoch": 8,
+      "learning_rate": 0.0001,
+      "train_loss": 0.08794007450342178,
+      "val_loss": 0.07995039224624634,
+      "val_accuracy": 0.9597182273864746,
+      "val_macro_f1": 0.9470005035400391,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.984887421131134,
+          "recall": 0.9881728291511536,
+          "f1": 0.9865273833274841,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9770915508270264,
+          "recall": 0.9631392359733582,
+          "f1": 0.970065176486969,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9625680446624756,
+          "recall": 0.9731651544570923,
+          "f1": 0.9678375720977783,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8556283116340637,
+          "recall": 0.8716645240783691,
+          "f1": 0.8635720014572144,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6517,
+          15,
+          0,
+          63
+        ],
+        [
+          43,
+          8701,
+          7,
+          283
+        ],
+        [
+          0,
+          0,
+          4243,
+          117
+        ],
+        [
+          57,
+          189,
+          158,
+          2744
+        ]
+      ]
+    },
+    {
+      "epoch": 9,
+      "learning_rate": 0.0001,
+      "train_loss": 0.08469212800264359,
+      "val_loss": 0.107057124376297,
+      "val_accuracy": 0.949863851070404,
+      "val_macro_f1": 0.9368427991867065,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9612902998924255,
+          "recall": 0.9940864443778992,
+          "f1": 0.9774133563041687,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.962751030921936,
+          "recall": 0.9498561024665833,
+          "f1": 0.956260085105896,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9712378978729248,
+          "recall": 0.9681192636489868,
+          "f1": 0.9696760773658752,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8564420938491821,
+          "recall": 0.8319568037986755,
+          "f1": 0.8440219163894653,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6556,
+          9,
+          0,
+          30
+        ],
+        [
+          165,
+          8581,
+          18,
+          270
+        ],
+        [
+          0,
+          0,
+          4221,
+          139
+        ],
+        [
+          99,
+          323,
+          107,
+          2619
+        ]
+      ]
+    },
+    {
+      "epoch": 10,
+      "learning_rate": 0.0001,
+      "train_loss": 0.08230266720056534,
+      "val_loss": 0.09069287031888962,
+      "val_accuracy": 0.946233332157135,
+      "val_macro_f1": 0.9328262209892273,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9766020774841309,
+          "recall": 0.9936315417289734,
+          "f1": 0.9850431680679321,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9668387770652771,
+          "recall": 0.932698667049408,
+          "f1": 0.9494618773460388,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9811056852340698,
+          "recall": 0.9646788835525513,
+          "f1": 0.9728229641914368,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.7906569242477417,
+          "recall": 0.8602287173271179,
+          "f1": 0.8239769339561462,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6553,
+          13,
+          0,
+          29
+        ],
+        [
+          65,
+          8426,
+          4,
+          539
+        ],
+        [
+          0,
+          5,
+          4206,
+          149
+        ],
+        [
+          92,
+          271,
+          77,
+          2708
+        ]
+      ]
+    },
+    {
+      "epoch": 11,
+      "learning_rate": 0.0001,
+      "train_loss": 0.07922085374593735,
+      "val_loss": 0.10984867811203003,
+      "val_accuracy": 0.9461900591850281,
+      "val_macro_f1": 0.9279516935348511,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9856365323066711,
+          "recall": 0.9884760975837708,
+          "f1": 0.9870542883872986,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9606641530990601,
+          "recall": 0.9542838335037231,
+          "f1": 0.9574633240699768,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9294425249099731,
+          "recall": 0.9788990616798401,
+          "f1": 0.9535298943519592,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8400405645370483,
+          "recall": 0.7890724539756775,
+          "f1": 0.8137592673301697,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6519,
+          16,
+          0,
+          60
+        ],
+        [
+          45,
+          8621,
+          47,
+          321
+        ],
+        [
+          0,
+          0,
+          4268,
+          92
+        ],
+        [
+          50,
+          337,
+          277,
+          2484
+        ]
+      ]
+    },
+    {
+      "epoch": 12,
+      "learning_rate": 0.0001,
+      "train_loss": 0.07670477777719498,
+      "val_loss": 0.11055881530046463,
+      "val_accuracy": 0.943207859992981,
+      "val_macro_f1": 0.9296888709068298,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9621478915214539,
+          "recall": 0.9943897128105164,
+          "f1": 0.9780031442642212,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9740896224975586,
+          "recall": 0.923843264579773,
+          "f1": 0.948301374912262,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9646924734115601,
+          "recall": 0.9713302850723267,
+          "f1": 0.9679999947547913,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.7980969548225403,
+          "recall": 0.8526048064231873,
+          "f1": 0.8244509100914001,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6558,
+          9,
+          0,
+          28
+        ],
+        [
+          142,
+          8346,
+          15,
+          531
+        ],
+        [
+          0,
+          5,
+          4235,
+          120
+        ],
+        [
+          116,
+          208,
+          140,
+          2684
+        ]
+      ]
+    },
+    {
+      "epoch": 13,
+      "learning_rate": 5e-05,
+      "train_loss": 0.06924857944250107,
+      "val_loss": 0.09387437254190445,
+      "val_accuracy": 0.9497774243354797,
+      "val_macro_f1": 0.9373501539230347,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9712890386581421,
+          "recall": 0.9951478242874146,
+          "f1": 0.9830736517906189,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9770221710205078,
+          "recall": 0.9319238662719727,
+          "f1": 0.9539403319358826,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9620938897132874,
+          "recall": 0.9779816269874573,
+          "f1": 0.9699727296829224,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8192734718322754,
+          "recall": 0.8668996095657349,
+          "f1": 0.8424139022827148,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6563,
+          9,
+          0,
+          23
+        ],
+        [
+          105,
+          8419,
+          23,
+          487
+        ],
+        [
+          0,
+          4,
+          4264,
+          92
+        ],
+        [
+          89,
+          185,
+          145,
+          2729
+        ]
+      ]
+    },
+    {
+      "epoch": 14,
+      "learning_rate": 5e-05,
+      "train_loss": 0.06763527542352676,
+      "val_loss": 0.09508915990591049,
+      "val_accuracy": 0.9515926837921143,
+      "val_macro_f1": 0.9384942054748535,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9825747609138489,
+          "recall": 0.991811990737915,
+          "f1": 0.9871718287467957,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9687783718109131,
+          "recall": 0.9445428252220154,
+          "f1": 0.9565070867538452,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9717111587524414,
+          "recall": 0.9690366983413696,
+          "f1": 0.9703720808029175,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8176895380020142,
+          "recall": 0.8634053468704224,
+          "f1": 0.8399258255958557,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6541,
+          7,
+          0,
+          47
+        ],
+        [
+          53,
+          8533,
+          16,
+          432
+        ],
+        [
+          0,
+          8,
+          4225,
+          127
+        ],
+        [
+          63,
+          260,
+          107,
+          2718
+        ]
+      ]
+    },
+    {
+      "epoch": 15,
+      "learning_rate": 5e-05,
+      "train_loss": 0.06631572544574738,
+      "val_loss": 0.09539510309696198,
+      "val_accuracy": 0.9598046541213989,
+      "val_macro_f1": 0.946657657623291,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9814398884773254,
+          "recall": 0.9942380785942078,
+          "f1": 0.9877974987030029,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9701310396194458,
+          "recall": 0.9671242237091064,
+          "f1": 0.9686253070831299,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9558196663856506,
+          "recall": 0.9775229096412659,
+          "f1": 0.9665495157241821,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8863256573677063,
+          "recall": 0.842121958732605,
+          "f1": 0.8636584877967834,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6557,
+          9,
+          0,
+          29
+        ],
+        [
+          53,
+          8737,
+          25,
+          219
+        ],
+        [
+          0,
+          6,
+          4262,
+          92
+        ],
+        [
+          71,
+          254,
+          172,
+          2651
+        ]
+      ]
+    },
+    {
+      "epoch": 16,
+      "learning_rate": 5e-05,
+      "train_loss": 0.06475822627544403,
+      "val_loss": 0.09317287057638168,
+      "val_accuracy": 0.9547045826911926,
+      "val_macro_f1": 0.9409059286117554,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9853805303573608,
+          "recall": 0.9913570880889893,
+          "f1": 0.988359808921814,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9648028612136841,
+          "recall": 0.9588222503662109,
+          "f1": 0.9618032574653625,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9703243374824524,
+          "recall": 0.9674311876296997,
+          "f1": 0.9688755869865417,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8407302498817444,
+          "recall": 0.8484752178192139,
+          "f1": 0.8445850014686584,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6538,
+          13,
+          0,
+          44
+        ],
+        [
+          36,
+          8662,
+          8,
+          328
+        ],
+        [
+          0,
+          8,
+          4218,
+          134
+        ],
+        [
+          61,
+          295,
+          121,
+          2671
+        ]
+      ]
+    },
+    {
+      "epoch": 17,
+      "learning_rate": 2.5e-05,
+      "train_loss": 0.06071541830897331,
+      "val_loss": 0.09683936089277267,
+      "val_accuracy": 0.9544884562492371,
+      "val_macro_f1": 0.9411551356315613,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9802365899085999,
+          "recall": 0.9927217364311218,
+          "f1": 0.9864396452903748,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9718548655509949,
+          "recall": 0.9517378807067871,
+          "f1": 0.96169114112854,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9594045877456665,
+          "recall": 0.975688099861145,
+          "f1": 0.9674777984619141,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8451369404792786,
+          "recall": 0.8529224991798401,
+          "f1": 0.8490118384361267,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6547,
+          9,
+          0,
+          39
+        ],
+        [
+          68,
+          8598,
+          16,
+          352
+        ],
+        [
+          0,
+          5,
+          4254,
+          101
+        ],
+        [
+          64,
+          235,
+          164,
+          2685
+        ]
+      ]
+    },
+    {
+      "epoch": 18,
+      "learning_rate": 2.5e-05,
+      "train_loss": 0.061215970665216446,
+      "val_loss": 0.10634992271661758,
+      "val_accuracy": 0.9561740756034851,
+      "val_macro_f1": 0.9417531490325928,
+      "val_per_class": [
+        {
+          "label": "stand",
+          "precision": 0.9890909194946289,
+          "recall": 0.9898408055305481,
+          "f1": 0.9894657135009766,
+          "support": 6595
+        },
+        {
+          "label": "sit_squat",
+          "precision": 0.9605581164360046,
+          "recall": 0.9677883386611938,
+          "f1": 0.9641596674919128,
+          "support": 9034
+        },
+        {
+          "label": "lie",
+          "precision": 0.9588607549667358,
+          "recall": 0.9729357957839966,
+          "f1": 0.9658470153808594,
+          "support": 4360
+        },
+        {
+          "label": "other",
+          "precision": 0.8668216466903687,
+          "recall": 0.8290978670120239,
+          "f1": 0.8475401997566223,
+          "support": 3148
+        }
+      ],
+      "val_confusion_matrix": [
+        [
+          6528,
+          18,
+          0,
+          49
+        ],
+        [
+          25,
+          8743,
+          27,
+          239
+        ],
+        [
+          0,
+          5,
+          4242,
+          113
+        ],
+        [
+          47,
+          336,
+          155,
+          2610
+        ]
+      ]
+    }
+  ]
+}

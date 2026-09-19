@@ -25,17 +25,22 @@ from src.utils.functions.customs import (
     readHumanPose_pkl,
 )
 import json
+from collections import deque
 
 # region 全局参数
-CKPT_PATH= Path(r"/home/pai/Huawei/RHL/ckpt/ckpt_exp5")
-VOXEL_CONFIG_PATH = Path(r"/home/pai/Huawei/RHL/src/configs/voxel.yaml")
+CKPT_PATH= Path(r"ckpt/ckpt_format_001")
+VOXEL_CONFIG_PATH = Path(r"src/configs/voxel.yaml")
 ROOT_DIR = "/mnt/huawei"
-DATE_TAG = "20260811"
-GROUP_TAG = "group_030"
+DATE_TAG = "20260912"
+GROUP_TAG = "group_095"
 GROUP_TAGS = [f"{GROUP_TAG}"]
 HUMAN_POSE_FOLDER = Path(rf"{ROOT_DIR}/{DATE_TAG}/data_collection/{GROUP_TAG}/camera results/smoothed 3D")
 IMG2RADAR_EXT_FILE = Path(rf"{ROOT_DIR}/{DATE_TAG}/calib/extrinsic_img_to_radar_high.npz")
-DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
+DEVICE = "cuda:1" if torch.cuda.is_available() else "cpu"
+
+
+TRACKING_BOX_QUEUE_MAXLEN = 16
+tracking_box_queue: deque = deque(maxlen=TRACKING_BOX_QUEUE_MAXLEN)
 # endregion
 
 def update_config(config, update_dict):
@@ -194,6 +199,31 @@ def create_detection_targets_from_result(
 
     return targets
 
+def push_tracking_boxes_to_queue(tracking_info: TrackingInfo) -> np.ndarray:
+    """
+    将当前帧跟踪结果的 bounding_box 收集为 (N, 6) 数组并入队。
+
+    - N 为该帧 tracking_targets 的数量
+    - 6 为每个 TargetType.bounding_box: [xmin, ymin, zmin, xmax, ymax, zmax]
+    - 若该帧无跟踪目标，则入队一个形状为 (0, 6) 的空数组，保证"每帧一条记录"
+    - 队列长度固定 16，满员后自动丢弃最旧一帧
+
+    返回:
+        本帧入队的 (N, 6) 数组，便于调用方复用/调试
+    """
+    if tracking_info is None or len(tracking_info.tracking_targets) == 0:
+        boxes = np.empty((0, 6), dtype=np.float32)
+    else:
+        boxes = np.stack(
+            [
+                np.asarray(t.bounding_box, dtype=np.float32).reshape(6)
+                for t in tracking_info.tracking_targets
+            ],
+            axis=0,
+        )
+    tracking_box_queue.append(boxes)
+    return boxes
+
 class DatasetVisualizer:
 
     def __init__(
@@ -343,7 +373,7 @@ class DatasetVisualizer:
             tracking_alg_param=self.tracking_alg_param
         )
         
-
+        push_tracking_boxes_to_queue(self.tracking_info)
     def showFrame(self, index: int):
         if len(self.dataset) == 0:
             print("数据集中没有找到可绘制的内容！")
@@ -391,6 +421,11 @@ class DatasetVisualizer:
             show_info_left += str(tracking_target)
 
         self.text_box_left.set_text(show_info_left)
+        
+        queue_info = f"\n[Tracking Box Queue] len={len(tracking_box_queue)}/{TRACKING_BOX_QUEUE_MAXLEN}\n"
+        for qi, frame_boxes in enumerate(tracking_box_queue):
+            queue_info += f"  frame[{qi}]: N={frame_boxes.shape[0]}\n"
+        self.text_box_left.set_text(show_info_left + queue_info)
 
         show_info_left_up = ""
         for temp_target in self.tracking_info.temp_targets:

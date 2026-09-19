@@ -64,3 +64,33 @@ def load_model_checkpoint(checkpoint_path, model, device):
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
 
     return checkpoint
+
+
+def load_init_checkpoint(checkpoint_path, model):
+    """仅在权重完全匹配时初始化模型；失败则保留原始权重。"""
+    original_state = None
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+        state = checkpoint.get('model_state_dict', checkpoint)
+        current = model.state_dict()
+        if state.keys() != current.keys() or any(
+            not torch.is_tensor(state[key])
+            or state[key].shape != value.shape
+            or state[key].dtype != value.dtype
+            or state[key].layout != value.layout
+            for key, value in current.items()
+        ):
+            print(f'跳过 init_checkpoint: {checkpoint_path}，模型权重不完全匹配')
+            return False
+
+        # strict=True 也可能先写入部分权重再报错，保留备份用于回退。
+        original_state = {key: value.detach().cpu().clone() for key, value in current.items()}
+        model.load_state_dict(state, strict=True)
+    except Exception as exc:
+        if original_state is not None:
+            model.load_state_dict(original_state, strict=True)
+        print(f'跳过 init_checkpoint: {checkpoint_path}，保留原始初始化权重: {exc}')
+        return False
+
+    print(f'已加载 init_checkpoint 模型权重: {checkpoint_path}')
+    return True

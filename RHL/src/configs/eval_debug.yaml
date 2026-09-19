@@ -3,8 +3,8 @@ pipeline:
     - type: "PocHuPsenSif_for_eval"
       params:
         root_dir: "/mnt/huawei"
-        date_tag: "20260811"
-        group_tags: ["group_031"]
+        date_tag: "20260912"
+        group_tags: ["group_095","group_096","group_097","group_098","group_099","group_100","group_101","group_102","group_103","group_104"]
         sensor_tag: "dpct高位机"
         pc_tag: "PC"
         consider_invalid: True

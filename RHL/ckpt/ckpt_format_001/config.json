@@ -1,0 +1,88 @@
+{
+  "architectures": [
+    "DetrMiliHuPsen"
+  ],
+  "dtype": "float32",
+  "histInfo_feature_encoder_config": {
+    "model_type": "",
+    "share_modules": true,
+    "type": "Shared_Historical_Encoder"
+  },
+  "mask_decoder_config": {
+    "backbone_channels": [
+      32,
+      64,
+      128
+    ],
+    "hidden_size": 128,
+    "mask_embedder_num_layers": 3,
+    "model_type": "",
+    "num_groups": 8,
+    "type": "Voxel_FPN_Mask_Decoder"
+  },
+  "state_decoder_config": {
+    "activation": "gelu",
+    "clamp_presence_logit_max_val": 10.0,
+    "dropout": 0.1,
+    "hidden_size": 128,
+    "intermediate_size": 256,
+    "model_type": "",
+    "num_decoder_layers": 3,
+    "num_heads": 8,
+    "num_levels": 3,
+    "num_points": 4,
+    "num_queries": 8,
+    "type": "Deformable_State_Decoder"
+  },
+  "state_encoder_config": {
+    "activation": "gelu",
+    "clamp_presence_logit_max_val": 10.0,
+    "dropout": 0.1,
+    "hidden_size": 128,
+    "in_channels_list": [
+      32,
+      64,
+      128
+    ],
+    "intermediate_size": 256,
+    "model_type": "",
+    "num_groups": 8,
+    "num_heads": 8,
+    "num_layers": 3,
+    "num_levels": 3,
+    "num_points": 4,
+    "num_queries": 8,
+    "type": "Detr_State_Encoder"
+  },
+  "temp_feature_fusion_config": {
+    "backbone_channels": [
+      32,
+      64,
+      128
+    ],
+    "model_type": "",
+    "num_groups": 8,
+    "type": "ConvGRU3D_Fusion"
+  },
+  "time_assist": false,
+  "transformers_version": "5.5.3",
+  "voxel_feature_encoder_config": {
+    "backbone_channels": [
+      32,
+      64,
+      128
+    ],
+    "dropout_p": 0.1,
+    "in_channels": 66,
+    "model_type": "",
+    "num_groups": 8,
+    "type": "Res_3DUNet_Encoder"
+  },
+  "voxel_feature_precoder_config": {
+    "hidden_dim1": 16,
+    "hidden_dim2": 32,
+    "in_dim": 4,
+    "model_type": "",
+    "type": "MLP_Voxel_Feature_Precoder"
+  }
+}

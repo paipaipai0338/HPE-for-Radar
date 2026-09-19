@@ -34,7 +34,7 @@ def save_radar_config(config_dir, radar_config):
 def build_experiment(output_root, model_name, source_config_path, model):
     # {output_root}/
     # └── {model_name}/
-    #     └── 20260626_230202/
+    #     └── 20260916_13450201/
     #         ├── checkpoint/
     #         │   ├── best.pth
     #         │   └── last.pth
@@ -52,8 +52,8 @@ def build_experiment(output_root, model_name, source_config_path, model):
     #             ├── radar_config.yaml
     #             └── (model_name).py
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    experiment_dir = (Path(output_root) / model_name / timestamp)
+    experiment_dir = Path(output_root) / model_name / timestamp
+    experiment_dir.mkdir(parents=True, exist_ok=False)
 
     paths = {
         "root": experiment_dir,
@@ -63,11 +63,9 @@ def build_experiment(output_root, model_name, source_config_path, model):
         "config": experiment_dir / "config",
     }
 
-    for path in paths.values():
-        path.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+    for name, path in paths.items():
+        if name != "root":
+            path.mkdir()
 
     source_config_path = Path(source_config_path)
 

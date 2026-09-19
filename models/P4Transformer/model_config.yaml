@@ -1,8 +1,8 @@
 num_joints: 17
-feat_dim: 3
+feat_dim: 2
 radius: 0.1
 nsamples: 32
-spatial_stride: 32
+spatial_stride: 4
 temporal_kernel_size: 3  
 temporal_stride: 1 
 emb_relu: false 
@@ -12,4 +12,4 @@ heads: 8
 dim_head: 256 
 mlp_dim: 2048  
 dropout1: 0.0  
-dropout2: 0.0 
+dropout2: 0.0
