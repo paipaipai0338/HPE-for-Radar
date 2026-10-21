@@ -1,0 +1,127 @@
+experiment:
+  description: P4Transformer from scratch on original training groups plus 17 fine-tuning
+    groups; 200 epochs; same augmentation and validation as fine-tuning
+  output_path: /home/pai/Huawei/experiments
+data:
+  root_path: /mnt/huawei
+  packed_data_root: /mnt/ssd/Huawei/
+  base_source: radar_high_pc
+  ratio: 0.7
+  T: 16
+  acc_frame: 3
+  split_method: person
+  person_max_points: 200
+  max_people: 4
+  num_workers: 8
+  preload_cache: true
+  enable_action: false
+  augmentation:
+    radar_rotation:
+      enabled_train: true
+      enabled_val: false
+      roll_range_deg:
+      - -5.0
+      - 5.0
+      pitch_range_deg:
+      - -2.0
+      - 2.0
+      yaw_range_deg:
+      - -2.0
+      - 2.0
+    radar_height:
+      enabled_train: true
+      enabled_val: false
+      delta_height_range_m:
+      - -0.1
+      - 0.1
+    point_dropout:
+      enabled_train: true
+      enabled_val: false
+      probability: 0.05
+  sensor_config:
+    lidar: false
+    radar_low_bin: false
+    radar_high_bin: false
+    radar_low_pc: false
+    radar_high_pc: true
+    gt: true
+    realsense: false
+  xyz_limits:
+  - - 0.0
+    - 6.0
+  - - -3.0
+    - 3.0
+  - - -2.0
+    - 2.0
+  map_size:
+  - 256
+  - 256
+  cube_size:
+  - 96
+  - 96
+  - 32
+  remove_static: true
+model:
+  name: P4Transformer
+  init_checkpoint: null
+radar:
+  angle_method: bartlett
+task:
+  coordinate: high
+  stage: train
+  input: radar_high_pc
+  output: gt_for_high
+  device: 0
+  seed: 42
+  batch_size: 16
+  precision: BF16
+  center_on_pointcloud: false
+  center_xy_in_low: false
+  train:
+    epoch: 200
+    init_lr: 0.0003
+    warmup_epoch: 10
+    resume:
+      enabled: false
+      checkpoint_path: null
+    metrics:
+      Positive_MPJPE: 1
+      Pose_Direction: 0
+      Time_Smoothness: 0
+      Negative_MPJPE: 0
+      PAMPJPE: 0
+      Bone_Length: 0
+      BCE: 0
+      bbox_iou: 0
+      bbox_l1: 0
+      objectness: 0
+      rpm2_center_heatmap: 0
+      rpm2_center_offset: 0
+      rpm2_box_size: 0
+      rpm2_pose: 0
+      hrradarpose_body_center: 0
+      hrradarpose_keypoint_offset: 0
+    best_metric: loss
+    shuffle: true
+  val:
+    checkpoint_path: /home/pai/Huawei/experiments/P4Transformer/20261012_232122/checkpoint/last.pth
+    shuffle: false
+    score_thresh: 0.1
+    iou_thresh: 0.7
+    metrics:
+      Positive_MPJPE: 1
+      Pose_Direction: 0
+      Time_Smoothness: 0
+      Negative_MPJPE: 0
+      PAMPJPE: 0
+      Bone_Length: 0
+      BCE: 0
+      bbox_iou: 0
+      bbox_l1: 0
+      objectness: 0
+      rpm2_center_heatmap: 0
+      rpm2_center_offset: 0
+      rpm2_box_size: 0
+      rpm2_pose: 0
+      hrradarpose_body_center: 0
+      hrradarpose_keypoint_offset: 0

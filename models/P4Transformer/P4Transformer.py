@@ -287,14 +287,18 @@ class P4Transformer(nn.Module):
                 mask: Valid point mask of shape (B, T, N)
 
         '''
-        # 使用 xyz 和两个点特征，丢弃数据集六维输入的最后一维。
-        points = model_input['input'][..., :5]
+        # 按配置截取 xyz 和点特征，忽略其余输入维度。
+        points = model_input['input'][..., :3 + self.feat_dim]
         mask = model_input['mask']
-        points = points * mask.to(dtype=points.dtype).unsqueeze(-1)
+        points = points.masked_fill(~mask.unsqueeze(-1), 0.)
+        # 邻域算子不接受 mask；无效槽重复本帧有效点，避免产生原点伪点。
+        first_valid = mask.to(torch.int64).argmax(dim=-1)
+        replacement = points.gather(2, first_valid[..., None, None].expand(-1, -1, 1, points.shape[-1]))
+        points = torch.where(mask.unsqueeze(-1), points, replacement)
         B, T, N, D = points.shape
         point_cloud = points[:, :, :, :3].contiguous()
         point_fea = points[:, :, :, 3:].contiguous()
-        point_fea = point_fea.permute(0, 1, 3, 2).contiguous()# [B, T, 2, N]
+        point_fea = point_fea.permute(0, 1, 3, 2).contiguous()# [B, T, C, N]
         device = points.device
         
         assert point_cloud.ndim == 4 and point_cloud.shape[-1] == 3, point_cloud.shape
@@ -356,7 +360,7 @@ if __name__ == "__main__":
     device = set_device(0)
     model = build_model('P4Transformer').to(device)
     x = {
-        'input': torch.zeros((1, 8, 200, 5), device=device),
-        'mask': torch.ones((1, 8, 200), dtype=torch.bool, device=device),
+        'input': torch.zeros((1, 64, 200, 5), device=device),
+        'mask': torch.ones((1, 64, 200), dtype=torch.bool, device=device),
     }
     profile_model("P4Transformer", model, x)

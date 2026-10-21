@@ -1,14 +1,22 @@
-"""GT 框裁剪点云 → P4Transformer → 历史姿态平滑 → WebAgg。
+"""训练式 4 帧积累、GT 裁剪、200 点重采样 → P4Transformer → WebAgg。
 
 运行：python deploy/Inference_selected_group.py（VISUALIZE=False 时自动评估整组）
 VISUALIZE=True 或 --visualize：空格/右箭头下一帧，左箭头缓存回看；组末输出整组指标。
-仅保留 GT 框裁剪（当前帧与历史静点积累）处理结果。
+三图分别显示训练输入点云、椭圆内姿态和全部人体姿态。
+INFERENCE_TRAIN_CONFIG 可显式指定与权重配套的训练配置。
+优先读取 /mnt/ssd/Huawei 打包数据，缺失时回退 /mnt/huawei；
+INFERENCE_PACKED_DATA_ROOT 可覆盖 SSD 根目录。
+仅对连续 T 帧有效的人体窗口取末帧；缺帧后重新等待 T 帧。
+使用 last.pth；整组离线三帧确认/回填，持续不稳定不输出、不计指标。
+默认只输出终端指标；--save-results / --save-raw-cache 显式启用结果保存。
 """
 
 import argparse
 from collections import deque
 from dataclasses import dataclass, field
 import importlib.util
+import io
+from functools import lru_cache
 import os
 import pickle
 from pathlib import Path
@@ -22,24 +30,28 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.widgets import Slider
 import numpy as np
-from scipy import signal
 from scipy.optimize import linear_sum_assignment
 import torch
 from tqdm import tqdm
 
 from run.utils.set_device import set_device
+from run.utils.load_config import load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT_PATH = Path("/mnt/huawei")
-DATE = os.environ.get("INFERENCE_DATE", "20260912")
-GROUP = os.environ.get("INFERENCE_GROUP", "group_029")
+PACKED_DATA_ROOT = Path(os.environ.get("INFERENCE_PACKED_DATA_ROOT", "/mnt/ssd/Huawei"))
+DATE = os.environ.get("INFERENCE_DATE", "20261016")
+GROUP = os.environ.get("INFERENCE_GROUP", "group_018")
 VISUALIZE = True   # False 自动跑完整组并输出 MPJPE； True WebAgg 逐帧交互。
-MODEL_POSE_PATH = PROJECT_ROOT / "experiments/P4Transformer/20260909_191752"
-T = 8
-POSE_OUTPUT_POSITION = 7  # 第 4 个位置：3 帧历史 + 当前帧 + 4 帧未来。
+MODEL_POSE_PATH = PROJECT_ROOT / "experiments/P4Transformer/20261019_161657"
+# 旧实验续训时未覆盖 config.yaml，显式使用其 1000 点续训配置。
+TRAIN_CONFIG_PATH = Path(os.environ.get("INFERENCE_TRAIN_CONFIG", str(MODEL_POSE_PATH / "config" / "config.yaml")))
+TRAIN_CONFIG = load_config(TRAIN_CONFIG_PATH)
+T = TRAIN_CONFIG["data"]["T"]
+POSE_OUTPUT_POSITION = T - 1  # 完整窗口的末帧。
 POSE_LOOKAHEAD = T - POSE_OUTPUT_POSITION - 1
 MAX_POINTS = 300
-TRAIN_MAX_POINTS = 200
+TRAIN_MAX_POINTS = TRAIN_CONFIG["data"].get("person_max_points", 200)
 GT_BBOX_MARGIN = 0.30
 XYZ_LIMITS = ((0.0, 6.0), (-3.0, 3.0), (-2.0, 2.0))
 ERROR_VIS_THRESHOLD_MM = 200.0
@@ -60,53 +72,19 @@ ACTION_COLORS = ("#4daf4a", "#377eb8", "#e41a1c", "#984ea3")
 STATIC_ACCUMULATION = True
 DYNAMIC_STATIC_RATIO_THRESHOLD = 0.20
 STATIC_HISTORY_FRAMES = 10
+VISUAL_STATIC_HISTORY_FRAMES = 100
 DYNAMIC_POINT_TAG = 1.0
+MAX_VISUALIZED_ACCUMULATED_POINTS = 5000
 
-# 原有姿态后处理参数；位移阈值单位为米/帧，并非米/秒。
-SMOOTH_ALPHA = 0.35
-MAX_INTERP_GAP = 8
-MEDFILT_KERNEL = 7
-VELOCITY_THRESHOLD = 0.35
-BONE_LENGTH_WEIGHT = 0.65
-BONE_ITERS = 2
-# 时间滤波改善关节相对形状，但绝对坐标 EMA 会在人体移动时产生位置滞后。
-# 最终将骨架髋中心锚回当前帧原始预测；短缺失帧使用插值后的髋中心。
-PRESERVE_RAW_ROOT_POSITION = True
+# 动点不足或头脚纵轴反转超过 90° 时，沿用上一帧可信骨架。
+ORIENTATION_DYNAMIC_MICRO_RATIO_THRESHOLD = 0.2
+ORIENTATION_DYNAMIC_POINT_COUNT_THRESHOLD = 10
 
-# 只在“几乎没有动点 + 点云覆盖已坍缩”时保持上一个可靠姿态。
-# 这些阈值只用于后处理，不改变网络输入；可通过环境变量做 A/B 实验。
-# group_100 实验未改善 MPJPE，因此默认关闭，仅保留为可复现的实验开关。
-QUALITY_HOLD = os.environ.get("POSE_QUALITY_HOLD", "0") != "0"
-QUALITY_MAX_DYNAMIC_POINTS = int(os.environ.get("POSE_QUALITY_MAX_DYNAMIC", "1"))
-QUALITY_MIN_POINTS = int(os.environ.get("POSE_QUALITY_MIN_POINTS", "8"))
-QUALITY_MIN_SPAN_M = float(os.environ.get("POSE_QUALITY_MIN_SPAN_M", "0.35"))
-QUALITY_MIN_VOXELS = int(os.environ.get("POSE_QUALITY_MIN_VOXELS", "4"))
-QUALITY_VOXEL_SIZE_M = 0.20
-
-# 有明显位移时抑制单帧 180° 骨架翻转；保留当前髋中心，只保持相对姿态。
-DIRECTION_HOLD = os.environ.get("POSE_DIRECTION_HOLD", "0") != "0"
-DIRECTION_MIN_ROOT_MOTION_M = float(os.environ.get("POSE_DIRECTION_MIN_MOTION_M", "0.04"))
-DIRECTION_FLIP_DEGREES = float(os.environ.get("POSE_DIRECTION_FLIP_DEGREES", "120"))
-DIRECTION_MAX_HOLD_FRAMES = int(os.environ.get("POSE_DIRECTION_MAX_HOLD", "2"))
 
 DIRECTED_BONES = [
-    (11, 12),
-    (11, 5),
-    (12, 6),
-    (11, 13),
-    (13, 15),
-    (12, 14),
-    (14, 16),
-    (5, 6),
-    (5, 7),
-    (7, 9),
-    (6, 8),
-    (8, 10),
-    (5, 0),
-    (0, 1),
-    (1, 3),
-    (0, 2),
-    (2, 4),
+    (11, 12), (11, 5), (12, 6), (11, 13), (13, 15), (12, 14),
+    (14, 16), (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+    (5, 0), (0, 1), (1, 3), (0, 2), (2, 4),
 ]
 
 
@@ -116,146 +94,8 @@ class PoseTrack:
     source: object = None
     history: deque = field(default_factory=lambda: deque(maxlen=T))
     static_history: deque = field(
-        default_factory=lambda: deque(maxlen=STATIC_HISTORY_FRAMES)
+        default_factory=lambda: deque(maxlen=VISUAL_STATIC_HISTORY_FRAMES)
     )
-
-
-def interpolate_1d(values, max_gap):
-    out = np.asarray(values, dtype=np.float64).copy()
-    missing = np.isnan(out)
-    if np.all(missing):
-        return out
-
-    indices = np.arange(len(out))
-    valid_indices = indices[~missing]
-    out[missing] = np.interp(indices[missing], valid_indices, out[~missing])
-
-    if max_gap >= 0:
-        padded = np.pad(missing.astype(np.int8), (1, 1))
-        transitions = np.diff(padded)
-        starts = np.flatnonzero(transitions == 1)
-        ends = np.flatnonzero(transitions == -1)
-        for start, end in zip(starts, ends):
-            if end - start > max_gap:
-                out[start:end] = np.nan
-    return out
-
-
-def median_filter_1d(values, kernel_size):
-    if kernel_size <= 1:
-        return values.copy()
-    kernel_size = int(kernel_size)
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-    pad = kernel_size + 4
-    padded = np.pad(values, (pad, pad), mode="reflect")
-    return signal.medfilt(padded, kernel_size=kernel_size)[pad:-pad]
-
-
-def exponential_smooth_1d(values, alpha):
-    out = values.copy()
-    for idx in range(1, len(out)):
-        out[idx] = (1.0 - alpha) * out[idx - 1] + alpha * out[idx]
-    return out
-
-
-def suppress_velocity_outliers(sequence, threshold):
-    if threshold <= 0:
-        return sequence.copy()
-    out = sequence.copy()
-    speed = np.linalg.norm(np.diff(out, axis=0), axis=2)
-    for time_idx, joint_idx in np.argwhere(speed > threshold):
-        out[time_idx + 1, joint_idx] = np.nan
-    return out
-
-
-def measure_bone_lengths(pose):
-    lengths = np.full(len(DIRECTED_BONES), np.nan, dtype=np.float64)
-    for idx, (parent, child) in enumerate(DIRECTED_BONES):
-        if np.all(np.isfinite(pose[[parent, child]])):
-            lengths[idx] = np.linalg.norm(pose[child] - pose[parent])
-    return lengths
-
-
-def compute_bone_template(sequence):
-    lengths = np.stack(
-        [measure_bone_lengths(pose) for pose in sequence], axis=0
-    )
-    template = np.full(lengths.shape[1], np.nan, dtype=np.float64)
-    for bone_idx in range(lengths.shape[1]):
-        valid = np.isfinite(lengths[:, bone_idx])
-        if np.any(valid):
-            template[bone_idx] = np.median(lengths[valid, bone_idx])
-    return template
-
-
-def enforce_bone_lengths(pose, template):
-    adjusted = pose.copy()
-    if BONE_LENGTH_WEIGHT <= 0:
-        return adjusted
-    for _ in range(max(1, BONE_ITERS)):
-        for idx, (parent, child) in enumerate(DIRECTED_BONES):
-            target = template[idx]
-            if not np.isfinite(target):
-                continue
-            if not np.all(np.isfinite(adjusted[[parent, child]])):
-                continue
-            vector = adjusted[child] - adjusted[parent]
-            length = np.linalg.norm(vector)
-            if length <= 1e-8:
-                continue
-            desired = adjusted[parent] + vector / length * target
-            adjusted[child] = (
-                (1.0 - BONE_LENGTH_WEIGHT) * adjusted[child]
-                + BONE_LENGTH_WEIGHT * desired
-            )
-    return adjusted
-
-
-def process_single_track(track_sequence):
-    raw_root = np.asarray(track_sequence, dtype=np.float64)[:, [11, 12]].mean(axis=1)
-    raw_root = suppress_velocity_outliers(
-        raw_root[:, None, :], VELOCITY_THRESHOLD
-    )[:, 0]
-    root_target = np.full_like(raw_root, np.nan)
-    for dim in range(3):
-        root_target[:, dim] = interpolate_1d(raw_root[:, dim], MAX_INTERP_GAP)
-    sequence = suppress_velocity_outliers(
-        track_sequence, VELOCITY_THRESHOLD
-    )
-    valid_mask = np.all(np.isfinite(sequence), axis=2)
-    for joint_idx in range(sequence.shape[1]):
-        if valid_mask[:, joint_idx].sum() < 1:
-            continue
-        for dim in range(3):
-            values = interpolate_1d(
-                sequence[:, joint_idx, dim], MAX_INTERP_GAP
-            )
-            finite = np.isfinite(values)
-            if finite.sum() < 2:
-                sequence[:, joint_idx, dim] = values
-                continue
-            filled = values.copy()
-            if np.any(~finite):
-                indices = np.arange(len(filled))
-                filled[~finite] = np.interp(
-                    indices[~finite], indices[finite], filled[finite]
-                )
-            filtered = median_filter_1d(filled, MEDFILT_KERNEL)
-            filtered = exponential_smooth_1d(filtered, SMOOTH_ALPHA)
-            filtered[~finite] = np.nan
-            sequence[:, joint_idx, dim] = filtered
-
-    template = compute_bone_template(sequence)
-    for frame_idx in range(sequence.shape[0]):
-        sequence[frame_idx] = enforce_bone_lengths(
-            sequence[frame_idx], template
-        )
-        if PRESERVE_RAW_ROOT_POSITION and np.all(np.isfinite(sequence[frame_idx])) \
-                and np.all(np.isfinite(root_target[frame_idx])):
-            filtered_root = sequence[frame_idx, [11, 12]].mean(axis=0)
-            sequence[frame_idx] += root_target[frame_idx] - filtered_root
-    return sequence
 
 
 def crop_and_pad(points, bbox=None, point_mask=None, max_points=MAX_POINTS):
@@ -290,7 +130,9 @@ def mask_sampled_points(points, point_mask):
     return padded, mask
 
 
-def accumulate_track_static_points(track, points, point_mask, target_center):
+def accumulate_track_static_points(
+    track, points, point_mask, target_center, continuous_history=False
+):
     """动静比过低时，用同一 GT 轨迹的历史静点补充当前关联点。"""
     current = points[np.asarray(point_mask, dtype=bool)]
     dynamic = (
@@ -306,67 +148,25 @@ def accumulate_track_static_points(track, points, point_mask, target_center):
         STATIC_ACCUMULATION
         and ratio < DYNAMIC_STATIC_RATIO_THRESHOLD
     ):
-        for historical_static, historical_center in track.static_history:
+        history = (reversed(track.static_history) if continuous_history
+                   else list(track.static_history)[-STATIC_HISTORY_FRAMES:])
+        for historical_static, historical_center, historical_ratio in history:
+            if continuous_history and historical_ratio > DYNAMIC_STATIC_RATIO_THRESHOLD:
+                break
             aligned = historical_static.copy()
             aligned[:, :3] += target_center - historical_center
             added.append(aligned)
 
     # 当前静点在下一帧才成为“历史”，避免本帧被重复加入。
     current_static = current[~dynamic].copy()
-    if len(current_static):
+    if continuous_history or len(current_static):
         track.static_history.append(
-            (current_static, np.asarray(target_center).copy())
+            (current_static, np.asarray(target_center).copy(), ratio)
         )
     if not added:
         return current, ratio, 0
     historical = np.concatenate(added, axis=0)
     return np.concatenate((current, historical), axis=0), ratio, len(historical)
-
-
-def point_cloud_quality(points):
-    """提取与姿态可观测性直接相关的小型统计。"""
-    if __package__:
-        from .pose_smoothing import point_cloud_quality as _point_cloud_quality
-    else:
-        from pose_smoothing import point_cloud_quality as _point_cloud_quality
-    return _point_cloud_quality(
-        points, voxel_size=QUALITY_VOXEL_SIZE_M, min_points=QUALITY_MIN_POINTS,
-        min_span=QUALITY_MIN_SPAN_M, min_voxels=QUALITY_MIN_VOXELS,
-        max_dynamic=QUALITY_MAX_DYNAMIC_POINTS, dynamic_tag=DYNAMIC_POINT_TAG,
-    )
-
-
-def suppress_direction_flips(sequence):
-    """运动中朝向突然翻转时，平移上一相对骨架到当前髋中心。"""
-    if __package__:
-        from .pose_smoothing import pose_facing_vector
-    else:
-        from pose_smoothing import pose_facing_vector
-    out = np.asarray(sequence, dtype=np.float64).copy()
-    previous = None
-    held_run = held_count = 0
-    flip_cosine = np.cos(np.deg2rad(DIRECTION_FLIP_DEGREES))
-    for index, pose in enumerate(out):
-        if not np.isfinite(pose).all():
-            continue
-        if previous is not None:
-            root = pose[[11, 12]].mean(axis=0)
-            previous_root = previous[[11, 12]].mean(axis=0)
-            motion = np.linalg.norm(root - previous_root)
-            facing = pose_facing_vector(pose)
-            previous_facing = pose_facing_vector(previous)
-            flipped = (facing is not None and previous_facing is not None
-                       and np.dot(facing, previous_facing) < flip_cosine)
-            if (motion >= DIRECTION_MIN_ROOT_MOTION_M and flipped
-                    and held_run < DIRECTION_MAX_HOLD_FRAMES):
-                out[index] = previous + (root - previous_root)
-                held_run += 1
-                held_count += 1
-                previous = out[index]
-                continue
-        held_run = 0
-        previous = out[index]
-    return out, held_count
 
 
 def build_pose_input(tracks):
@@ -404,8 +204,70 @@ def load_models(device):
     pose_model = module.P4Transformer(
         **load_config(experiment_config / "model_config.yaml")
     ).to(device)
-    load_model_checkpoint(MODEL_POSE_PATH / "checkpoint/best.pth", pose_model, device)
+    load_model_checkpoint(MODEL_POSE_PATH / "checkpoint/last.pth", pose_model, device)
     return pose_model.eval()
+
+
+@lru_cache(maxsize=None)
+def packed_directory(directory):
+    """读取与 dataset 相同的 SSD 打包索引，保留原始路径作为帧标识。"""
+    from data2datasets.dataset_for_all_task import HPE_Dataset
+
+    directory = Path(directory)
+    pack_name = {"PC": "frames.pcpack", "smoothed 3D": "frames.gtpack",
+                 "action label": "frames.actionpack"}.get(directory.name)
+    if pack_name is None or not directory.is_relative_to(ROOT_PATH):
+        return None
+    packed_dir = PACKED_DATA_ROOT / directory.relative_to(ROOT_PATH)
+    pack_path = packed_dir / pack_name
+    index_path = packed_dir / "frames_index.npz"
+    if not (HPE_Dataset._packed_path_exists(pack_path)
+            and HPE_Dataset._packed_path_exists(index_path)):
+        return None
+    with np.load(index_path, allow_pickle=False) as index:
+        names = index["frame_names"].astype(str).reshape(-1)
+        offsets = index["offsets"].astype(np.int64).reshape(-1)
+        lengths = index["lengths"].astype(np.int64).reshape(-1)
+    if not (len(names) == len(offsets) == len(lengths)):
+        raise ValueError(f"打包索引字段长度不一致: {index_path}")
+    if (len(set(names)) != len(names)
+            or any(not name or Path(name).name != name for name in names)
+            or np.any(lengths < 0)
+            or (len(names) and (offsets[0] != 0
+                or np.any(offsets[1:] != offsets[:-1] + lengths[:-1])
+                or offsets[-1] + lengths[-1] != pack_path.stat().st_size))):
+        raise ValueError(f"打包索引文件名或 offset/length 无效: {index_path}")
+    packed = (np.memmap(pack_path, mode="r", dtype=np.uint8)
+              if pack_path.stat().st_size else np.empty(0, dtype=np.uint8))
+    return packed, dict(zip(names, zip(offsets, lengths)))
+
+
+def data_files(directory, suffix):
+    directory = Path(directory)
+    packed = packed_directory(directory)
+    if packed is not None:
+        return sorted(directory / name for name in packed[1] if name.endswith(suffix))
+    return sorted(directory.glob(f"*{suffix}"))
+
+
+def source_file(path):
+    from data2datasets.dataset_for_all_task import HPE_Dataset
+
+    path = Path(path)
+    if path.is_relative_to(ROOT_PATH):
+        candidate = PACKED_DATA_ROOT / path.relative_to(ROOT_PATH)
+        if HPE_Dataset._packed_path_exists(candidate):
+            return candidate
+    return path
+
+
+def open_data_file(path):
+    path = Path(path)
+    packed = packed_directory(path.parent)
+    if packed is not None and path.name in packed[1]:
+        offset, length = packed[1][path.name]
+        return io.BytesIO(packed[0][offset:offset + length].tobytes())
+    return source_file(path).open("rb")
 
 
 def load_extrinsics(path):
@@ -416,7 +278,8 @@ def load_extrinsics(path):
 def load_point_cloud(path):
     """读取有效点云；异常或空帧返回统一空数组及跳过原因。"""
     try:
-        points = np.load(path).astype(np.float32)
+        with open_data_file(path) as source:
+            points = np.load(source).astype(np.float32)
     except Exception as error:
         return np.empty((0, 6), dtype=np.float32), f"无法读取：{error}"
     if points.ndim != 2 or points.shape[1] < 5:
@@ -433,8 +296,8 @@ def closest_timestamp_file(path, folder):
         except ValueError:
             return None
     target = timestamp(Path(path))
-    candidates = [(abs(value - target), item) for item in Path(folder).iterdir()
-                  if item.is_file() and (value := timestamp(item)) is not None]
+    candidates = [(abs(value - target), item) for item in data_files(folder, ".pkl")
+                  if (value := timestamp(item)) is not None]
     return min(candidates)[1] if candidates else None
 
 
@@ -448,10 +311,13 @@ def decimal_frame_ticks(frame_count, target_ticks=9):
 
 
 def draw_human_pose(ax, poses, color, label):
+    is_raw = label == "Raw"
     for person_index, pose in enumerate(poses):
-        ax.scatter(*pose.T, c=color, s=25, label=label if person_index == 0 else None)
+        ax.scatter(*pose.T, facecolors="none" if is_raw else color, edgecolors=color,
+                   s=65 if is_raw else 25, label=label if person_index == 0 else None)
         for parent, child in DIRECTED_BONES:
-            ax.plot(*pose[[parent, child]].T, c=color, linewidth=2)
+            ax.plot(*pose[[parent, child]].T, c=color, linewidth=2,
+                    linestyle="--" if is_raw else "-")
 
 
 def frame_mpjpe(poses, gt):
@@ -520,55 +386,133 @@ def frame_centered_mpjpe(poses, gt):
     return float(error_mm), len(rows), len(pred), len(target)
 
 
-def smooth_pose_records(records, prefix="", quality_hold=None, direction_hold=None):
-    """从全部原始预测重新平滑；历史显示随新观测更新，绝不反复平滑已滤波结果。
-
-    轨迹 ID 单调递增，不会复用。仅在首次和最后一次观测之间插补，
-    不在人体出现前或消失后生成骨架；缺失超过 MAX_INTERP_GAP 保持缺失。
-    """
-    quality_hold = QUALITY_HOLD if quality_hold is None else quality_hold
-    direction_hold = DIRECTION_HOLD if direction_hold is None else direction_hold
-    histories = {}
+def legacy_guard_pose_records(records, prefix=""):
+    """动点不足或头脚方向反转时保留上一帧可信骨架，不插值、不平滑。"""
+    history = {}
     for frame_index, record in enumerate(records):
-        for pose, detection_index in zip(record[f"{prefix}poses_raw"], record[f"{prefix}pose_indices"]):
-            track_id = int(record[f"{prefix}track_ids"][detection_index])
-            histories.setdefault(track_id, []).append((frame_index, pose))
-        record[f"{prefix}poses"] = []
-        record[f"{prefix}pose_track_ids"] = []
-        # 旧帧骨架会被更新，MPJPE 留待展示时按新姿态重新计算。
-        for metric_key in ("mpjpe_mm", "matched_people", "raw_mpjpe_mm", "raw_matched_people",
-                           "pa_mpjpe_mm", "raw_pa_mpjpe_mm", "centered_mpjpe_mm",
-                           "raw_centered_mpjpe_mm"):
-            record.pop(f"{prefix}{metric_key}", None)
-    # ponytail: 每次新帧重算全部历史，长序列总耗时为二次增长；需要时改为后台批处理。
-    quality_held_count = direction_held_count = 0
-    for track_id, observations in histories.items():
-        start, end = observations[0][0], observations[-1][0]
-        sequence = np.full((end - start + 1, 17, 3), np.nan, dtype=np.float64)
-        previous_reliable = None
-        for frame_index, pose in observations:
-            quality = records[frame_index].get(f"{prefix}quality", {}).get(track_id, {})
-            should_hold = quality_hold and quality.get("hold", False) and previous_reliable is not None
-            sequence[frame_index - start] = previous_reliable if should_hold else pose
-            if should_hold:
-                quality_held_count += 1
-            else:
-                previous_reliable = pose
-        sequence[~np.isfinite(sequence)] = np.nan
-        if direction_hold:
-            sequence, count = suppress_direction_flips(sequence)
-            direction_held_count += count
-        processed = process_single_track(sequence)
-        for offset, pose in enumerate(processed):
-            if not np.isfinite(pose).all():
+        poses, people, held = [], [], []
+        ratios = record.get("dynamic_micro_ratios", {})
+        dynamic_counts = record.get("dynamic_point_counts", {})
+        for raw, person in zip(record[f"{prefix}poses_raw"], record[f"{prefix}pose_indices"]):
+            person = int(person)
+            previous = history.get(person)
+            intervene = False
+            if previous is not None and previous[0] == frame_index - 1:
+                _, previous_pose = previous
+                axis = raw[0] - raw[[15, 16]].mean(axis=0)
+                previous_axis = previous_pose[0] - previous_pose[[15, 16]].mean(axis=0)
+                intervene = (
+                    ratios.get(person, np.inf) < ORIENTATION_DYNAMIC_MICRO_RATIO_THRESHOLD
+                    or dynamic_counts.get(person, np.inf) < ORIENTATION_DYNAMIC_POINT_COUNT_THRESHOLD
+                    # 点积为负等价于夹角超过 90°；零长度纵轴不参与方向判断。
+                    or np.dot(axis, previous_axis) < 0
+                )
+            pose = previous_pose.copy() if intervene else raw.copy()
+            history[person] = (frame_index, pose)
+            poses.append(pose)
+            people.append(person)
+            held.append(intervene)
+        record[f"{prefix}poses"] = np.asarray(poses, dtype=np.float32).reshape(-1, 17, 3)
+        record[f"{prefix}pose_track_ids"] = np.asarray(people, dtype=int)
+        record[f"{prefix}orientation_held"] = np.asarray(held, dtype=bool)
+
+
+# 固定阈值仅使用点数和预测变化，GT 误差不参与判决。
+TEMPORAL_GUARD_PARAMS = {
+    "min_dynamic": 10, "min_total": 20,
+    "root_speed_m_s": 2.0, "shape_speed_m_s": 1.25, "axis_jump_deg": 60.0,
+    "stable_root_speed_m_s": 1.0, "stable_shape_speed_m_s": 2 / 3,
+    "stable_axis_deg": 30.0, "confirm_frames": 3, "hold_frames": 2,
+}
+
+
+def pose_change(a, b):
+    root_a = a[[11, 12]].mean(0)
+    root_b = b[[11, 12]].mean(0)
+    root = float(np.linalg.norm(root_a - root_b))
+    shape = float(np.linalg.norm((a - root_a) - (b - root_b), axis=1).mean())
+    axis_a = a[0] - a[[15, 16]].mean(0)
+    axis_b = b[0] - b[[15, 16]].mean(0)
+    norm = np.linalg.norm(axis_a) * np.linalg.norm(axis_b)
+    angle = (float(np.degrees(np.arccos(np.clip(np.dot(axis_a, axis_b) / norm, -1, 1))))
+             if norm > 1e-10 else 180.0)
+    return root, shape, angle
+
+
+def pose_change_within(a, b, dt, stable=False):
+    root, shape, angle = pose_change(a, b)
+    p = TEMPORAL_GUARD_PARAMS
+    return (root <= p["stable_root_speed_m_s" if stable else "root_speed_m_s"] * dt
+            and shape <= p["stable_shape_speed_m_s" if stable else "shape_speed_m_s"] * dt
+            and angle <= p["stable_axis_deg" if stable else "axis_jump_deg"])
+
+
+def guard_pose_records(records, prefix=""):
+    """离线时序判决：确认后回填三帧，持续不稳定则撤销暂存输出。
+
+    shortcut: 人员沿用 GT 索引；接入检测轨迹时需改用稳定 track ID。
+    """
+    outputs = [{} for _ in records]
+    states = {}
+    params = TEMPORAL_GUARD_PARAMS
+    for i, record in enumerate(records):
+        stamp = Path(record["path"]).stem.split("_")
+        timestamp = int(stamp[0]) + int(stamp[1]) * 1e-9
+        for raw, person in zip(record[f"{prefix}poses_raw"], record[f"{prefix}pose_indices"]):
+            person = int(person)
+            if not np.isfinite(raw).all():
                 continue
-            record = records[start + offset]
-            record[f"{prefix}poses"].append(pose)
-            record[f"{prefix}pose_track_ids"].append(track_id)
-    for record in records:
-        record[f"{prefix}poses"] = np.asarray(record[f"{prefix}poses"], dtype=np.float32).reshape(-1, 17, 3)
-        record[f"{prefix}pose_track_ids"] = np.asarray(record[f"{prefix}pose_track_ids"], dtype=int)
-    return {"quality": quality_held_count, "direction": direction_held_count}
+            state = states.get(person)
+            if state is None or state["last"] != i - 1:
+                state = {"last": i - 1, "time": timestamp - .12, "ref": None,
+                         "pending": [], "candidate": []}
+                states[person] = state
+            dt = timestamp - state["time"]
+            if dt <= 0:
+                raise ValueError("Non-increasing point-cloud timestamp")
+            weak = (record["dynamic_point_counts"].get(person, 0) < params["min_dynamic"]
+                    or record["total_point_counts"].get(person, 0) < params["min_total"])
+            normal = (state["ref"] is not None
+                      and pose_change_within(raw, state["ref"], dt))
+            if not weak or normal:
+                outputs[i][person] = (raw.copy(), "accepted")
+                state["ref"] = raw.copy()
+                state["pending"] = []
+                state["candidate"] = []
+            else:
+                state["pending"].append(i)
+                candidates = state["candidate"]
+                if (candidates and candidates[-1][0] == i - 1
+                        and pose_change_within(raw, candidates[-1][1], dt, stable=True)):
+                    candidates.append((i, raw.copy()))
+                else:
+                    candidates[:] = [(i, raw.copy())]
+                if len(candidates) >= params["confirm_frames"]:
+                    for j, pose in candidates[-params["confirm_frames"]:]:
+                        outputs[j][person] = (pose.copy(), "confirmed")
+                    state["ref"] = raw.copy()
+                    state["pending"] = []
+                    state["candidate"] = []
+                else:
+                    if state["ref"] is not None and len(state["pending"]) <= params["hold_frames"]:
+                        outputs[i][person] = (state["ref"].copy(), "held")
+                    if len(state["pending"]) > params["hold_frames"]:
+                        # 离线评估撤销整个未确认区间，避免旧骨架被算作新观测。
+                        for j in state["pending"]:
+                            outputs[j].pop(person, None)
+            state["last"] = i
+            state["time"] = timestamp
+    for record, output in zip(records, outputs):
+        people = list(output)
+        record[f"{prefix}poses"] = np.asarray(
+            [output[p][0] for p in people], dtype=np.float32).reshape(-1, 17, 3)
+        record[f"{prefix}pose_track_ids"] = np.asarray(people, dtype=int)
+        record[f"{prefix}orientation_held"] = np.asarray(
+            [output[p][1] == "held" for p in people], dtype=bool)
+        record[f"{prefix}pose_status"] = {
+            int(p): output[int(p)][1] if int(p) in output else "excluded"
+            for p in record[f"{prefix}pose_indices"]
+        }
 
 
 def aggregate_mpjpe(frame_stats):
@@ -634,13 +578,12 @@ def append_group_metrics_markdown(metrics, path):
     headers = ["date", "group", "MODEL_POSE_PATH"]
     values = [str(metrics["date"]), str(metrics["group"]), str(MODEL_POSE_PATH)]
     for metric_label, metric_key in metric_names:
-        for section in ("current_frame", "temporal_accumulation"):
-            for stage in ("raw", "smooth"):
-                key = "smoothed" if stage == "smooth" else stage
+        for section in ("current_frame",):
+            for stage in ("raw", "guarded"):
                 headers.append(f"{section}-{stage} {metric_label} [inside/all]")
                 pair = []
                 for region in ("inside", "all"):
-                    metric = metrics["regions"][region][section][key][metric_key]
+                    metric = metrics["regions"][region][section][stage][metric_key]
                     pair.append(f"{metric:.3f}" if metric is not None else "N/A")
                 values.append("/".join(pair))
 
@@ -649,6 +592,8 @@ def append_group_metrics_markdown(metrics, path):
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) == 15:
+                cells = cells[:3] + cells[3:5] + cells[7:9] + cells[11:13]
             if (line.startswith("|") and len(cells) == len(headers)
                     and cells[0] not in {"date", "group", "---"}):
                 # 兼容旧的 group/date 列顺序。
@@ -680,19 +625,20 @@ class SelectedGroupVisualizer:
                 torch.cuda.current_device() if device_id is None else device_id
             )
         group_path = ROOT_PATH / DATE / "data_collection" / GROUP
-        self.paths = sorted((group_path / "dpct高位机/PC").glob("*.npy"))
+        self.paths = data_files(group_path / "dpct高位机/PC", ".npy")
         if not self.paths:
             raise FileNotFoundError(f"没有点云文件：{group_path / 'dpct高位机/PC'}")
+        print(f"训练配置：{TRAIN_CONFIG_PATH}；T={T}，单人点数={TRAIN_MAX_POINTS}，acc_frame={TRAIN_CONFIG['data'].get('acc_frame', 0)}")
         self.pose_model = load_models(self.device)
         self.gt_folder = group_path / "camera results/smoothed 3D"
         calib_path = ROOT_PATH / DATE / "calib"
-        extrinsic_path = calib_path / "extrinsic_img_to_radar_high.npz"
+        extrinsic_path = source_file(calib_path / "extrinsic_img_to_radar_high.npz")
         self.extrinsics = None
-        if show_gt and self.gt_folder.is_dir() and extrinsic_path.exists():
+        if show_gt and data_files(self.gt_folder, ".pkl") and extrinsic_path.exists():
             self.extrinsics = load_extrinsics(extrinsic_path)
         elif show_gt:
             print("未找到相机 GT 或外参，继续推理，MPJPE 将为 N/A。")
-        low_extrinsic_path = calib_path / "extrinsic_img_to_radar_low.npz"
+        low_extrinsic_path = source_file(calib_path / "extrinsic_img_to_radar_low.npz")
         if not extrinsic_path.exists() or not low_extrinsic_path.exists():
             raise FileNotFoundError("指标验收与重力坐标系绘图需要高、低位机外参文件")
         high = load_extrinsics(extrinsic_path)
@@ -701,20 +647,18 @@ class SelectedGroupVisualizer:
         translation = (np.asarray(low["t_est"]).reshape(3)
                        - rotation @ np.asarray(high["t_est"]).reshape(3))
         self.high_to_low = (rotation.astype(np.float32), translation.astype(np.float32))
-        self.gt_crop_tracks = {}
-        self.gt_accum_tracks = {}
         self.records = []
         self.current_index = 0
         self.group_metrics = None
         self.raw_training_ready = False
         self.fig = None
         self.frame_slider = None
-        self.defer_visual_smoothing = False
+        self.defer_visual_guarding = False
         if not visualize:
             return
-        self.fig = plt.figure(figsize=(14, 10), dpi=80)
-        self.axes = np.asarray([self.fig.add_subplot(2, 2, idx + 1, projection="3d")
-                                for idx in range(4)]).reshape(2, 2)
+        self.fig = plt.figure(figsize=(20, 6), dpi=80)
+        self.axes = np.asarray([self.fig.add_subplot(1, 3, idx + 1, projection="3d")
+                                for idx in range(3)]).reshape(1, 3)
         self.fig.subplots_adjust(bottom=.12, hspace=.12, wspace=.05)
         slider_ax = self.fig.add_axes([.15, .035, .70, .025])
         self.frame_slider = Slider(slider_ax, "Frame", 1, len(self.paths),
@@ -730,93 +674,42 @@ class SelectedGroupVisualizer:
         points, skip_reason = load_point_cloud(path)
         if skip_reason is not None:
             print(f"SKIPPED FRAME {DATE}/{GROUP} {path.name}: {skip_reason}")
-        if len(points) > TRAIN_MAX_POINTS:
-            sample_indices = np.random.default_rng(index).choice(
-                len(points), TRAIN_MAX_POINTS, replace=False
-            )
-        else:
-            sample_indices = np.arange(len(points))
-        sampled = points[sample_indices]
         record = {"path": str(path)}
         self.records.append(record)
+        self.visualization_mpjpe = None
         gt, has_gt = self.load_gt(record)
-        for history in self.gt_crop_tracks.values():
-            history.append(None)
-        gt_pose_tracks, gt_pose_indices, gt_accum_pose_tracks, gt_accum_pose_indices, gt_accumulated_clouds = [], [], [], [], []
-        gt_crop_quality, gt_accum_quality = {}, {}
         gt_boxes = []
+        dynamic_micro_ratios = {}
+        dynamic_point_counts = {}
+        total_point_counts = {}
         gt_selected_mask = np.zeros(len(points), dtype=bool)
         gt_track_ids = np.arange(len(gt), dtype=int)
         for person_index, person_gt in enumerate(gt):
-            history = self.gt_crop_tracks.setdefault(person_index, deque(maxlen=T))
-            if len(history) == 0:
-                history.extend([None] * min(len(self.records), T))
             bbox = np.concatenate((person_gt.min(axis=0) - GT_BBOX_MARGIN,
                                    person_gt.max(axis=0) + GT_BBOX_MARGIN))
             gt_boxes.append(bbox)
             gt_inside_original = ((points[:, :3] >= bbox[:3]) & (points[:, :3] <= bbox[3:])).all(1)
             gt_selected_mask |= gt_inside_original
-            inside_sampled = ((sampled[:, :3] >= bbox[:3]) & (sampled[:, :3] <= bbox[3:])).all(1)
-            gt_crop_quality[person_index] = point_cloud_quality(sampled[inside_sampled])
-            if inside_sampled.any():
-                history[-1] = mask_sampled_points(sampled, inside_sampled)
-                gt_pose_tracks.append(PoseTrack(person_index, None, history=history))
-                gt_pose_indices.append(person_index)
-            accum_track = self.gt_accum_tracks.setdefault(person_index, PoseTrack(person_index, None))
-            accum_track.history.append(None)
-            if skip_reason is not None:
-                continue
-            accumulated, _, _ = accumulate_track_static_points(
-                accum_track, sampled, inside_sampled, (bbox[:3] + bbox[3:]) / 2
+            tags = points[gt_inside_original, -1]
+            dynamic_count = int(np.isclose(tags, DYNAMIC_POINT_TAG).sum())
+            micro_count = int(np.isin(tags, np.arange(2, 8)).sum())
+            dynamic_point_counts[person_index] = dynamic_count
+            total_point_counts[person_index] = len(tags)
+            dynamic_micro_ratios[person_index] = (
+                dynamic_count / micro_count if micro_count else
+                (np.inf if dynamic_count else 0.0)
             )
-            accum_crop, _ = crop_and_pad(
-                accumulated, point_mask=np.ones(len(accumulated), dtype=bool),
-                max_points=TRAIN_MAX_POINTS
-            )
-            if accum_crop is not None:
-                gt_accum_quality[person_index] = point_cloud_quality(accumulated)
-                accum_track.history[-1] = accum_crop
-                gt_accum_pose_tracks.append(accum_track)
-                gt_accum_pose_indices.append(person_index)
-                gt_accumulated_clouds.append(accumulated[np.isfinite(accumulated).all(axis=1)])
-        gt_crop_poses = np.empty((0, 17, 3), dtype=np.float32)
-        gt_crop_output_indices = np.empty(0, dtype=int)
-        output_position = -1 if self.visualize else POSE_OUTPUT_POSITION
-        window_ready = self.visualize or index >= T - 1
-        if window_ready and gt_pose_tracks:
-            gt_pose_input = {key: value.to(self.device) for key, value in build_pose_input(gt_pose_tracks).items()}
-            valid = gt_pose_input["mask"][:, output_position].any(dim=1).cpu().numpy()
-            gt_crop_poses = self.pose_model(gt_pose_input)["pose"][:, output_position, 0].cpu().numpy()[valid]
-            gt_crop_output_indices = np.asarray(gt_pose_indices, dtype=int)[valid]
-        gt_accum_poses = np.empty((0, 17, 3), dtype=np.float32)
-        gt_accum_output_indices = np.empty(0, dtype=int)
-        if window_ready and gt_accum_pose_tracks:
-            gt_accum_input = {key: value.to(self.device) for key, value in build_pose_input(gt_accum_pose_tracks).items()}
-            valid = gt_accum_input["mask"][:, output_position].any(dim=1).cpu().numpy()
-            gt_accum_poses = self.pose_model(gt_accum_input)["pose"][:, output_position, 0].cpu().numpy()[valid]
-            gt_accum_output_indices = np.asarray(gt_accum_pose_indices, dtype=int)[valid]
-        record.update(gt_crop_track_ids=gt_track_ids,
+        record.update(dynamic_micro_ratios=dynamic_micro_ratios,
+                      dynamic_point_counts=dynamic_point_counts,
+                      total_point_counts=total_point_counts,
+                      gt_crop_track_ids=gt_track_ids,
                       gt_crop_pose_indices=np.empty(0, dtype=int),
                       gt_crop_poses_raw=np.empty((0, 17, 3), dtype=np.float32),
-                      gt_crop_quality=gt_crop_quality,
+                      gt_crop_quality={},
                       gt_boxes=np.asarray(gt_boxes, dtype=np.float32).reshape(-1, 6),
-                      gt_selected_mask=gt_selected_mask,
-                      gt_accum_track_ids=gt_track_ids,
-                      gt_accum_pose_indices=np.empty(0, dtype=int),
-                      gt_accum_poses_raw=np.empty((0, 17, 3), dtype=np.float32),
-                      gt_accum_quality=gt_accum_quality,
-                      gt_accumulated_person_indices=np.asarray(gt_accum_pose_indices, dtype=int),
-                      gt_accumulated_points_by_person=gt_accumulated_clouds,
-                      gt_accumulated_points=np.concatenate(gt_accumulated_clouds) if gt_accumulated_clouds else points[:0])
-        if window_ready:
-            target = record if self.visualize else self.records[index - POSE_LOOKAHEAD]
-            target["gt_crop_pose_indices"] = gt_crop_output_indices
-            target["gt_crop_poses_raw"] = gt_crop_poses
-            target["gt_accum_pose_indices"] = gt_accum_output_indices
-            target["gt_accum_poses_raw"] = gt_accum_poses
-        if self.visualize and not self.defer_visual_smoothing:
-            smooth_pose_records(self.records, "gt_crop_")
-            smooth_pose_records(self.records, "gt_accum_")
+                      gt_selected_mask=gt_selected_mask)
+        if self.visualize and not self.defer_visual_guarding:
+            guard_pose_records(self.records, "gt_crop_")
         return record, points, gt_selected_mask
 
     def load_gt(self, record):
@@ -827,7 +720,7 @@ class SelectedGroupVisualizer:
                 pose_file = closest_timestamp_file(Path(record["path"]), self.gt_folder)
                 if pose_file is not None:
                     record["gt_pose_path"] = str(pose_file)
-                    with pose_file.open("rb") as source:
+                    with open_data_file(pose_file) as source:
                         gt = transform_points(np.asarray(pickle.load(source)),
                                               self.extrinsics["R_est"],
                                               np.asarray(self.extrinsics["t_est"]).reshape(3))
@@ -842,11 +735,19 @@ class SelectedGroupVisualizer:
             return
         from data2datasets.dataset_for_all_task import HPE_Dataset, collate_fn
         from run.utils.load_config import load_config
-        from run.utils.process_one_epoch import resample_cropped_pointcloud
-
-        training_data = load_config(MODEL_POSE_PATH / "config/config.yaml")["data"]
-        if training_data["T"] != T or training_data["max_points"] != TRAIN_MAX_POINTS:
-            raise ValueError("推理 T/max_points 与训练实验配置不一致")
+        from run.utils.process_one_epoch import (
+            adapt_coordinate_frame, prepare_person_pointcloud, validate_coordinate_frame,
+            validate_center_xy_in_low,
+        )
+        training_data = dict(TRAIN_CONFIG["data"])
+        training_data.setdefault("person_max_points", 200)
+        training_task = dict(TRAIN_CONFIG["task"])
+        training_task.setdefault("coordinate", "low" if training_task.get("center_xy_in_low", False)
+                                 else training_task.get("coordinate_frame", "high"))
+        validate_coordinate_frame(training_task, training_data)
+        validate_center_xy_in_low(training_task, training_data)
+        if training_task["input"] != "radar_high_pc" or training_task["output"] != "gt_for_high":
+            raise ValueError("此脚本要求 radar_high_pc 输入和 gt_for_high 输出")
 
         for record in self.records:
             record["gt_crop_poses_raw"] = np.empty((0, 17, 3), dtype=np.float32)
@@ -857,7 +758,7 @@ class SelectedGroupVisualizer:
 
         point_sequences = []
         gt_sequences = []
-        for record in self.records:
+        for record in tqdm(self.records, desc="Loading training point clouds"):
             points, _ = load_point_cloud(record["path"])
             point_sequences.append(points)
             gt_sequences.append(self.load_gt(record)[0])
@@ -865,70 +766,56 @@ class SelectedGroupVisualizer:
             point_sequences, 0, training_data.get("acc_frame", 0)
         )
 
-        for start in range(len(self.records) - T + 1):
+        for start in tqdm(range(max(0, len(self.records) - T + 1)),
+                          desc="Training-window pose inference"):
             window = self.records[start:start + T]
-            # collate_fn 内部使用 torch.randperm 下采样；固定每个滑窗的种子，
-            # 否则后处理 A/B 两次运行的 raw 输入也会不同。
-            with torch.random.fork_rng(devices=[]):
-                torch.manual_seed(start)
-                samples = collate_fn(
-                    [{"radar_high_pc": point_sequences[start:start + T],
-                      "gt_for_high": gt_sequences[start:start + T]}],
-                    max_points=training_data["max_points"],
-                    max_people=training_data["max_people"],
-                )
-            points = samples["radar_high_pc"]["padded"]
-            point_mask = samples["radar_high_pc"]["mask"]
-            gt_data = samples["gt_for_high"]
-            person_mask = gt_data["mask"].permute(0, 2, 1)
-            bbox = gt_data["bbox"].permute(0, 2, 1, 3)
-            xyz = points[:, None, :, :, :3]
-            cropped_mask = (
-                ((xyz >= bbox[..., :3].unsqueeze(3)) &
-                 (xyz <= bbox[..., 3:].unsqueeze(3))).all(dim=-1)
-                & point_mask[:, None]
-                & person_mask.unsqueeze(-1)
+            samples = collate_fn(
+                [{"radar_high_pc": point_sequences[start:start + T],
+                  "gt_for_high": gt_sequences[start:start + T]}],
+                max_people=training_data["max_people"],
             )
-            cropped_points = points[:, None].expand(-1, person_mask.shape[1], -1, -1, -1)
-            cropped_points = cropped_points.masked_fill(~cropped_mask.unsqueeze(-1), 0.0)
-            valid_people = (person_mask.any(dim=2) & cropped_mask.any(dim=(2, 3)))[0]
+            rotation, translation = self.high_to_low
+            samples["high_to_low_R"] = torch.from_numpy(rotation.copy())[None, None].expand(1, T, -1, -1)
+            samples["high_to_low_t"] = torch.from_numpy(translation.copy())[None, None].expand(1, T, -1)
+            samples = adapt_coordinate_frame(samples, training_task, training_data, 'val')
+            model_input, gt_data, valid_instances, cropped_points, cropped_mask, pointcloud_center = prepare_person_pointcloud(
+                samples, training_task, training_data, self.device, 'val')
+            # 缺 GT 或裁剪不足 10 点均打断窗口，不能拆成短片段推理。
+            complete = model_input["mask"].any(dim=-1).all(dim=-1)
+            valid_people = valid_instances[0].clone()
+            valid_people[valid_instances[0]] = complete
             if not valid_people.any():
                 continue
-            with torch.random.fork_rng(devices=[]):
-                torch.manual_seed(start)
-                model_points, model_mask = resample_cropped_pointcloud(
-                    cropped_points[0, valid_people], cropped_mask[0, valid_people]
-                )
-            prediction = self.pose_model({
-                "input": model_points.to(self.device),
-                "mask": model_mask.to(self.device),
-            })["pose"][:, :, 0].cpu().numpy()
+            person_mask = gt_data["mask"].permute(0, 2, 1)
+            raw_cropped_points = cropped_points.clone()
+            if training_task.get("center_xy_in_low", False) or training_task.get("center_on_pointcloud", False):
+                raw_cropped_points[..., :3] += pointcloud_center.permute(0, 2, 1, 3).unsqueeze(-2)
+            if training_task["coordinate"] == "low":
+                raw_cropped_points[..., :3] = (
+                    raw_cropped_points[..., :3] - torch.as_tensor(translation, device=self.device)
+                ) @ torch.as_tensor(rotation, device=self.device)
+            model_input = {key: value[complete] for key, value in model_input.items()}
+            prediction = self.pose_model(model_input)["pose"][:, :, 0]
+            prediction += pointcloud_center[0][:, valid_people].permute(1, 0, 2)[:, :, None]
+            prediction = prediction.cpu().numpy()
+            if training_task["coordinate"] == "low":
+                prediction = (prediction - translation) @ rotation
             people = torch.nonzero(valid_people, as_tuple=True)[0].cpu().numpy()
             present = person_mask[0, valid_people, POSE_OUTPUT_POSITION].cpu().numpy()
             gt_present = present.copy()
-            # 当前输出帧框内有效输入点严格大于 20，才保存该人的预测。
-            present &= (
-                cropped_mask[0, valid_people, POSE_OUTPUT_POSITION].sum(dim=-1) > 20
-            ).cpu().numpy()
             record = window[POSE_OUTPUT_POSITION]
             record["gt_crop_poses_raw"] = prediction[present, POSE_OUTPUT_POSITION]
             record["gt_crop_pose_indices"] = people[present]
-            record["gt_crop_quality"] = {
-                int(person): point_cloud_quality(
-                    cropped_points[0, person, POSE_OUTPUT_POSITION][
-                        cropped_mask[0, person, POSE_OUTPUT_POSITION]
-                    ].cpu().numpy()
-                )
-                for person in (people[gt_present] if collect_quality else [])
-            }
+            record["gt_crop_quality"] = {}
             record["gt_crop_input_points"] = {
-                int(person): cropped_points[0, person, POSE_OUTPUT_POSITION][
+                int(person): raw_cropped_points[0, person, POSE_OUTPUT_POSITION][
                     cropped_mask[0, person, POSE_OUTPUT_POSITION]
                 ].cpu().numpy()
                 for person in people[gt_present]
             }
             record["gt_training_window"] = True
         self.raw_training_ready = True
+        self.visualization_mpjpe = None
 
     def save_raw_cache(self, path):
         """保存一次确定性推理的未后处理数据，供离线参数搜索。"""
@@ -945,25 +832,18 @@ class SelectedGroupVisualizer:
                 "gt": record["gt"],
                 "has_gt": record["has_gt"],
                 "gt_boxes": record["gt_boxes"],
+                "dynamic_micro_ratios": record["dynamic_micro_ratios"],
+                "dynamic_point_counts": record["dynamic_point_counts"],
+                "total_point_counts": record["total_point_counts"],
                 "current_track_ids": record["gt_crop_track_ids"],
                 "current_pose_indices": record["gt_crop_pose_indices"],
                 "current_poses_raw": record["gt_crop_poses_raw"],
                 "current_input_points": record["gt_crop_input_points"],
                 "current_quality": record["gt_crop_quality"],
                 "current_training_window": record["gt_training_window"],
-                "accum_track_ids": record["gt_accum_track_ids"],
-                "accum_pose_indices": record["gt_accum_pose_indices"],
-                "accum_poses_raw": record["gt_accum_poses_raw"],
-                "accum_input_points": {
-                    int(person): cloud for person, cloud in zip(
-                        record["gt_accumulated_person_indices"],
-                        record["gt_accumulated_points_by_person"],
-                    )
-                },
-                "accum_quality": record["gt_accum_quality"],
             })
         cache = {
-            "version": 1,
+            "version": 2,
             "date": DATE,
             "group": GROUP,
             "model_pose_path": str(MODEL_POSE_PATH),
@@ -980,97 +860,103 @@ class SelectedGroupVisualizer:
         print(f"raw cache 已保存：{path} ({path.stat().st_size / 1024**2:.1f} MiB)")
         return path
 
+    def metric_inputs(self, record, stage, inside_only=False):
+        """拒绝输出的人员同时从 GT 子集中移除，防止多人匹配串人。"""
+        prefix = "gt_crop_"
+        suffix, ids_suffix = {
+            "raw": ("poses_raw", "pose_indices"),
+            "legacy": ("poses_legacy", "pose_indices"),
+            "raw_kept": ("poses_raw", "pose_indices"),
+            "legacy_kept": ("poses_legacy", "pose_indices"),
+            "guarded": ("poses", "pose_track_ids"),
+        }[stage]
+        gt = record["gt"]
+        ids = np.arange(len(gt))
+        if inside_only:
+            ids = ids[acceptance_mask(gt, *self.high_to_low)]
+        if stage in ("raw_kept", "legacy_kept", "guarded"):
+            ids = ids[np.isin(ids, record[prefix + "pose_track_ids"])]
+        poses = record[prefix + suffix]
+        poses = poses[np.isin(record[prefix + ids_suffix], ids)]
+        if not record.get("gt_training_window", True):
+            gt = gt[:0]
+        else:
+            gt = gt[ids]
+        return poses, gt
+
     def evaluate_group(self):
-        """全组统一计算平滑前、平滑后指标，均按匹配人次加权。"""
+        """整组离线判决；同时报告全量基线、共同子集和输出覆盖率。"""
         if len(self.records) != len(self.paths):
             raise ValueError("整组尚未推理完成，不能报告整组 MPJPE")
         if self.group_metrics is not None:
             return self.group_metrics
         self.infer_gt_raw_as_training()
-        held_counts = {
-            "current_frame": smooth_pose_records(self.records, "gt_crop_"),
-            "temporal_accumulation": smooth_pose_records(self.records, "gt_accum_"),
-        }
-
-        def summarize(prefix, inside_only, training_windows=False):
+        legacy_guard_pose_records(self.records, "gt_crop_")
+        for record in self.records:
+            record["gt_crop_poses_legacy"] = record["gt_crop_poses"].copy()
+        guard_pose_records(self.records, "gt_crop_")
+        self.visualization_mpjpe = None
+        regions = {}
+        stages = ("raw", "legacy", "raw_kept", "legacy_kept", "guarded")
+        for region, inside_only in (("inside", True), ("all", False)):
             result = {}
-            for stage, suffix in (("raw", "poses_raw"), ("smoothed", "poses")):
-                triples = []
-                for metric in (frame_mpjpe, frame_centered_mpjpe, frame_pa_mpjpe):
-                    stats = []
-                    for record in self.records:
-                        poses = record[f"{prefix}{suffix}"]
-                        gt = record["gt"]
-                        if inside_only:
-                            inside = acceptance_mask(gt, *self.high_to_low)
-                            accepted_ids = np.flatnonzero(inside)
-                            ids_key = (f"{prefix}pose_indices" if stage == "raw"
-                                       else f"{prefix}pose_track_ids")
-                            poses = poses[np.isin(record[ids_key], accepted_ids)]
-                            gt = gt[inside]
-                        if training_windows and not record["gt_training_window"]:
-                            gt = gt[:0]
-                        stats.append(metric(poses, gt))
-                    triples.append(aggregate_mpjpe(stats)["mpjpe_mm"])
-                result[stage] = {
-                    "mpjpe_mm": triples[0],
-                    "centered_mpjpe_mm": triples[1],
-                    "pa_mpjpe_mm": triples[2],
-                }
-            return result
-
-        regions = {
-            "inside": {
-                "current_frame": summarize("gt_crop_", True, training_windows=True),
-                "temporal_accumulation": summarize("gt_accum_", True),
-            },
-            "all": {
-                "current_frame": summarize("gt_crop_", False, training_windows=True),
-                "temporal_accumulation": summarize("gt_accum_", False),
-            },
-        }
+            for stage in stages:
+                values = {}
+                for name, metric in (("mpjpe_mm", frame_mpjpe),
+                                     ("centered_mpjpe_mm", frame_centered_mpjpe),
+                                     ("pa_mpjpe_mm", frame_pa_mpjpe)):
+                    stats = aggregate_mpjpe([
+                        metric(*self.metric_inputs(record, stage, inside_only))
+                        for record in self.records
+                    ])
+                    values[name] = stats["mpjpe_mm"]
+                    if name == "mpjpe_mm":
+                        values["matched_people"] = stats["matched_people"]
+                result[stage] = values
+            eligible = result["raw"]["matched_people"]
+            kept = result["guarded"]["matched_people"]
+            assert kept == result["raw_kept"]["matched_people"] == result["legacy_kept"]["matched_people"]
+            result["coverage"] = {
+                "eligible_people": eligible, "kept_people": kept,
+                "excluded_people": eligible - kept,
+                "retained_pct": 100 * kept / eligible if eligible else None,
+            }
+            regions[region] = {"current_frame": result}
         self.group_metrics = {
             "date": DATE, "group": GROUP, "frames": len(self.records),
             "gt_frames": sum(record["has_gt"] for record in self.records),
-            "quality_hold_enabled": QUALITY_HOLD,
-            "direction_hold_enabled": DIRECTION_HOLD,
-            "quality_held_observations": held_counts,
             "regions": regions,
         }
-        print(f"点云质量门控：{'ON' if QUALITY_HOLD else 'OFF'}；保持观测数 "
-              f"current={held_counts['current_frame']['quality']}, "
-              f"accumulated={held_counts['temporal_accumulation']['quality']}")
-        print(f"运动朝向翻转抑制：{'ON' if DIRECTION_HOLD else 'OFF'}；保持观测数 "
-              f"current={held_counts['current_frame']['direction']}, "
-              f"accumulated={held_counts['temporal_accumulation']['direction']}")
-        fmt = lambda value: "N/A" if value is None else f"{value:.3f} mm"
-        for region, region_label in (("inside", "椭圆内"), ("all", "全部")):
-            for section, section_label in (("current_frame", "当前帧GT裁剪"),
-                                           ("temporal_accumulation", "时域积累GT裁剪")):
-                for stage, stage_label in (("raw", "平滑前"), ("smoothed", "平滑后")):
-                    values = regions[region][section][stage]
-                    print(f"{region_label} {section_label}{stage_label} MPJPE: {fmt(values['mpjpe_mm'])}；"
-                          f"Centered MPJPE: {fmt(values['centered_mpjpe_mm'])}；"
-                          f"PA-MPJPE: {fmt(values['pa_mpjpe_mm'])}")
+        fmt = lambda value: "N/A" if value is None else f"{value:.3f}"
+        print(f"{DATE}/{GROUP}: checkpoint=last.pth；离线三帧确认/回填")
+        print("| 区域 | 方法 | 人帧数 | MPJPE mm | Centered mm | PA mm |")
+        print("|---|---|---:|---:|---:|---:|")
+        labels = ("原始全量", "旧处理全量", "原始保留子集", "旧处理保留子集", "新时序处理")
+        for region, label in (("inside", "椭圆内"), ("all", "全部")):
+            result = regions[region]["current_frame"]
+            for stage, stage_label in zip(stages, labels):
+                v = result[stage]
+                print(f"| {label} | {stage_label} | {v['matched_people']} | "
+                      f"{fmt(v['mpjpe_mm'])} | {fmt(v['centered_mpjpe_mm'])} | {fmt(v['pa_mpjpe_mm'])} |")
+            c = result["coverage"]
+            print(f"{label}保留率：{fmt(c['retained_pct'])}% "
+                  f"({c['kept_people']}/{c['eligible_people']})；不输出 {c['excluded_people']} 人帧")
         return self.group_metrics
 
-
     def inside_frame_mpjpe(self, record, prefix, stage):
-        inside_ids = np.flatnonzero(acceptance_mask(record["gt"], *self.high_to_low))
-        poses = record[f"{prefix}{'poses_raw' if stage == 'raw' else 'poses'}"]
-        ids_suffix = "pose_indices" if stage == "raw" else "pose_track_ids"
-        pose_ids = record[f"{prefix}{ids_suffix}"]
-        return frame_mpjpe(poses[np.isin(pose_ids, inside_ids)], record["gt"][inside_ids])[0]
+        if prefix != "gt_crop_":
+            raise ValueError("仅支持训练式 GT 裁剪支路")
+        return frame_mpjpe(*self.metric_inputs(record, stage, True))[0]
 
     def save_metric_timeseries(self):
-        """按人员保存椭圆内当前帧 GT 裁剪的 raw/smoothed MPJPE。"""
+        """按人员保存椭圆内当前帧 GT 裁剪的 raw/guarded MPJPE。"""
         frame_indices = np.arange(1, len(self.records) + 1)
         frame_ticks = decimal_frame_ticks(len(self.records))
         output_dir = METRIC_VIS_ROOT / DATE / GROUP
         output_dir.mkdir(parents=True, exist_ok=True)
         max_people = max((len(record["gt"]) for record in self.records), default=0)
         stage_values = {}
-        for stage in ("raw", "smoothed"):
+        for stage in ("raw", "guarded"):
             stage_values[stage] = {}
             suffix = "poses_raw" if stage == "raw" else "poses"
             ids_suffix = "pose_indices" if stage == "raw" else "pose_track_ids"
@@ -1104,14 +990,17 @@ class SelectedGroupVisualizer:
             action_dir = Path(pose_path).parent.parent / "action label"
             candidates = [action_dir / f"{Path(pose_path).stem}{suffix}"
                           for suffix in (".pkl", ".npz")]
-            action_path = next((path for path in candidates if path.exists()), None)
+            packed = packed_directory(action_dir)
+            action_path = next((path for path in candidates
+                                if (packed is not None and path.name in packed[1])
+                                or source_file(path).is_file()), None)
             if action_path is None:
                 continue
             if action_path.suffix == ".npz":
-                with np.load(action_path) as data:
+                with open_data_file(action_path) as source, np.load(source) as data:
                     action_data = data["labels"]
             else:
-                with action_path.open("rb") as source:
+                with open_data_file(action_path) as source:
                     loaded = pickle.load(source)
                 action_data = loaded["labels"] if isinstance(loaded, dict) else loaded
             action_data = np.asarray(action_data)
@@ -1124,7 +1013,7 @@ class SelectedGroupVisualizer:
 
         output_paths = []
         person_colors = plt.get_cmap("tab10")
-        for stage, title in (("raw", "Raw"), ("smoothed", "Smoothed")):
+        for stage, title in (("raw", "Raw"), ("guarded", "Guarded")):
             fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)
             for person_index, values in stage_values[stage].items():
                 if np.isfinite(values).any():
@@ -1199,42 +1088,60 @@ class SelectedGroupVisualizer:
         return output_path
 
     def save_high_error_frames(self):
-        """保存椭圆内 current raw/smoothed MPJPE 均超阈值的最差 20 帧。"""
+        """保存椭圆内 current raw/guarded MPJPE 均超阈值的最差 20 帧。"""
         output_dir = ERROR_VIS_ROOT / DATE / GROUP
         selected = []
         for index, record in enumerate(self.records):
             current_raw_error = self.inside_frame_mpjpe(record, "gt_crop_", "raw")
-            current_smooth_error = self.inside_frame_mpjpe(record, "gt_crop_", "smoothed")
+            current_guarded_error = self.inside_frame_mpjpe(record, "gt_crop_", "guarded")
             if all(value is not None and value > ERROR_VIS_THRESHOLD_MM
-                   for value in (current_raw_error, current_smooth_error)):
-                selected.append((index, current_raw_error, current_smooth_error))
+                   for value in (current_raw_error, current_guarded_error)):
+                selected.append((index, current_raw_error, current_guarded_error))
         selected.sort(key=lambda item: item[2], reverse=True)
         selected = selected[:ERROR_VIS_MAX_FRAMES]
         output_dir.mkdir(parents=True, exist_ok=True)
         for old_png in output_dir.glob("*.png"):
             old_png.unlink()
         if not selected:
-            print(f"{DATE}/{GROUP}: 没有椭圆内 current raw 和 smoothed MPJPE 均超过 "
+            print(f"{DATE}/{GROUP}: 没有椭圆内 current raw 和 guarded MPJPE 均超过 "
                   f"{ERROR_VIS_THRESHOLD_MM:.0f} mm 的帧")
             return 0
 
-        self.fig = plt.figure(figsize=(14, 10), dpi=100, constrained_layout=True)
-        self.axes = np.asarray([self.fig.add_subplot(2, 2, idx + 1, projection="3d")
-                                for idx in range(4)]).reshape(2, 2)
-        for index, current_raw_error, current_smooth_error in selected:
+        self.fig = plt.figure(figsize=(20, 6), dpi=100, constrained_layout=True)
+        self.axes = np.asarray([self.fig.add_subplot(1, 3, idx + 1, projection="3d")
+                                for idx in range(3)]).reshape(1, 3)
+        for index, current_raw_error, current_guarded_error in selected:
             fmt = lambda value: "N-A" if value is None else f"{value:.1f}mm"
             note = (f"ellipse-only  current_raw={fmt(current_raw_error)}  "
-                    f"current_smooth={fmt(current_smooth_error)}")
+                    f"current_guarded={fmt(current_guarded_error)}")
             self.show_frame(index, note=note)
             frame_name = Path(self.records[index]["path"]).stem
             filename = (f"{DATE}_{GROUP}_frame_{index + 1:06d}_{frame_name}_ellipse-only_"
                         f"current_raw_{fmt(current_raw_error)}_"
-                        f"current_smooth_{fmt(current_smooth_error)}.png")
+                        f"current_guarded_{fmt(current_guarded_error)}.png")
             self.fig.savefig(output_dir / filename, dpi=100)
         plt.close(self.fig)
         self.fig = None
         print(f"{DATE}/{GROUP}: 已保存 {len(selected)} 帧到 {output_dir}")
         return len(selected)
+
+    def get_visualization_mpjpe(self):
+        """按整组匹配人次加权，缓存标题指标，回看时无需重复统计。"""
+        if getattr(self, "visualization_mpjpe", None) is None:
+            self.visualization_mpjpe = {}
+            for inside_only in (True, False):
+                averages = []
+                for poses_key, ids_key in (
+                    ("gt_crop_poses_raw", "gt_crop_pose_indices"),
+                    ("gt_crop_poses", "gt_crop_pose_track_ids"),
+                ):
+                    stats = []
+                    stage = "raw" if poses_key.endswith("poses_raw") else "guarded"
+                    for record in self.records:
+                        stats.append(frame_mpjpe(*self.metric_inputs(record, stage, inside_only)))
+                    averages.append(aggregate_mpjpe(stats)["mpjpe_mm"])
+                self.visualization_mpjpe[inside_only] = averages
+        return self.visualization_mpjpe
 
     def show_frame(self, index, note=None):
         if index == len(self.records):
@@ -1277,8 +1184,8 @@ class SelectedGroupVisualizer:
             ax.scatter(*cloud[dynamic, :3].T, c="red", s=5)
             ax.scatter(*cloud[static, :3].T, c="blue", s=5)
             ax.legend(handles=[
-                Line2D([], [], color="red", marker=".", linestyle="None", label="Selected dynamic (tag=1)"),
-                Line2D([], [], color="blue", marker=".", linestyle="None", label="Selected static (tag=2..7)"),
+                Line2D([], [], color="red", marker=".", linestyle="None", label=f"Selected dynamic (tag=1): {int(dynamic.sum())}"),
+                Line2D([], [], color="blue", marker=".", linestyle="None", label=f"Selected static (tag=2..7): {int(static.sum())}"),
                 Line2D([], [], color="gray", marker=".", linestyle="None", label="Outside GT boxes"),
             ], fontsize=7.5, loc="upper left")
 
@@ -1292,47 +1199,49 @@ class SelectedGroupVisualizer:
                 for start, end in edges:
                     ax.plot(*corners[[start, end]].T, color="green", linewidth=1.5)
 
-        accumulated_clouds = [cloud for person_index, cloud in zip(
-            record["gt_accumulated_person_indices"], record["gt_accumulated_points_by_person"]
-        ) if person_index in inside_ids]
-        accumulated = transform_cloud(
-            np.concatenate(accumulated_clouds) if accumulated_clouds else points[:0],
-            rotation, translation,
-        )
-        draw_points(self.axes[0, 0], plot_points, visible_point_mask)
+        training_clouds = [cloud for person, cloud in record.get("gt_crop_input_points", {}).items()
+                           if person in inside_ids]
+        training_cloud = np.concatenate(training_clouds) if training_clouds else points[:0]
+        if len(training_cloud):
+            draw_points(self.axes[0, 0], transform_cloud(training_cloud, rotation, translation))
+            point_title = "Training crop points: before 200-point resampling"
+        else:
+            draw_points(self.axes[0, 0], plot_points, visible_point_mask)
+            point_title = "Current frame points: no training crop available"
         draw_boxes(self.axes[0, 0])
-        self.axes[0, 0].set_title("Current points: GT crop")
-        draw_points(self.axes[1, 0], accumulated)
-        draw_boxes(self.axes[1, 0])
-        self.axes[1, 0].set_title("Accumulated points: GT crop")
-
-        def errors(poses):
-            return (frame_mpjpe(poses, metric_gt)[0],
-                    frame_centered_mpjpe(poses, metric_gt)[0],
-                    frame_pa_mpjpe(poses, metric_gt)[0])
-
-        def metric_label(name, poses):
-            values = errors(poses)
+        self.axes[0, 0].set_title(point_title)
+        def metric_label(name, poses, target, average):
+            values = (frame_mpjpe(poses, target)[0],
+                      frame_centered_mpjpe(poses, target)[0],
+                      frame_pa_mpjpe(poses, target)[0])
             formatted = ["N/A" if value is None else f"{value:.1f}" for value in values]
-            return f"{name}: MPJPE/Centered/PA={'/'.join(formatted)} mm"
+            mean = "N/A" if average is None else f"{average:.1f}"
+            return (f"{name}: frame MPJPE/Centered/PA={'/'.join(formatted)} mm\n"
+                    f"Group mean MPJPE={mean} mm")
 
-        for ax, raw, raw_ids, smooth, smooth_ids, title in (
-            (self.axes[0, 1], record["gt_crop_poses_raw"], record["gt_crop_pose_indices"],
-             record["gt_crop_poses"], record["gt_crop_pose_track_ids"], "Current crop pose: GT"),
-            (self.axes[1, 1], record["gt_accum_poses_raw"], record["gt_accum_pose_indices"],
-             record["gt_accum_poses"], record["gt_accum_pose_track_ids"], "Accumulated pose: GT"),
+        for ax, inside_only, title in (
+            (self.axes[0, 1], True, "Training pose: inside ellipse"),
+            (self.axes[0, 2], False, "Training pose: all people"),
         ):
-            raw = raw[np.isin(raw_ids, inside_ids)]
-            smooth = smooth[np.isin(smooth_ids, inside_ids)]
+            raw = record["gt_crop_poses_raw"]
+            guarded = record["gt_crop_poses"]
+            target = gt
+            if inside_only:
+                raw = raw[np.isin(record["gt_crop_pose_indices"], inside_ids)]
+                guarded = guarded[np.isin(record["gt_crop_pose_track_ids"], inside_ids)]
+                target = metric_gt
             if has_gt:
-                draw_human_pose(ax, plot_gt, "green", "Camera GT")
+                draw_human_pose(ax, transform_points(target, rotation, translation), "green", "Camera GT")
+            draw_human_pose(ax, transform_points(guarded, rotation, translation), "magenta", "Guarded")
+            # Raw 后画为空心关节和虚线，重合时仍能看见两条支路。
             draw_human_pose(ax, transform_points(raw, rotation, translation), "orange", "Raw")
-            draw_human_pose(ax, transform_points(smooth, rotation, translation), "magenta", "Smoothed")
-            ax.set_title(title)
+            averages = self.get_visualization_mpjpe()[inside_only]
+            formatted = ["N/A" if value is None else f"{value:.1f}" for value in averages]
+            ax.set_title(f"{title}\nGroup mean MPJPE: Raw={formatted[0]}, Guarded={formatted[1]} mm")
             ax.legend(handles=[
                 Line2D([], [], color="green", marker="o", label="Camera GT"),
-                Line2D([], [], color="orange", marker="o", label=metric_label("Raw", raw)),
-                Line2D([], [], color="magenta", marker="o", label=metric_label("Smoothed", smooth)),
+                Line2D([], [], color="orange", marker="o", label=metric_label("Raw", raw, target, averages[0])),
+                Line2D([], [], color="magenta", marker="o", label=metric_label("Temporal", *self.metric_inputs(record, "guarded", inside_only), averages[1])),
             ], fontsize=7.5, loc="upper left")
         title = f"date={DATE}  group={GROUP}  frame={index + 1}/{len(self.paths)}  {Path(record['path']).name}"
         if note:
@@ -1344,16 +1253,18 @@ class SelectedGroupVisualizer:
         return
 
     def precompute_visualization(self):
-        """WebAgg 启动前完成整组末位推理，最后统一执行一次平滑。"""
-        self.defer_visual_smoothing = True
+        """WebAgg 启动前完成整组末位推理，最后统一执行离线时序判决。"""
+        self.defer_visual_guarding = True
         try:
             for index in tqdm(range(len(self.records), len(self.paths)),
-                              desc="Precomputing WebAgg frames"):
+                              desc="Loading WebAgg frames"):
                 self.infer_frame(index)
         finally:
-            self.defer_visual_smoothing = False
-        smooth_pose_records(self.records, "gt_crop_")
-        smooth_pose_records(self.records, "gt_accum_")
+            self.defer_visual_guarding = False
+        self.infer_gt_raw_as_training()
+        print("推理完成，正在执行离线骨架时序判决……", flush=True)
+        guard_pose_records(self.records, "gt_crop_")
+        print("时序判决完成，正在准备 WebAgg……", flush=True)
 
     def on_slider(self, value):
         index = int(value) - 1
@@ -1395,28 +1306,114 @@ def self_test():
     sparse_static = np.array([[0, 0, 0, 0, 0, 2], [.05, 0, 0, 0, 0, 2]], dtype=np.float32)
     sparse_dynamic = sparse_static.copy()
     sparse_dynamic[:, -1] = DYNAMIC_POINT_TAG
-    assert point_cloud_quality(sparse_static)["hold"]
-    assert not point_cloud_quality(sparse_dynamic)["hold"]
-    pose0, pose1 = np.zeros((17, 3), dtype=np.float32), np.ones((17, 3), dtype=np.float32)
-    records = [
-        {"poses_raw": pose0[None], "pose_indices": np.array([0]),
-         "track_ids": np.array([7]), "quality": {7: {"hold": False}}},
-        {"poses_raw": pose1[None], "pose_indices": np.array([0]),
-         "track_ids": np.array([7]), "quality": {7: {"hold": True}}},
+    accumulation_track = PoseTrack(1)
+    all_points = np.ones(2, dtype=bool)
+    accumulate_track_static_points(
+        accumulation_track, sparse_static, all_points, np.zeros(3), True
+    )
+    mixed = np.concatenate((sparse_dynamic[:1], sparse_static[:1]))
+    accumulate_track_static_points(
+        accumulation_track, mixed, all_points, np.zeros(3), True
+    )
+    after_boundary, _, _ = accumulate_track_static_points(
+        accumulation_track, sparse_static, all_points, np.zeros(3), True
+    )
+    assert len(after_boundary) == 2
+    accumulated, _, _ = accumulate_track_static_points(
+        accumulation_track, sparse_static, all_points, np.zeros(3), True
+    )
+    assert len(accumulated) == 4
+    # 任一条件低于阈值就保持；两项均达到阈值才采用 raw。
+    pose = np.zeros((17, 3), dtype=np.float32)
+    test_records = []
+    for raw, ratio, count in ((pose, 0, 0), (pose + 0.1, 0.199, 9),
+                              (pose + 0.2, 0, 0), (pose + 0.3, 0.2, 9),
+                              (pose + 0.4, 1, 1), (pose + 0.5, 0.1, 10),
+                              (pose + 0.6, 0.2, 10), (pose + 0.7, 1, 11)):
+        test_records.append(dict(poses_raw=raw[None].copy(), pose_indices=np.array([0]),
+                                 dynamic_micro_ratios={0: ratio}, dynamic_point_counts={0: count}))
+    legacy_guard_pose_records(test_records)
+    for index in (1, 2, 3, 4, 5):
+        np.testing.assert_array_equal(test_records[index]["poses"][0], pose)
+        assert test_records[index]["orientation_held"][0]
+    for index in (6, 7):
+        np.testing.assert_array_equal(test_records[index]["poses"], test_records[index]["poses_raw"])
+        assert not test_records[index]["orientation_held"][0]
+    test_records[1]["poses_raw"] = np.empty((0, 17, 3), dtype=np.float32)
+    test_records[1]["pose_indices"] = np.empty(0, dtype=int)
+    legacy_guard_pose_records(test_records)
+    assert len(test_records[1]["poses"]) == 0
+    np.testing.assert_array_equal(test_records[2]["poses"], test_records[2]["poses_raw"])
+    test_records[1]["poses_raw"] = (pose + 0.1)[None]
+    test_records[1]["pose_indices"] = np.array([1])
+    legacy_guard_pose_records(test_records)
+    np.testing.assert_array_equal(test_records[2]["poses"], test_records[2]["poses_raw"])
+    # 动点充足也拒绝连续反转；恢复可信方向和恰好 90° 的变化可通过。
+    axis_pose = np.zeros((17, 3), dtype=np.float32)
+    axis_pose[0, 2] = 1.
+    axis_pose[[15, 16], 2] = -1.
+    direction_records = [
+        dict(poses_raw=raw[None].copy(), pose_indices=np.array([0]),
+             dynamic_micro_ratios={0: 1.}, dynamic_point_counts={0: 100})
+        for raw in (axis_pose, -axis_pose + .1, -axis_pose + .2,
+                    axis_pose + .3, axis_pose[:, [2, 1, 0]] + .4)
     ]
-    counts = smooth_pose_records(records, quality_hold=True, direction_hold=False)
-    assert counts == {"quality": 1, "direction": 0}
-    np.testing.assert_allclose(records[1]["poses"], pose0[None])
-    facing_pose = np.zeros((17, 3), dtype=np.float32)
-    facing_pose[5], facing_pose[6] = [-.2, 0, 1], [.2, 0, 1]
-    facing_pose[11], facing_pose[12] = [-.2, 0, 0], [.2, 0, 0]
-    flipped_pose = facing_pose.copy()
-    flipped_pose[:, :2] *= -1
-    flipped_pose[:, 0] += .1
-    stabilized, count = suppress_direction_flips(np.stack((facing_pose, flipped_pose)))
-    assert count == 1
-    np.testing.assert_allclose(stabilized[1] - stabilized[1, [11, 12]].mean(0),
-                               facing_pose - facing_pose[[11, 12]].mean(0))
+    legacy_guard_pose_records(direction_records)
+    for index in (1, 2):
+        assert direction_records[index]["orientation_held"][0]
+        np.testing.assert_array_equal(direction_records[index]["poses"][0], axis_pose)
+    for index in (0, 3, 4):
+        assert not direction_records[index]["orientation_held"][0]
+        np.testing.assert_array_equal(direction_records[index]["poses"], direction_records[index]["poses_raw"])
+    # 重合时 Raw 保留橙色空心关节和虚线。
+    fig = plt.figure()
+    ax = fig.add_subplot(projection="3d")
+    draw_human_pose(ax, pose[None], "magenta", "Guarded")
+    draw_human_pose(ax, pose[None], "orange", "Raw")
+    assert len(ax.collections) == 2 and len(ax.lines) == 2 * len(DIRECTED_BONES)
+    assert ax.lines[-1].get_linestyle() == "--"
+    assert len(ax.collections[-1].get_facecolors()) == 0
+    plt.close(fig)
+    from tempfile import TemporaryDirectory
+
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "points.npy"
+        np.save(path, sparse_dynamic)
+        app = SelectedGroupVisualizer.__new__(SelectedGroupVisualizer)
+        app.visualize = True
+        app.paths = [path]
+        app.high_to_low = (np.eye(3), np.zeros(3))
+        gt = np.zeros((1, 17, 3), dtype=np.float32)
+        gt[..., :2] = ACCEPTANCE_CENTER_XY
+        empty_poses = np.empty((0, 17, 3), dtype=np.float32)
+        record = dict(path=path, gt=gt, has_gt=True,
+                      gt_boxes=np.array([[0, -1, -1, 4, 1, 1]]),
+                      gt_crop_poses_raw=empty_poses, gt_crop_poses=empty_poses,
+                      gt_crop_pose_indices=np.empty(0, dtype=int),
+                      gt_crop_pose_track_ids=np.empty(0, dtype=int))
+        app.records = [record]
+        app.get_visualization_mpjpe = lambda: {True: [None, None], False: [None, None]}
+        app.fig = plt.figure()
+        app.axes = np.array([app.fig.add_subplot(1, 3, i + 1, projection="3d")
+                             for i in range(3)]).reshape(1, 3)
+        try:
+            for clouds, expected_count, title in (
+                ({}, 2, "Current frame"),
+                ({0: sparse_dynamic[:0]}, 2, "Current frame"),
+                ({1: sparse_dynamic[:1]}, 2, "Current frame"),
+                ({0: sparse_dynamic[:1]}, 1, "Training crop"),
+            ):
+                record["gt_crop_input_points"] = clouds
+                app.show_frame(0)
+                ax = app.axes[0, 0]
+                assert ax.get_title().startswith(title)
+                labels = [text.get_text() for text in ax.get_legend().get_texts()]
+                assert labels[:2] == [f"Selected dynamic (tag=1): {expected_count}",
+                                      "Selected static (tag=2..7): 0"]
+                assert sum(len(c._offsets3d[0]) for c in ax.collections
+                           if hasattr(c, "_offsets3d")) == expected_count
+        finally:
+            plt.close(app.fig)
     print("self-test passed")
 
 
@@ -1433,10 +1430,12 @@ def main():
         default=Path(f"/home/pai/Huawei/temp/Inference_selected_group_{DATE}_{GROUP}_raw.pkl"),
         help="离线模式保存未后处理数据的路径",
     )
-    parser.add_argument("--save-raw-cache", action=argparse.BooleanOptionalAction, default=True,
-                        help="离线模式是否保存 raw cache")
+    parser.add_argument("--save-raw-cache", action=argparse.BooleanOptionalAction, default=False,
+                        help="离线模式是否保存 raw cache（默认不保存）")
     parser.add_argument("--raw-only", action="store_true",
                         help="保存 raw cache 后直接退出，不执行任何姿态后处理")
+    parser.add_argument("--save-results", action="store_true",
+                        help="保存指标及图片；默认仅在终端输出")
     args = parser.parse_args()
     if args.raw_only and not args.save_raw_cache:
         parser.error("--raw-only 需要保留 --save-raw-cache")
@@ -1446,13 +1445,17 @@ def main():
     app = SelectedGroupVisualizer(args.device, show_gt=not args.no_gt,
                                   visualize=args.visualize or bool(args.smoke_frames))
     if args.smoke_frames:
-        for index in range(min(args.smoke_frames, len(app.paths))):
+        frame_count = min(max(T, args.smoke_frames), len(app.paths))
+        for index in range(frame_count):
+            app.infer_frame(index)
+        app.infer_gt_raw_as_training()
+        guard_pose_records(app.records, "gt_crop_")
+        for index in range(frame_count):
             app.show_frame(index)
-            record = app.records[-1]
+            record = app.records[index]
             assert np.isfinite(record["gt_crop_poses"]).all()
-            assert app.axes.shape == (2, 2)
-            print(f"frame {index}: gt_poses={len(record['gt_crop_poses'])}, "
-                  f"gt_accum_poses={len(record['gt_accum_poses'])}")
+            assert app.axes.shape == (1, 3)
+            print(f"frame {index}: gt_poses={len(record['gt_crop_poses'])}")
         app.fig.canvas.draw()
         # 回看不能推进历史状态或再次执行模型。
         record_count = len(app.records)
@@ -1468,14 +1471,15 @@ def main():
         if args.raw_only:
             return
         metrics = app.evaluate_group()
-        append_group_metrics_markdown(metrics, Path(__file__).with_name("record.md"))
-        app.save_high_error_frames()
-        app.save_metric_timeseries()
-        app.save_point_count_timeseries()
+        if args.save_results:
+            append_group_metrics_markdown(metrics, Path(__file__).with_name("record.md"))
+            app.save_high_error_frames()
+            app.save_metric_timeseries()
+            app.save_point_count_timeseries()
         return
     app.precompute_visualization()
     app.show_frame(0)
-    print("WebAgg 使用端口 8988；空格/右箭头下一帧，左箭头回看。")
+    print("正在启动 WebAgg：http://127.0.0.1:8988/；空格/右箭头下一帧，左箭头回看。", flush=True)
     plt.show()
 
 

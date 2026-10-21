@@ -234,7 +234,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scan packed radar BIN frames for numeric and length errors"
     )
-    parser.add_argument("--root", type=Path, default=Path("/mnt/ssd/Huawei"))
+    parser.add_argument("--root", type=Path, default=Path("/mnt/ssd/Huawei/"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--chunk-frames", type=int, default=32)
     parser.add_argument("--workers", type=int, default=1)

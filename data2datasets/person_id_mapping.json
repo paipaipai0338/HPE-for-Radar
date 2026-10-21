@@ -1,0 +1,86 @@
+{
+  "sources": [
+    "/mnt/huawei/采集信息记录.xlsx",
+    "/mnt/huawei/十月后采集信息记录.xlsx"
+  ],
+  "notes": [
+    "person_id 为字符串，每个人具有独立且唯一的编号，与 data description.json 一致。",
+    "-1 专用于多人组；按人员划分时直接进入训练集，不因参与者包含验证人员而进入验证集。",
+    "原始采集表中的李靖、张晓姿重号 10：李靖保留 10，张晓姿改为 12。",
+    "多人剧本中的角色序号不是 person_id。"
+  ],
+  "people": [
+    {
+      "name": "某不知名男生",
+      "person_id": "0"
+    },
+    {
+      "name": "张浩楠",
+      "person_id": "1"
+    },
+    {
+      "name": "熊宇聪",
+      "person_id": "2"
+    },
+    {
+      "name": "冯豪迪",
+      "person_id": "3"
+    },
+    {
+      "name": "张北昌",
+      "person_id": "4"
+    },
+    {
+      "name": "任馨怡",
+      "person_id": "5"
+    },
+    {
+      "name": "任欢乐",
+      "person_id": "6"
+    },
+    {
+      "name": "唐佳杰",
+      "person_id": "7"
+    },
+    {
+      "name": "李金旭",
+      "person_id": "8"
+    },
+    {
+      "name": "王世橙",
+      "person_id": "9"
+    },
+    {
+      "name": "李靖",
+      "person_id": "10"
+    },
+    {
+      "name": "张晓姿",
+      "person_id": "12"
+    },
+    {
+      "name": "殷熙遥",
+      "person_id": "11"
+    },
+    {
+      "name": "王昱博",
+      "person_id": "13"
+    },
+    {
+      "name": "郑宇捷",
+      "person_id": "14"
+    },
+    {
+      "name": "杨皓宇",
+      "person_id": "15"
+    },
+    {
+      "name": "彭程远",
+      "person_id": "16"
+    },
+    {
+      "name": "龚思凡",
+      "person_id": "17"
+    }
+  ]
+}

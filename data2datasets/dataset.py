@@ -121,8 +121,7 @@ class HPE_Dataset(Dataset):
         self.npy_valid_cache = {}
 
         # 加载元信息
-        json_path = self.root_path / 'data description.json'
-        self.meta_info = get_meta_info(json_path)
+        self.meta_info = get_meta_info()
         
         # 定义传感器，是否选取该传感器
         self.sensor_config = {

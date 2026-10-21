@@ -1,4 +1,4 @@
-"""Pack radar BIN, PC and GT files per group without changing their bytes."""
+"""Pack radar BIN, PC, GT and action labels per group without changing their bytes."""
 
 import argparse
 import hashlib
@@ -16,6 +16,7 @@ SENSOR_DIRS = {
     "dpct高位机/PC": ".npy", 
     # "dpct低位机/PC": ".npy",
     "camera results/smoothed 3D": ".pkl",
+    "camera results/action label": (".pkl", ".npz"),
 }
 INDEX_NAME = "frames_index.npz"
 CHUNK_SIZE = 16 * 1024 * 1024
@@ -26,8 +27,9 @@ def timestamp_ns(path: Path) -> int:
     return int(second) * 1_000_000_000 + int(nanosecond)
 
 
-def discover_data_dirs(root: Path, dates: list[str] | None) -> list[tuple[Path, str]]:
+def discover_data_dirs(root: Path, dates: list[str] | None, groups: list[str] | None = None) -> list[tuple[Path, str | tuple[str, ...]]]:
     requested = set(dates) if dates else None
+    requested_groups = set(groups) if groups else None
     directories = []
     for date_dir in root.iterdir():
         if requested is not None and date_dir.name not in requested:
@@ -36,6 +38,8 @@ def discover_data_dirs(root: Path, dates: list[str] | None) -> list[tuple[Path, 
         if not collection_dir.is_dir():
             continue
         for group_dir in collection_dir.iterdir():
+            if requested_groups is not None and f"{date_dir.name}/{group_dir.name}" not in requested_groups:
+                continue
             for relative_dir, suffix in SENSOR_DIRS.items():
                 data_dir = group_dir / relative_dir
                 if data_dir.is_dir():
@@ -43,10 +47,11 @@ def discover_data_dirs(root: Path, dates: list[str] | None) -> list[tuple[Path, 
     return sorted(directories)
 
 
-def source_frames(data_dir: Path, suffix: str) -> list[Path]:
+def source_frames(data_dir: Path, suffix: str | tuple[str, ...]) -> list[Path]:
+    suffixes = (suffix,) if isinstance(suffix, str) else suffix
     frames = []
     for path in data_dir.iterdir():
-        if not path.is_file() or path.suffix.lower() != suffix:
+        if not path.is_file() or path.suffix.lower() not in suffixes:
             continue
         try:
             timestamp_ns(path)
@@ -142,10 +147,10 @@ def pack_group(source_dir: Path, target_dir: Path, frames: list[Path], pack_name
 
 
 def process_directory(
-    source_dir: Path, suffix: str, source_root: Path, target_root: Path,
+    source_dir: Path, suffix: str | tuple[str, ...], source_root: Path, target_root: Path,
     overwrite: bool = False,
 ) -> tuple[str, int]:
-    pack_name = PACK_NAMES[suffix]
+    pack_name = "frames.actionpack" if source_dir.name == "action label" else PACK_NAMES[suffix]
     target_dir = target_root / source_dir.relative_to(source_root)
     pack_path = target_dir / pack_name
     index_path = target_dir / INDEX_NAME
@@ -170,8 +175,9 @@ def process_directory(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path("/mnt/huawei"))
-    parser.add_argument("--target-root", type=Path, default=Path("/mnt/ssd/Huawei"))
+    parser.add_argument("--target-root", type=Path, default=Path("/mnt/ssd/Huawei/"))
     parser.add_argument("--dates", nargs="*")
+    parser.add_argument("--groups", nargs="+", help="只处理指定组，格式：20261009/group_013")
     parser.add_argument("--overwrite", action="store_true", help="显式重建已有打包数据，默认直接跳过")
     parser.add_argument("--workers", type=int, default=8, help="并行打包线程数，默认 1")
     args = parser.parse_args()
@@ -182,8 +188,8 @@ def main() -> None:
     target_root = args.target_root.resolve()
     if source_root == target_root:
         parser.error("source-root 和 target-root 必须不同")
-    directories = discover_data_dirs(source_root, args.dates)
-    print(f"Discovered {len(directories)} BIN/PC/GT directories", flush=True)
+    directories = discover_data_dirs(source_root, args.dates, args.groups)
+    print(f"Discovered {len(directories)} BIN/PC/GT/action directories", flush=True)
 
     counts = {"packed": 0, "reused": 0, "empty": 0}
     total_frames = 0

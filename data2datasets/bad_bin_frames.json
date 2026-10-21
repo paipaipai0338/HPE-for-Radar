@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_root": "/mnt/ssd/Huawei",
+  "source_root": "/mnt/ssd/Huawei/",
   "generated_by": "run/check_bin.py",
   "expected_frame_bytes": 1048576,
   "numeric_thresholds": {

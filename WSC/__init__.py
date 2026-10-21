@@ -1,1 +1,0 @@
-"""WSC behavior-recognition package."""

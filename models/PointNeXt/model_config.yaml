@@ -1,0 +1,17 @@
+# PointNeXt-S encoder + per-frame single-person pose head.
+# Input channels: xyz + first feat_dim extras; remaining channels are ignored.
+num_joints: 17
+feat_dim: 2
+width: 32
+blocks: [1, 1, 1, 1, 1]
+strides: [1, 4, 4, 4, 4]
+radius: 0.1
+radius_scaling: 2.0
+nsamples: 32
+sa_layers: 2
+sa_use_res: true
+expansion: 4
+mlp_dim: 256
+dropout: 0.0
+# Centered time convolution: current frame plus one neighbor on each side.
+temporal_kernel_size: 3

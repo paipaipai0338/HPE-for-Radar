@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from models.ResNet3D.roi_align import crop_spectra_to_gt, restore_spectra_people
 
 
 class ConvBlock(nn.Module):
@@ -23,10 +24,11 @@ class ConvBlock(nn.Module):
 
 
 class ResNet3D(nn.Module):
+    """完整 DXYZ + 逐帧 3D 框 -> 内部 ROI 重采样 -> 单人特征 -> 雷达坐标姿态。"""
+
     def __init__(
         self,
         num_joints,
-        max_people,
         groups,
         inchannels,
         num_channels,
@@ -34,6 +36,8 @@ class ResNet3D(nn.Module):
         strides,
         padding,
         if_sum,
+        xyz_limits,
+        roi_cube_size,
     ):
         super().__init__()
         if not (
@@ -46,7 +50,8 @@ class ResNet3D(nn.Module):
             raise ValueError("layer config lengths must match")
 
         self.num_joints = num_joints
-        self.max_people = max_people
+        self.xyz_limits = xyz_limits
+        self.roi_cube_size = roi_cube_size
         self.inchannels = inchannels
         self.if_sum = [bool(value) for value in if_sum]
 
@@ -98,14 +103,14 @@ class ResNet3D(nn.Module):
             nn.LeakyReLU(inplace=True),
             nn.Linear(num_channels[-1] // 2, num_channels[-1] // 2),
             nn.LeakyReLU(inplace=True),
-            nn.Linear(num_channels[-1] // 2, max_people * num_joints * 3),
+            nn.Linear(num_channels[-1] // 2, num_joints * 3),
         )
         self.confidence_head = nn.Sequential(
             nn.Linear(num_channels[-1], num_channels[-1] // 2),
             nn.LeakyReLU(inplace=True),
             nn.Linear(num_channels[-1] // 2, num_channels[-1] // 2),
             nn.LeakyReLU(inplace=True),
-            nn.Linear(num_channels[-1] // 2, max_people),
+            nn.Linear(num_channels[-1] // 2, 1),
         )
 
     def forward(self, model_input):
@@ -120,30 +125,21 @@ class ResNet3D(nn.Module):
                 f"got dtype={radar_cube.dtype}"
             )
 
-        restore_time = radar_cube.ndim == 6
-        if restore_time:
-            batch_size, num_frames, channels, size_x, size_y, size_z = radar_cube.shape
-            x = radar_cube.reshape(
-                batch_size * num_frames,
-                channels,
-                size_x,
-                size_y,
-                size_z,
-            )
-        elif radar_cube.ndim == 5:
-            batch_size, channels, _, _, _ = radar_cube.shape
-            num_frames = None
-            x = radar_cube
-        else:
-            raise ValueError(
-                "model_input['input'] must be [B,T,D,X,Y,Z] or [B,D,X,Y,Z], "
-                f"got shape={tuple(radar_cube.shape)}"
-            )
-
-        if channels != self.inchannels:
-            raise ValueError(
-                f"ResNet3D expects {self.inchannels} input channels, got {channels}"
-            )
+        if radar_cube.ndim != 6:
+            raise ValueError('ResNet3D input must be full [B,T,D,X,Y,Z] spectra')
+        if radar_cube.shape[2] != self.inchannels:
+            raise ValueError(f'ResNet3D expects {self.inchannels} channels, got {radar_cube.shape[2]}')
+        crops, context = crop_spectra_to_gt(
+            radar_cube, {'bbox': model_input['bbox'], 'mask': model_input['bbox_mask']},
+            self.xyz_limits, self.roi_cube_size)
+        instances, frames, channels, size_x, size_y, size_z = crops['input'].shape
+        if instances == 0:
+            anchor = self.pose_head[-1].weight.sum()*0
+            return restore_spectra_people({
+                'pose': radar_cube.new_zeros(0, frames, 1, self.num_joints, 3)+anchor,
+                'confidence': radar_cube.new_zeros(0, frames, 1)+anchor,
+            }, context)
+        x = crops['input'].reshape(instances*frames, channels, size_x, size_y, size_z)
 
         residual = x
         for layer, shortcut, add_residual in zip(
@@ -153,18 +149,10 @@ class ResNet3D(nn.Module):
             if add_residual:
                 x = x + shortcut(residual)
                 residual = x
-        pose = self.pose_head(self.pool(x).flatten(1)).view(x.size(0), self.max_people, self.num_joints, -1)
-        confidence = torch.sigmoid(self.confidence_head(self.pool(x).flatten(1)).view(x.size(0), self.max_people))
-        if restore_time:
-            pose = pose.reshape(batch_size, num_frames, self.max_people, self.num_joints, 3)
-            confidence = confidence.reshape(batch_size, num_frames, self.max_people)
-        else:
-            pose = pose.reshape(batch_size, self.max_people, self.num_joints, 3)
-            confidence = confidence.reshape(batch_size, self.max_people)
-        return {
-            "pose": pose,
-            "confidence" : confidence,
-        }
+        pooled = self.pool(x).flatten(1)
+        pose = self.pose_head(pooled).reshape(instances, frames, 1, self.num_joints, 3)
+        confidence = torch.sigmoid(self.confidence_head(pooled)).reshape(instances, frames, 1)
+        return restore_spectra_people({'pose': pose, 'confidence': confidence}, context)
 
 
 if __name__ == "__main__":
@@ -172,11 +160,13 @@ if __name__ == "__main__":
     from run.utils.build_model import build_model
     from run.utils.set_device import set_device
 
-    b, t, d, x_size, y_size, z_size = 1, 1, 64, 96, 96, 32
+    b, t, d, x_size, y_size, z_size = 1, 1, 70, 96, 96, 32
 
     device = set_device(0)
     model = build_model("ResNet3D").to(device)
     x = {
         "input": torch.zeros((b, t, d, x_size, y_size, z_size), device=device),
+        "bbox": torch.tensor([0., -1., -1., 3., 1., 1.], device=device).reshape(1,1,1,6).expand(b,t,1,6),
+        "bbox_mask": torch.ones(b,t,1,dtype=torch.bool,device=device),
     }
     profile_model("ResNet3D", model, x)

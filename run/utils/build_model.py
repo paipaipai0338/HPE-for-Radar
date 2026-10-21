@@ -13,6 +13,7 @@ def build_model(model_name):
         'ResNet3D': 'models/ResNet3D',
         'P4TransformerMlp': 'models/P4TransformerMlp',
         'ConvNeXtV2': 'models/ConvNeXtV2',
+        'PointNeXt': 'models/PointNeXt',
     }
 
     if model_name not in model_dirs:

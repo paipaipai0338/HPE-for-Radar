@@ -19,6 +19,7 @@ def get_pose_hungarian_match(
     confidence: torch.Tensor = None,
     confidence_weight: float = 0.0,
     hip_joint_indices=(11, 12),
+    pose_valid: torch.Tensor = None,
 ):
     """按髋中心距离和 confidence 逐帧匹配预测 query 与有效 GT。"""
     if pose_pre.ndim != 5 or pose_gt.ndim != 5:
@@ -37,6 +38,8 @@ def get_pose_hungarian_match(
             "gt_mask must match pose_gt B,T,K dimensions, "
             f"got {tuple(gt_mask.shape)} and {tuple(pose_gt.shape)}"
         )
+    if pose_valid is not None and pose_valid.shape != pose_pre.shape[:3]:
+        raise ValueError('pose_valid must match pose_pre B,T,K dimensions')
     if pose_pre.device != pose_gt.device or pose_pre.device != gt_mask.device:
         raise ValueError("pose_pre, pose_gt and gt_mask must share device")
     if confidence is not None:
@@ -83,22 +86,25 @@ def get_pose_hungarian_match(
             ).cpu().numpy()
             cost_cpu += confidence_weight * confidence_cost[:, :, None]
         valid_gt_cpu = gt_mask.bool().flatten(0, 1).cpu().numpy()
+        valid_pred_cpu = (torch.ones(pose_pre.shape[:3], dtype=torch.bool, device=pose_pre.device)
+                          if pose_valid is None else pose_valid.bool()).flatten(0, 1).cpu().numpy()
 
     num_queries = pose_pre.shape[2]
     matches = []
     for frame_idx, frame_valid_gt in enumerate(valid_gt_cpu):
         valid_gt_idx = np.flatnonzero(frame_valid_gt)
+        valid_pred_idx = np.flatnonzero(valid_pred_cpu[frame_idx])
         if valid_gt_idx.size > num_queries:
             raise ValueError(
                 f"Frame {frame_idx} contains {valid_gt_idx.size} people, "
                 f"but only {num_queries} queries are available"
             )
-        if valid_gt_idx.size == 0:
+        if valid_gt_idx.size == 0 or valid_pred_idx.size == 0:
             empty = torch.empty(0, dtype=torch.long, device=pose_pre.device)
             matches.append((empty, empty))
             continue
 
-        frame_cost = cost_cpu[frame_idx][:, valid_gt_idx]
+        frame_cost = cost_cpu[frame_idx][np.ix_(valid_pred_idx, valid_gt_idx)]
         if not np.isfinite(frame_cost).all():
             raise ValueError(
                 f"Frame {frame_idx} hip matching cost contains NaN or Inf"
@@ -107,7 +113,7 @@ def get_pose_hungarian_match(
         matches.append(
             (
                 torch.as_tensor(
-                    pred_idx, dtype=torch.long, device=pose_pre.device
+                    valid_pred_idx[pred_idx], dtype=torch.long, device=pose_pre.device
                 ),
                 torch.as_tensor(
                     valid_gt_idx[local_gt_idx],

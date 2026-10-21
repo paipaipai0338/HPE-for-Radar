@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 import torch
 from metrics.pose import (
     apply_pose_matches,
@@ -45,6 +47,10 @@ class Metric:
     ):
         if not isinstance(pose_matching_by_hip, bool):
             raise TypeError("pose_matching_by_hip must be bool")
+        self.group_labels = json.loads(
+            (Path(__file__).resolve().parents[2] / 'data2datasets/group_labels.json').read_text()
+        )['groups']
+        self.group_mpjpe = {}
         self.xyz_limits = xyz_limits
         self.matching_bbox_l1_weight = float(matching_bbox_l1_weight)
         self.matching_bbox_iou_weight = float(
@@ -111,7 +117,7 @@ class Metric:
             state_dict.get("metrics_epoch_history", {})
         )
         
-    def calculate_batch(self, pre, gt):
+    def calculate_batch(self, pre, gt, group_ids=None, group_gt_low=None):
         # pre = {
         #     pose: pose_pre,                           # [B, T, K, J, 3]
         #     bbox,                                     # [B, T, K，6]
@@ -144,7 +150,9 @@ class Metric:
             'negative_mpjpe',
             'pampjpe', 'bone_length', 'bce', 'time_smoothness', 'pose_direction'
         }
-        if self.pose_matching_by_hip and (
+        pose_mask = gt_mask
+        pose_valid = pre.get('pose_valid')
+        if self.pose_matching_by_hip and pose_pre is not None and pose_gt is not None and (
             pose_metric_names & self.cfg_metrics.keys()
         ):
             if pose_pre is None or pose_gt is None or gt_mask is None:
@@ -158,25 +166,41 @@ class Metric:
                 gt_mask,
                 confidence=confidence_pre,
                 confidence_weight=self.pose_confidence_weight,
+                pose_valid=pose_valid,
             )
             pose_pre_for_metric, confidence_target = apply_pose_matches(
                 pose_pre,
                 pose_gt,
                 pose_matches,
             )
+            pose_mask = torch.zeros_like(gt_mask, dtype=torch.bool)
+            for frame, (_, gt_indices) in enumerate(pose_matches):
+                pose_mask.flatten(0, 1)[frame, gt_indices] = True
+        elif pose_valid is not None and gt_mask is not None:
+            if pose_valid.shape != gt_mask.shape:
+                raise ValueError('pose_valid and GT mask must have the same shape')
+            pose_mask = gt_mask.bool() & pose_valid.bool()
 
         for name, weight in self.cfg_metrics.items():
             if name in [
                 'positive_mpjpe', 'center_mpjpe',
                 'relative_pose_mpjpe', 'pampjpe', 'bone_length'
             ]:
-                assert pose_pre is not None, 'pose_pre is None'
+                if pose_pre_for_metric is None or pose_gt is None or pose_mask is None:
+                    reference = pose_gt if pose_pre_for_metric is None else pose_pre_for_metric
+                    batch_metrics[name] = torch.tensor(0.0, device=reference.device if reference is not None else 'cpu')
+                    total_loss = total_loss + weight * batch_metrics[name]
+                    continue
+                # Tensor batches represent missing poses with a validity mask.
                 metric = self.fun_call_dict[name](
-                    pose_pre_for_metric, pose_gt, type='coco'
+                    pose_pre_for_metric.masked_fill(~pose_mask[..., None, None], 0),
+                    pose_gt.masked_fill(~pose_mask[..., None, None], 0), type='coco'
                 )
+                if name == 'positive_mpjpe' and group_ids is not None:
+                    self._record_group_mpjpe(metric.detach(), pose_mask, group_ids, group_gt_low)
                 metric_value, metric_num = _masked_mean_over_people(
                     metric,
-                    gt_mask,
+                    pose_mask,
                 )
                 self.metrics_state[name]['sum'] += (
                     metric_value.detach().item() * metric_num
@@ -332,6 +356,30 @@ class Metric:
 
         return total_loss, batch_metrics
 
+    def _record_group_mpjpe(self, errors, mask, group_ids, gt_low):
+        if len(group_ids) != errors.shape[0] or errors.shape != mask.shape:
+            raise ValueError('group_ids、MPJPE 与有效人体 mask 的 batch/shape 不一致')
+        if gt_low is None or gt_low.shape != (*errors.shape, 17, 3):
+            raise ValueError('分组椭圆统计需要与 MPJPE 对齐的低位机 GT [B,T,K,17,3]')
+        # 使用原始低位机 GT，避免点云中心化或增广改变验收区域。
+        roots = gt_low[..., [11, 12], :2].mean(dim=-2)
+        inside = (((roots - roots.new_tensor([2.0, 0.0])) /
+                   roots.new_tensor([1.6, 2.4])).square().sum(-1) <= 1.0)
+        mask = mask.bool()
+        inside = inside.to(mask.device) & mask
+        sums = errors.masked_fill(~mask, 0).sum(dim=(1, 2)).cpu().tolist()
+        counts = mask.sum(dim=(1, 2)).cpu().tolist()
+        inside_sums = errors.masked_fill(~inside, 0).sum(dim=(1, 2)).cpu().tolist()
+        inside_counts = inside.sum(dim=(1, 2)).cpu().tolist()
+        for group, total, count, inside_total, inside_count in zip(
+                group_ids, sums, counts, inside_sums, inside_counts):
+            if count:
+                state = self.group_mpjpe.setdefault(group, [0.0, 0, 0.0, 0])
+                state[0] += total
+                state[1] += count
+                state[2] += inside_total
+                state[3] += inside_count
+
     def epoch_end(self):
         epoch_metrics = {}
 
@@ -348,4 +396,21 @@ class Metric:
             state_dict['sum'] = 0.0
             state_dict['num'] = 0
 
+        if self.group_mpjpe:
+            labels = {}
+            groups = {}
+            for group, (total, count, inside_total, inside_count) in sorted(self.group_mpjpe.items()):
+                label = self.group_labels.get(group, {'label': 'unlabelled'})['label']
+                groups[group] = {'mpjpe': total / count, 'count': count, 'label': label,
+                                 'mpjpe_inside': inside_total / inside_count if inside_count else None,
+                                 'count_inside': inside_count}
+                state = labels.setdefault(label, [0.0, 0])
+                state[0] += total
+                state[1] += count
+            epoch_metrics['mpjpe_by_label'] = {
+                label: {'mpjpe': total / count, 'count': count}
+                for label, (total, count) in sorted(labels.items())
+            }
+            epoch_metrics['mpjpe_by_group'] = groups
+            self.group_mpjpe.clear()
         return epoch_metrics

@@ -1,0 +1,3843 @@
+{
+  "sources": [
+    "/mnt/huawei/采集信息记录.xlsx",
+    "/mnt/huawei/09180919采集信息记录.xlsx",
+    "/mnt/huawei/十月后采集信息记录.xlsx"
+  ],
+  "groups": {
+    "20260615/group_011": {
+      "label": "None"
+    },
+    "20260615/group_012": {
+      "label": "None"
+    },
+    "20260615/group_013": {
+      "label": "None"
+    },
+    "20260615/group_014": {
+      "label": "None"
+    },
+    "20260615/group_015": {
+      "label": "None"
+    },
+    "20260615/group_016": {
+      "label": "None"
+    },
+    "20260615/group_017": {
+      "label": "None"
+    },
+    "20260615/group_018": {
+      "label": "None"
+    },
+    "20260615/group_019": {
+      "label": "None"
+    },
+    "20260615/group_020": {
+      "label": "None"
+    },
+    "20260615/group_021": {
+      "label": "None"
+    },
+    "20260615/group_022": {
+      "label": "None"
+    },
+    "20260615/group_023": {
+      "label": "None"
+    },
+    "20260615/group_024": {
+      "label": "None"
+    },
+    "20260615/group_025": {
+      "label": "None"
+    },
+    "20260615/group_026": {
+      "label": "None"
+    },
+    "20260615/group_027": {
+      "label": "None"
+    },
+    "20260615/group_028": {
+      "label": "None"
+    },
+    "20260615/group_029": {
+      "label": "None"
+    },
+    "20260615/group_030": {
+      "label": "None"
+    },
+    "20260703/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260703/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260703/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260703/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260703/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260703/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260703/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260703/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260703/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260703/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260703/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260703/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260703/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260703/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260703/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260703/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260703/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260703/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260703/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260703/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260703/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260703/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260703/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260703/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260703/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260703/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260703/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260703/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260703/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260703/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260703/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260706/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260706/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260706/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260706/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260706/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260706/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260706/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260706/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260706/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260706/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260706/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260706/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260706/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260706/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260707/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260707/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260707/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260707/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260707/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260707/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260707/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260707/group_018": {
+      "label": "stand5_noise"
+    },
+    "20260707/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260707/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260707/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260707/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260707/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260707/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260707/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260707/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260707/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260707/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260707/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260707/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260707/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260707/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260707/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260707/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260707/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260707/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260707/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260707/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260708/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260708/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260708/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260708/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260708/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260708/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260708/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260708/group_018": {
+      "label": "stand5_nosie0"
+    },
+    "20260708/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260708/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260708/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260708/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260708/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260708/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260708/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260708/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260708/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260708/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260708/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260708/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260708/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260708/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260708/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260708/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260708/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260708/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260708/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260708/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260708/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260709/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260709/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260709/group_013": {
+      "label": "walk2_noise0"
+    },
+    "20260709/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260709/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260709/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260709/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260709/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260709/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260709/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260709/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260709/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260709/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260709/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260709/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260709/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260709/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260709/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260709/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260709/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260709/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260709/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260709/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260709/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260709/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260709/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260709/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260709/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260709/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260709/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260709/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260709/group_042": {
+      "label": "walk1_noise0"
+    },
+    "20260709/group_043": {
+      "label": "walk2_noise0"
+    },
+    "20260709/group_044": {
+      "label": "walk3_noise0"
+    },
+    "20260709/group_045": {
+      "label": "stand1_noise0"
+    },
+    "20260709/group_046": {
+      "label": "stand2_noise0"
+    },
+    "20260709/group_047": {
+      "label": "stand3_noise0"
+    },
+    "20260710/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260710/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260710/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260710/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260710/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260710/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260710/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260710/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260710/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260710/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260710/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260710/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260710/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260710/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260710/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260710/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260710/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260710/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260710/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260710/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260710/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260710/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260710/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260710/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260710/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260710/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260710/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260710/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260710/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260710/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260710/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260710/group_042": {
+      "label": "sit1_noise0"
+    },
+    "20260710/group_043": {
+      "label": "sit2_noise0"
+    },
+    "20260710/group_044": {
+      "label": "sit3_noise0"
+    },
+    "20260710/group_045": {
+      "label": "sit4_noise0"
+    },
+    "20260710/group_046": {
+      "label": "sit5_noise0"
+    },
+    "20260710/group_047": {
+      "label": "lie1_noise0"
+    },
+    "20260710/group_048": {
+      "label": "lie2_noise0"
+    },
+    "20260714/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260714/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260714/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260714/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260714/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260714/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260714/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260714/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260714/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260714/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260714/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260714/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260714/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260714/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260714/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260714/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260714/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260714/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260714/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260714/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260714/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260714/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260714/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260714/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260714/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260714/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260714/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260714/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260714/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260714/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260714/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260714/group_042": {
+      "label": "squat1_noise0"
+    },
+    "20260714/group_043": {
+      "label": "squat2_noise0"
+    },
+    "20260714/group_044": {
+      "label": "squat3_noise0"
+    },
+    "20260714/group_045": {
+      "label": "squat4_noise0"
+    },
+    "20260714/group_046": {
+      "label": "squat5_noise0"
+    },
+    "20260714/group_047": {
+      "label": "sit1_noise0"
+    },
+    "20260714/group_048": {
+      "label": "sit2_noise0"
+    },
+    "20260714/group_049": {
+      "label": "sit3_noise0"
+    },
+    "20260714/group_050": {
+      "label": "sit4_noise0"
+    },
+    "20260714/group_051": {
+      "label": "sit5_noise0"
+    },
+    "20260715/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260715/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260715/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260715/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260715/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260715/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260715/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260715/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260715/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260715/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260715/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260715/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260715/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260715/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260715/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260715/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260715/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260715/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260715/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260715/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260715/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260715/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260715/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260715/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260715/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260715/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260715/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260715/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260715/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260715/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260715/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260715/group_042": {
+      "label": "sit1_noise0"
+    },
+    "20260715/group_043": {
+      "label": "sit2_noise0"
+    },
+    "20260715/group_044": {
+      "label": "sit3_noise0"
+    },
+    "20260715/group_045": {
+      "label": "sit4_noise0"
+    },
+    "20260715/group_046": {
+      "label": "sit5_noise0"
+    },
+    "20260716/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260716/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260716/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260716/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260716/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260716/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260716/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260716/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260716/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260716/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260716/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260716/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260716/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260716/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260716/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260716/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260716/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260716/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260716/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260716/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260716/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260716/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260716/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260716/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260716/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260716/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260716/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260716/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260716/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260716/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260716/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260716/group_042": {
+      "label": "squat1_noise0"
+    },
+    "20260716/group_043": {
+      "label": "squat2_noise0"
+    },
+    "20260716/group_044": {
+      "label": "squat3_noise0"
+    },
+    "20260716/group_045": {
+      "label": "squat5_noise0"
+    },
+    "20260716/group_046": {
+      "label": "squat5_noise0"
+    },
+    "20260717/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260717/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260717/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260717/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260717/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260717/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260717/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260717/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260717/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260717/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260717/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260717/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260717/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260717/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260717/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260717/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260717/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260717/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260717/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260717/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260717/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260717/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260717/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260717/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260717/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260717/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260717/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260717/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260717/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260717/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260717/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260717/group_042": {
+      "label": "squat1_noise0"
+    },
+    "20260717/group_043": {
+      "label": "squat2_noise0"
+    },
+    "20260717/group_044": {
+      "label": "squat3_noise0"
+    },
+    "20260717/group_045": {
+      "label": "squat4_noise0"
+    },
+    "20260717/group_046": {
+      "label": "squat5_noise0"
+    },
+    "20260718/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260718/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260718/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260718/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260718/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260718/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260718/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260718/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260718/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260718/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260718/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260718/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260718/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260718/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260718/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260718/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260718/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260718/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260718/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260718/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260718/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260718/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260718/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260718/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260718/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260718/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260718/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260718/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260718/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260718/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260718/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260718/group_042": {
+      "label": "squat1_noise0"
+    },
+    "20260718/group_043": {
+      "label": "squat2_noise0"
+    },
+    "20260718/group_044": {
+      "label": "squat3_noise0"
+    },
+    "20260718/group_045": {
+      "label": "squat4_noise0"
+    },
+    "20260718/group_046": {
+      "label": "squat5_noise0"
+    },
+    "20260719/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260719/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260719/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260719/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260719/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260719/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260719/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260719/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260719/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260719/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260719/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260719/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260719/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260719/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260719/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260719/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260719/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260719/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260719/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260719/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260719/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260719/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260719/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260719/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260719/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260719/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260719/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260719/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260719/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260719/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260719/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260720/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260720/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260720/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260720/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260720/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260720/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260720/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260720/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260720/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260720/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260720/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260720/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260720/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260720/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260720/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260720/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260720/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260720/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260720/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260720/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260720/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260720/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260720/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260720/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260720/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260720/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260720/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260720/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260720/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260720/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260720/group_041": {
+      "label": "other1_noise0"
+    },
+    "20260720/group_042": {
+      "label": "squat1_noise0"
+    },
+    "20260720/group_043": {
+      "label": "squat2_noise0"
+    },
+    "20260720/group_044": {
+      "label": "squat3_noise0"
+    },
+    "20260720/group_045": {
+      "label": "squat4_noise0"
+    },
+    "20260720/group_046": {
+      "label": "squat5_noise0"
+    },
+    "20260721/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260721/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260721/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260721/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260721/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260721/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260721/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260721/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260721/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260721/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260721/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260721/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260721/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260721/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260721/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260721/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260721/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260721/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260721/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260721/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260721/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260721/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260721/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260721/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260721/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260721/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260721/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260721/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260721/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260721/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260721/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260721/group_042": {
+      "label": "squat1_noise0"
+    },
+    "20260721/group_043": {
+      "label": "squat2_noise0"
+    },
+    "20260721/group_044": {
+      "label": "squat3_noise0"
+    },
+    "20260721/group_045": {
+      "label": "squat4_noise0"
+    },
+    "20260721/group_046": {
+      "label": "squat5_noise0"
+    },
+    "20260722/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260722/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260722/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260722/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260722/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260722/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260722/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260722/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260722/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260722/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260722/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260722/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260722/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260722/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260722/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260722/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260722/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260722/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260722/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260722/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260722/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260722/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260722/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260722/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260722/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260722/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260722/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260722/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260722/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260722/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260722/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260722/group_042": {
+      "label": "squat1_noise0"
+    },
+    "20260722/group_043": {
+      "label": "squat2_noise0"
+    },
+    "20260722/group_044": {
+      "label": "squat3_noise0"
+    },
+    "20260722/group_045": {
+      "label": "squat4_noise0"
+    },
+    "20260722/group_046": {
+      "label": "squat5_noise0"
+    },
+    "20260723/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260723/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260723/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260723/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260723/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260723/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260723/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260723/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260723/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260723/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260723/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260723/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260723/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260723/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260723/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260723/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260723/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260723/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260723/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260723/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260723/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260723/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260723/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260723/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260723/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260723/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260723/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260723/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260723/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260723/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260723/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260723/group_042": {
+      "label": "walk1_noise0"
+    },
+    "20260723/group_043": {
+      "label": "walk2_noise0"
+    },
+    "20260723/group_044": {
+      "label": "walk3_noise0"
+    },
+    "20260727/group_011": {
+      "label": "walk1_noise0"
+    },
+    "20260727/group_012": {
+      "label": "walk2_noise0"
+    },
+    "20260727/group_013": {
+      "label": "walk3_noise0"
+    },
+    "20260727/group_014": {
+      "label": "stand1_noise0"
+    },
+    "20260727/group_015": {
+      "label": "stand2_noise0"
+    },
+    "20260727/group_016": {
+      "label": "stand3_noise0"
+    },
+    "20260727/group_017": {
+      "label": "stand4_noise0"
+    },
+    "20260727/group_018": {
+      "label": "stand5_noise0"
+    },
+    "20260727/group_019": {
+      "label": "sit1_noise0"
+    },
+    "20260727/group_020": {
+      "label": "sit2_noise0"
+    },
+    "20260727/group_021": {
+      "label": "sit3_noise0"
+    },
+    "20260727/group_022": {
+      "label": "sit4_noise0"
+    },
+    "20260727/group_023": {
+      "label": "sit5_noise0"
+    },
+    "20260727/group_024": {
+      "label": "fall1_noise0"
+    },
+    "20260727/group_025": {
+      "label": "fall2_noise0"
+    },
+    "20260727/group_026": {
+      "label": "fall3_noise0"
+    },
+    "20260727/group_027": {
+      "label": "fall4_noise0"
+    },
+    "20260727/group_028": {
+      "label": "fall5_noise0"
+    },
+    "20260727/group_029": {
+      "label": "squat1_noise0"
+    },
+    "20260727/group_030": {
+      "label": "squat2_noise0"
+    },
+    "20260727/group_031": {
+      "label": "squat3_noise0"
+    },
+    "20260727/group_032": {
+      "label": "squat4_noise0"
+    },
+    "20260727/group_033": {
+      "label": "squat5_noise0"
+    },
+    "20260727/group_034": {
+      "label": "lie1_noise0"
+    },
+    "20260727/group_035": {
+      "label": "lie2_noise0"
+    },
+    "20260727/group_036": {
+      "label": "lie3_noise0"
+    },
+    "20260727/group_037": {
+      "label": "lie4_noise0"
+    },
+    "20260727/group_038": {
+      "label": "lie5_noise0"
+    },
+    "20260727/group_039": {
+      "label": "other1_noise0"
+    },
+    "20260727/group_040": {
+      "label": "other2_noise0"
+    },
+    "20260727/group_041": {
+      "label": "other3_noise0"
+    },
+    "20260728/group_011": {
+      "label": "三人-绕圈走"
+    },
+    "20260728/group_012": {
+      "label": "三人-随便走"
+    },
+    "20260728/group_013": {
+      "label": "三人-两个人静止、一个人走"
+    },
+    "20260728/group_014": {
+      "label": "三人-两个人静止、一个人挥手"
+    },
+    "20260728/group_015": {
+      "label": "三人-两人静止，一人开合跳"
+    },
+    "20260728/group_016": {
+      "label": "三人-两人静止，一人立定跳远"
+    },
+    "20260728/group_017": {
+      "label": "三人-两人随便走、一人坐"
+    },
+    "20260728/group_018": {
+      "label": "三人-一人静止、一人随便走、一人坐起"
+    },
+    "20260728/group_019": {
+      "label": "三人-静坐"
+    },
+    "20260728/group_020": {
+      "label": "三人-两人随便走、一人躺"
+    },
+    "20260728/group_021": {
+      "label": "三人-两人躺、一人静站"
+    },
+    "20260728/group_022": {
+      "label": "四人-随便站"
+    },
+    "20260728/group_023": {
+      "label": "四人-一人静站、三人随便走"
+    },
+    "20260728/group_024": {
+      "label": "四人-三人静站、一人大幅度运动"
+    },
+    "20260728/group_025": {
+      "label": "四人-三人静站、一人大幅度运动"
+    },
+    "20260728/group_026": {
+      "label": "四人-两人静坐、两人随便运动"
+    },
+    "20260728/group_027": {
+      "label": "四人-三人静坐、一人随便运动"
+    },
+    "20260728/group_028": {
+      "label": "四人-一人静站、一人静坐、两人坐起"
+    },
+    "20260728/group_029": {
+      "label": "四人-两人静坐、一人静站、一人跌倒"
+    },
+    "20260728/group_030": {
+      "label": "四人-一人蹲、一人站、两人跌倒"
+    },
+    "20260728/group_031": {
+      "label": "四人-三人躺、一人蹲"
+    },
+    "20260730/group_011": {
+      "label": "12三人-随便走"
+    },
+    "20260730/group_012": {
+      "label": "13三人-两个人静止、一个人走"
+    },
+    "20260730/group_013": {
+      "label": "15三人-两人静止，一人开合跳"
+    },
+    "20260730/group_014": {
+      "label": "14三人-两个人静止、一个人挥手"
+    },
+    "20260730/group_015": {
+      "label": "31有改动-三人-两人躺、一人蹲"
+    },
+    "20260730/group_016": {
+      "label": "三人-一人蹲、一人站着挥手、一人躺"
+    },
+    "20260730/group_017": {
+      "label": "扶墙缓慢跌倒，身体朝后跌倒，跌倒后仰卧挣扎2s后静止"
+    },
+    "20260730/group_018": {
+      "label": "扶墙缓慢跌倒，身体朝前跌倒，跌倒后侧卧挣扎2s后静止"
+    },
+    "20260730/group_019": {
+      "label": "背向站立时慢速摔倒后侧卧挣扎2s后静止"
+    },
+    "20260730/group_020": {
+      "label": "贴墙行走，站不稳随后跌倒在地，手半撑扶地挣扎"
+    },
+    "20260730/group_021": {
+      "label": "背向站立时向右扶慢慢速摔倒后侧卧挣扎2s后静止"
+    },
+    "20260730/group_022": {
+      "label": "背向站立时向左快速跌倒后侧卧"
+    },
+    "20260730/group_023": {
+      "label": "人倒地后坐在地上躺地上超过10s左右再坐立）"
+    },
+    "20260730/group_024": {
+      "label": "正向站立时后快速跌倒后静止"
+    },
+    "20260730/group_025": {
+      "label": "正向弯腰时向左靠慢慢滑倒后仰卧潜意识挣扎2s"
+    },
+    "20260730/group_026": {
+      "label": "背向站立时向左快速跌倒后侧卧本能的胳膊撑起2s后再趴下"
+    },
+    "20260730/group_027": {
+      "label": "140以上老人（弓背、弯腰进入）跌倒"
+    },
+    "20260730/group_028": {
+      "label": "靠墙缓慢跌倒，半倚靠在墙壁上微动挣扎3min"
+    },
+    "20260730/group_029": {
+      "label": "模拟被物体绊倒，物体移动，随后起身，再次跌倒"
+    },
+    "20260730/group_030": {
+      "label": "扶着椅子移动，人和椅子一起倒"
+    },
+    "20260730/group_031": {
+      "label": "马桶上坐姿起身直立，向前快速跌倒，趴卧静止"
+    },
+    "20260730/group_032": {
+      "label": "从站立到坐下，然后后仰跌倒到地面上，缓慢跌倒"
+    },
+    "20260730/group_033": {
+      "label": "背向站立时向右靠墙缓慢跌倒后侧卧静止"
+    },
+    "20260730/group_034": {
+      "label": "背向站立时快速跌倒后仰卧静止"
+    },
+    "20260730/group_035": {
+      "label": "站立到蹲下然后后趴在地面，整个过程缓慢发生"
+    },
+    "20260730/group_036": {
+      "label": "站立然后坐下，再前倾/侧躺/后躺趴在地面，整个过程缓慢发生"
+    },
+    "20260730/group_037": {
+      "label": "站立然后坐下，然后向后躺，整个过程缓慢发生"
+    },
+    "20260730/group_038": {
+      "label": "站立然后坐下，然后向后躺，整个过程缓慢发生"
+    },
+    "20260730/group_039": {
+      "label": "从沙发跌倒到地面，在地面挣扎"
+    },
+    "20260730/group_040": {
+      "label": "马桶上坐姿起身直立，向前快速跌倒，趴卧静止"
+    },
+    "20260730/group_041": {
+      "label": "背向站立时向左快速跌倒后侧卧"
+    },
+    "20260730/group_042": {
+      "label": "正向弯腰时向左靠慢慢滑倒后仰卧潜意识挣扎2s"
+    },
+    "20260730/group_043": {
+      "label": "从沙发跌倒到地面，在地面挣扎"
+    },
+    "20260730/group_044": {
+      "label": "模拟被物体绊倒，物体移动，随后起身，再次跌倒"
+    },
+    "20260730/group_045": {
+      "label": "扶着椅子移动，人和椅子一起倒"
+    },
+    "20260730/group_046": {
+      "label": "背向站立时向左快速跌倒后侧卧本能的胳膊撑起2s后再趴下"
+    },
+    "20260730/group_047": {
+      "label": "背向站立时向右靠墙缓慢跌倒后侧卧静止"
+    },
+    "20260730/group_048": {
+      "label": "站立到蹲下然后后趴在地面，整个过程缓慢发生"
+    },
+    "20260804/group_011": {
+      "label": "一号点位站坐躺走"
+    },
+    "20260804/group_012": {
+      "label": "二号点位站坐躺走"
+    },
+    "20260804/group_013": {
+      "label": "三号点位站坐躺走"
+    },
+    "20260804/group_014": {
+      "label": "四号点位站坐躺走"
+    },
+    "20260804/group_015": {
+      "label": "五号点位站坐躺走"
+    },
+    "20260804/group_016": {
+      "label": "六号点位站坐躺走"
+    },
+    "20260804/group_017": {
+      "label": "七号点位站坐躺走"
+    },
+    "20260804/group_018": {
+      "label": "八号点位站坐躺走"
+    },
+    "20260804/group_019": {
+      "label": "中心点位站坐躺走"
+    },
+    "20260804/group_020": {
+      "label": "两人并肩站立相距20cm"
+    },
+    "20260804/group_021": {
+      "label": "两人并肩站立相距50cm"
+    },
+    "20260804/group_022": {
+      "label": "两人并肩站立相距80cm"
+    },
+    "20260810/group_011": {
+      "label": "stand1_noise1"
+    },
+    "20260810/group_012": {
+      "label": "stand2_noise1"
+    },
+    "20260810/group_013": {
+      "label": "stand3_noise1"
+    },
+    "20260810/group_014": {
+      "label": "stand4_noise1"
+    },
+    "20260810/group_015": {
+      "label": "stand5_noise2"
+    },
+    "20260810/group_016": {
+      "label": "stand6_noise1"
+    },
+    "20260810/group_017": {
+      "label": "stand7_noise1"
+    },
+    "20260810/group_018": {
+      "label": "stand8_noise1"
+    },
+    "20260810/group_019": {
+      "label": "stand9_noise1"
+    },
+    "20260810/group_020": {
+      "label": "stand10_noise1"
+    },
+    "20260810/group_021": {
+      "label": "stand11_noise1"
+    },
+    "20260810/group_022": {
+      "label": "stand12_noise1"
+    },
+    "20260810/group_023": {
+      "label": "stand13_noise1"
+    },
+    "20260810/group_024": {
+      "label": "stand14_noise1"
+    },
+    "20260810/group_025": {
+      "label": "stand15_noise1"
+    },
+    "20260810/group_026": {
+      "label": "stand16_noise1"
+    },
+    "20260810/group_027": {
+      "label": "stand17_noise1"
+    },
+    "20260810/group_028": {
+      "label": "stand18_noise1"
+    },
+    "20260810/group_029": {
+      "label": "stand19_noise1"
+    },
+    "20260810/group_030": {
+      "label": "stand20_noise1"
+    },
+    "20260810/group_031": {
+      "label": "stand21_noise1"
+    },
+    "20260811/group_011": {
+      "label": "stand1_noise1"
+    },
+    "20260811/group_012": {
+      "label": "stand2_noise1"
+    },
+    "20260811/group_013": {
+      "label": "stand3_noise1"
+    },
+    "20260811/group_014": {
+      "label": "stand4_noise1"
+    },
+    "20260811/group_015": {
+      "label": "stand5_noise1"
+    },
+    "20260811/group_016": {
+      "label": "stand6_noise1"
+    },
+    "20260811/group_019": {
+      "label": "stand9_noise1"
+    },
+    "20260811/group_020": {
+      "label": "stand10_noise1"
+    },
+    "20260811/group_021": {
+      "label": "stand11_noise1"
+    },
+    "20260811/group_022": {
+      "label": "stand12_noise1"
+    },
+    "20260811/group_023": {
+      "label": "stand13_noise1"
+    },
+    "20260811/group_024": {
+      "label": "stand14_noise1"
+    },
+    "20260811/group_025": {
+      "label": "stand15_noise1"
+    },
+    "20260811/group_026": {
+      "label": "stand16_noise1"
+    },
+    "20260811/group_027": {
+      "label": "stand17_noise1"
+    },
+    "20260811/group_028": {
+      "label": "stand18_noise1"
+    },
+    "20260811/group_029": {
+      "label": "stand19_noise1"
+    },
+    "20260811/group_030": {
+      "label": "stand20_noise1"
+    },
+    "20260811/group_031": {
+      "label": "stand21_noise1"
+    },
+    "20260811/group_032": {
+      "label": "stand22_noise1"
+    },
+    "20260811/group_037": {
+      "label": "stand27_noise1"
+    },
+    "20260812/group_011": {
+      "label": "stand1_noise1"
+    },
+    "20260812/group_012": {
+      "label": "stand2_noise1"
+    },
+    "20260812/group_013": {
+      "label": "stand3_noise1"
+    },
+    "20260812/group_014": {
+      "label": "stand4_noise1"
+    },
+    "20260812/group_015": {
+      "label": "stand5_noise1"
+    },
+    "20260812/group_016": {
+      "label": "stand6_noise1"
+    },
+    "20260812/group_017": {
+      "label": "stand7_noise1"
+    },
+    "20260812/group_018": {
+      "label": "stand8_noise1"
+    },
+    "20260812/group_019": {
+      "label": "stand9_noise1"
+    },
+    "20260812/group_020": {
+      "label": "stand10_noise1"
+    },
+    "20260812/group_021": {
+      "label": "stand11_noise1"
+    },
+    "20260812/group_022": {
+      "label": "stand12_noise1"
+    },
+    "20260812/group_023": {
+      "label": "stand13_noise1"
+    },
+    "20260812/group_024": {
+      "label": "stand14_noise1"
+    },
+    "20260812/group_025": {
+      "label": "stand15_noise1"
+    },
+    "20260812/group_026": {
+      "label": "stand16_noise1"
+    },
+    "20260812/group_027": {
+      "label": "stand17_noise1"
+    },
+    "20260812/group_028": {
+      "label": "stand18_noise1"
+    },
+    "20260812/group_029": {
+      "label": "stand19_noise1"
+    },
+    "20260812/group_030": {
+      "label": "stand20_noise1"
+    },
+    "20260812/group_031": {
+      "label": "stand21_noise1"
+    },
+    "20260812/group_032": {
+      "label": "stand22_noise1"
+    },
+    "20260812/group_033": {
+      "label": "stand23_noise1"
+    },
+    "20260812/group_034": {
+      "label": "stand24_noise1"
+    },
+    "20260812/group_035": {
+      "label": "stand25_noise1"
+    },
+    "20260812/group_036": {
+      "label": "stand26_noise1"
+    },
+    "20260812/group_037": {
+      "label": "stand27_noise1"
+    },
+    "20260813/group_011": {
+      "label": "sit1_noise1"
+    },
+    "20260813/group_012": {
+      "label": "sit2_noise1"
+    },
+    "20260813/group_013": {
+      "label": "sit3_noise1"
+    },
+    "20260813/group_014": {
+      "label": "sit4_noise1"
+    },
+    "20260813/group_016": {
+      "label": "sit6_noise1"
+    },
+    "20260813/group_017": {
+      "label": "sit7_noise1"
+    },
+    "20260813/group_018": {
+      "label": "sit8_noise1"
+    },
+    "20260813/group_019": {
+      "label": "sit9_noise1"
+    },
+    "20260813/group_020": {
+      "label": "sit10_noise1"
+    },
+    "20260813/group_021": {
+      "label": "sit11_noise1"
+    },
+    "20260813/group_022": {
+      "label": "sit12_noise1"
+    },
+    "20260813/group_023": {
+      "label": "sit13_noise1"
+    },
+    "20260813/group_024": {
+      "label": "sit14_noise1"
+    },
+    "20260813/group_025": {
+      "label": "sit15_noise1"
+    },
+    "20260813/group_026": {
+      "label": "sit16_noise1"
+    },
+    "20260813/group_027": {
+      "label": "sit17_noise1"
+    },
+    "20260813/group_028": {
+      "label": "sit18_noise1"
+    },
+    "20260813/group_029": {
+      "label": "sit19_noise1"
+    },
+    "20260813/group_030": {
+      "label": "sit20_noise1"
+    },
+    "20260813/group_031": {
+      "label": "sit21_noise1"
+    },
+    "20260813/group_032": {
+      "label": "sit22_noise1"
+    },
+    "20260813/group_033": {
+      "label": "sit23_noise1"
+    },
+    "20260813/group_034": {
+      "label": "sit24_noise1"
+    },
+    "20260813/group_035": {
+      "label": "sit25_noise1"
+    },
+    "20260813/group_036": {
+      "label": "sit26_noise1"
+    },
+    "20260813/group_037": {
+      "label": "sit27_noise1"
+    },
+    "20260814/group_011": {
+      "label": "lie01_noise1"
+    },
+    "20260814/group_012": {
+      "label": "lie02_noise1"
+    },
+    "20260814/group_013": {
+      "label": "lie03_noise1"
+    },
+    "20260814/group_014": {
+      "label": "lie04_noise1"
+    },
+    "20260814/group_015": {
+      "label": "lie05_noise1"
+    },
+    "20260814/group_016": {
+      "label": "lie06_noise1"
+    },
+    "20260814/group_017": {
+      "label": "lie07_noise1"
+    },
+    "20260814/group_018": {
+      "label": "lie08_noise1"
+    },
+    "20260814/group_019": {
+      "label": "lie09_noise1"
+    },
+    "20260814/group_020": {
+      "label": "lie10_noise1"
+    },
+    "20260814/group_021": {
+      "label": "lie11_noise1"
+    },
+    "20260814/group_022": {
+      "label": "lie12_noise1"
+    },
+    "20260814/group_023": {
+      "label": "lie13_noise1"
+    },
+    "20260814/group_024": {
+      "label": "lie14_noise1"
+    },
+    "20260814/group_025": {
+      "label": "lie15_noise1"
+    },
+    "20260814/group_026": {
+      "label": "lie16_noise1"
+    },
+    "20260814/group_027": {
+      "label": "lie17_noise1"
+    },
+    "20260814/group_028": {
+      "label": "lie18_noise1"
+    },
+    "20260814/group_029": {
+      "label": "lie19_noise1"
+    },
+    "20260814/group_030": {
+      "label": "lie20_noise1"
+    },
+    "20260814/group_031": {
+      "label": "lie21_noise1"
+    },
+    "20260814/group_032": {
+      "label": "lie22_noise1"
+    },
+    "20260814/group_033": {
+      "label": "lie23_noise1"
+    },
+    "20260814/group_034": {
+      "label": "lie24_noise1"
+    },
+    "20260814/group_035": {
+      "label": "lie25_noise1"
+    },
+    "20260814/group_036": {
+      "label": "lie26_noise1"
+    },
+    "20260814/group_037": {
+      "label": "lie27_noise1"
+    },
+    "20260825/group_011": {
+      "label": "stand01_noise1"
+    },
+    "20260825/group_012": {
+      "label": "stand02_noise1"
+    },
+    "20260825/group_013": {
+      "label": "stand03_noise1"
+    },
+    "20260825/group_014": {
+      "label": "stand04_noise1"
+    },
+    "20260825/group_015": {
+      "label": "stand05_noise1"
+    },
+    "20260825/group_016": {
+      "label": "stand06_noise1"
+    },
+    "20260825/group_017": {
+      "label": "stand07_noise1"
+    },
+    "20260825/group_018": {
+      "label": "stand08_noise1"
+    },
+    "20260825/group_019": {
+      "label": "stand09_noise1"
+    },
+    "20260825/group_020": {
+      "label": "stand10_noise1"
+    },
+    "20260825/group_021": {
+      "label": "stand11_noise1"
+    },
+    "20260825/group_022": {
+      "label": "stand12_noise1"
+    },
+    "20260825/group_023": {
+      "label": "stand13_noise1"
+    },
+    "20260825/group_024": {
+      "label": "stand14_noise1"
+    },
+    "20260825/group_025": {
+      "label": "stand15_noise1"
+    },
+    "20260825/group_026": {
+      "label": "stand16_noise1"
+    },
+    "20260825/group_027": {
+      "label": "stand17_noise1"
+    },
+    "20260825/group_028": {
+      "label": "stand18_noise1"
+    },
+    "20260825/group_029": {
+      "label": "stand19_noise1"
+    },
+    "20260825/group_030": {
+      "label": "stand20_noise1"
+    },
+    "20260825/group_031": {
+      "label": "stand21_noise1"
+    },
+    "20260825/group_032": {
+      "label": "stand22_noise1"
+    },
+    "20260825/group_033": {
+      "label": "stand23_noise1"
+    },
+    "20260825/group_034": {
+      "label": "stand24_noise1"
+    },
+    "20260825/group_035": {
+      "label": "stand25_noise1"
+    },
+    "20260825/group_036": {
+      "label": "stand26_noise1"
+    },
+    "20260825/group_037": {
+      "label": "stand27_noise1"
+    },
+    "20260829/group_011": {
+      "label": "two1_noise1"
+    },
+    "20260829/group_012": {
+      "label": "two1_noise1"
+    },
+    "20260829/group_013": {
+      "label": "two1_noise1"
+    },
+    "20260829/group_014": {
+      "label": "throw01_noise1"
+    },
+    "20260829/group_015": {
+      "label": "throw01_noise1"
+    },
+    "20260829/group_016": {
+      "label": "throw01_noise1"
+    },
+    "20260829/group_017": {
+      "label": "throw02_noise1"
+    },
+    "20260829/group_018": {
+      "label": "throw02_noise1"
+    },
+    "20260829/group_019": {
+      "label": "throw02_noise1"
+    },
+    "20260829/group_020": {
+      "label": "sheild01_noise1"
+    },
+    "20260829/group_021": {
+      "label": "sheild01_noise1"
+    },
+    "20260829/group_022": {
+      "label": "sheild01_noise1"
+    },
+    "20260829/group_023": {
+      "label": "sheild02_noise1"
+    },
+    "20260829/group_024": {
+      "label": "sheild02_noise1"
+    },
+    "20260829/group_025": {
+      "label": "sheild02_noise1"
+    },
+    "20260829/group_026": {
+      "label": "sheild03_noise1"
+    },
+    "20260829/group_027": {
+      "label": "sheild03_noise1"
+    },
+    "20260829/group_028": {
+      "label": "sheild03_noise1"
+    },
+    "20260829/group_029": {
+      "label": "sheild04_noise1"
+    },
+    "20260829/group_030": {
+      "label": "sheild04_noise1"
+    },
+    "20260829/group_031": {
+      "label": "sheild04_noise1"
+    },
+    "20260829/group_032": {
+      "label": "sheild06_noise1"
+    },
+    "20260829/group_033": {
+      "label": "sheild06_noise1"
+    },
+    "20260829/group_034": {
+      "label": "sheild06_noise1"
+    },
+    "20260829/group_035": {
+      "label": "sheild09_noise1"
+    },
+    "20260829/group_036": {
+      "label": "sheild10_noise1"
+    },
+    "20260901/group_011": {
+      "label": "four01_noise1"
+    },
+    "20260901/group_012": {
+      "label": "four02_noise1"
+    },
+    "20260901/group_013": {
+      "label": "five01_noise1"
+    },
+    "20260901/group_014": {
+      "label": "sheild07_noise1"
+    },
+    "20260902/group_011": {
+      "label": "stand1_noise1"
+    },
+    "20260902/group_012": {
+      "label": "stand2_noise1"
+    },
+    "20260902/group_013": {
+      "label": "stand3_noise1"
+    },
+    "20260902/group_014": {
+      "label": "stand4_noise1"
+    },
+    "20260902/group_015": {
+      "label": "stand5_noise1"
+    },
+    "20260902/group_016": {
+      "label": "stand6_noise1"
+    },
+    "20260902/group_017": {
+      "label": "stand7_noise1"
+    },
+    "20260902/group_018": {
+      "label": "stand8_noise1"
+    },
+    "20260902/group_019": {
+      "label": "stand9_noise1"
+    },
+    "20260902/group_020": {
+      "label": "stand10_noise1"
+    },
+    "20260902/group_021": {
+      "label": "stand11_noise1"
+    },
+    "20260902/group_022": {
+      "label": "stand12_noise1"
+    },
+    "20260902/group_023": {
+      "label": "stand13_noise1"
+    },
+    "20260902/group_024": {
+      "label": "stand14_noise1"
+    },
+    "20260902/group_025": {
+      "label": "stand15_noise1"
+    },
+    "20260903/group_011": {
+      "label": "stand16_noise1"
+    },
+    "20260903/group_012": {
+      "label": "stand17_noise1"
+    },
+    "20260903/group_013": {
+      "label": "stand18_noise1"
+    },
+    "20260903/group_014": {
+      "label": "stand19_noise1"
+    },
+    "20260903/group_015": {
+      "label": "stand20_noise1"
+    },
+    "20260903/group_016": {
+      "label": "stand21_noise1"
+    },
+    "20260903/group_017": {
+      "label": "stand22_noise1"
+    },
+    "20260903/group_018": {
+      "label": "stand23_noise1"
+    },
+    "20260903/group_019": {
+      "label": "stand24_noise1"
+    },
+    "20260903/group_020": {
+      "label": "stand25_noise1"
+    },
+    "20260903/group_021": {
+      "label": "stand26_noise1"
+    },
+    "20260903/group_037": {
+      "label": "stand27_noise1"
+    },
+    "20260910/group_011": {
+      "label": "empty01_noise1"
+    },
+    "20260910/group_012": {
+      "label": "empty01_noise0"
+    },
+    "20260910/group_013": {
+      "label": "sit01_noise1"
+    },
+    "20260910/group_014": {
+      "label": "sit02_noise1"
+    },
+    "20260910/group_015": {
+      "label": "sit03_noise1"
+    },
+    "20260910/group_016": {
+      "label": "sit04_noise1"
+    },
+    "20260910/group_017": {
+      "label": "sit05_noise1"
+    },
+    "20260910/group_018": {
+      "label": "sit06_noise1"
+    },
+    "20260910/group_019": {
+      "label": "sit07_noise1"
+    },
+    "20260910/group_020": {
+      "label": "sit08_noise1"
+    },
+    "20260910/group_021": {
+      "label": "sit09_noise1"
+    },
+    "20260910/group_022": {
+      "label": "sit10_noise1"
+    },
+    "20260910/group_023": {
+      "label": "sit11_noise1"
+    },
+    "20260910/group_024": {
+      "label": "sit12_noise1"
+    },
+    "20260910/group_025": {
+      "label": "sit13_noise1"
+    },
+    "20260910/group_026": {
+      "label": "sit14_noise1"
+    },
+    "20260910/group_027": {
+      "label": "sit15_noise1"
+    },
+    "20260910/group_028": {
+      "label": "sit16_noise1"
+    },
+    "20260910/group_029": {
+      "label": "sit17_noise1"
+    },
+    "20260910/group_030": {
+      "label": "sit18_noise1"
+    },
+    "20260910/group_031": {
+      "label": "sit19_noise1"
+    },
+    "20260910/group_032": {
+      "label": "sit20_noise1"
+    },
+    "20260912/group_011": {
+      "label": "关闭并移除场地内可用干扰源。检测区域内保持无人，连续采集3min。"
+    },
+    "20260912/group_012": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位A面对雷达静站30s后，背对雷达静站30s，保持身体相对静止，后离开检测区域。"
+    },
+    "20260912/group_013": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位C面对雷达静站30s后，背对雷达静站30s，保持身体相对静止，后离开检测区域。"
+    },
+    "20260912/group_014": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位E面对雷达静站30s后，背对雷达静站30s，保持身体相对静止，后离开检测区域。"
+    },
+    "20260912/group_015": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位G面对雷达静站30s后，背对雷达静站30s，保持身体相对静止，后离开检测区域。"
+    },
+    "20260912/group_016": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位A正对雷达静坐维持30s，背对雷达静坐维持30s，后离开检测区域。"
+    },
+    "20260912/group_017": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位C正对雷达静坐维持30s，背对雷达静坐维持30s，后离开检测区域。"
+    },
+    "20260912/group_018": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位E正对雷达静坐维持30s，背对雷达静坐维持30s，后离开检测区域。"
+    },
+    "20260912/group_019": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位G正对雷达静坐维持30s，背对雷达静坐维持30s，后离开检测区域。"
+    },
+    "20260912/group_020": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位A正对雷达静躺，维持30s后，背对雷达静躺，维持30s后，离开检测区域。"
+    },
+    "20260912/group_021": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位C正对雷达静躺，维持30s后，背对雷达静躺，维持30s后，离开检测区域。"
+    },
+    "20260912/group_022": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位E正对雷达静躺，维持30s后，背对雷达静躺，维持30s后，离开检测区域。"
+    },
+    "20260912/group_023": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域点位G正对雷达静躺，维持30s后，背对雷达静躺，维持30s后，离开检测区域。"
+    },
+    "20260912/group_024": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域左顶点正对雷达静坐1min，背对雷达静坐1min后离开检测区域。"
+    },
+    "20260912/group_025": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在床上静躺维持2min后离开检测区域"
+    },
+    "20260912/group_026": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区域内静坐在书桌前学习，书桌对人体造成遮挡，维持1min后离开检测区域。"
+    },
+    "20260912/group_027": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在检测区躺在沙发上盖毯子，同时沙发靠背在人与传感器中间造成遮挡，维持1min后离开检测区域。"
+    },
+    "20260912/group_028": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器，依次做站、坐、躺动作，每个动作维持15s后，背对传感器，依次做站、坐、躺动作，每个动作维持15s，随后离开检测区域"
+    },
+    "20260912/group_029": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持15s，随后离开检测区域"
+    },
+    "20260912/group_030": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点正对传感器，依次做站、坐、躺动作，每个动作维持15s，背对传感器，依次做站、坐、躺动作，每个动作维持15s，随后离开检测区域"
+    },
+    "20260912/group_031": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域内，随意行走30遍历核心检测区域，并且依次做站、坐、躺动作，每个动作维持15s以上，随后离开检测区域。"
+    },
+    "20260912/group_032": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内正对传感器做开合跳，持续30s，背对传感器做开合跳，持续30s，侧对传感器做开合跳，持续30s，后离开检测区域。"
+    },
+    "20260912/group_033": {
+      "label": "各干扰源正常运行，检测区域内保持无人，连续采集3min。"
+    },
+    "20260912/group_034": {
+      "label": "各干扰源正常运行，摇头风扇位于B点未开启。单人从检测区域外进入场地内，打开风扇摇头吹风后，在检测区域点位B正对雷达静站，保持身体相对静止站立，维持30s后，背对雷达静站，保持身体相对静止站立，维持30s后，后离开检测区域"
+    },
+    "20260912/group_035": {
+      "label": "各干扰源正常运行，摇头风扇位于A点未开启。单人从检测区域外进入场地内，打开风扇摇头吹风后，在检测区域点位A正对雷达静站，保持身体相对静止站立，维持30s后，背对雷达静站，保持身体相对静止站立，维持30s后，后离开检测区域"
+    },
+    "20260912/group_036": {
+      "label": "各干扰源正常运行，摇头风扇位于H点未开启。单人从检测区域外进入场地内，打开风扇摇头吹风后，在检测区域点位H正对雷达静站，保持身体相对静止站立，维持30s后，背对雷达静站，保持身体相对静止站立，维持30s后，后离开检测区域"
+    },
+    "20260912/group_037": {
+      "label": "各干扰源正常运行，摇头风扇位于G点未开启。单人从检测区域外进入场地内，打开风扇摇头吹风后，在检测区域点位G正对雷达静站，保持身体相对静止站立，维持30s后，背对雷达静站，保持身体相对静止站立，维持30s后，后离开检测区域"
+    },
+    "20260912/group_038": {
+      "label": "各干扰源正常运行，摇头风扇位于F点未开启。单人从检测区域外进入场地内，在检测区域点位F正对雷达静坐，打开风扇摇头吹风后，保持身体相对静止坐立，维持30s后,背对雷达静坐，维持30s后,离开检测区域。"
+    },
+    "20260912/group_039": {
+      "label": "各干扰源正常运行，摇头风扇位于G点未开启。单人从检测区域外进入场地内，在检测区域点位G正对雷达静坐，打开风扇摇头吹风后，保持身体相对静止坐立，维持30s后,背对雷达静坐，维持30s后,离开检测区域。"
+    },
+    "20260912/group_040": {
+      "label": "各干扰源正常运行，摇头风扇位于H点未开启。单人从检测区域外进入场地内，在检测区域点位H正对雷达静坐，打开风扇摇头吹风后，保持身体相对静止坐立，维持30s后,背对雷达静坐，维持30s后,离开检测区域。"
+    },
+    "20260912/group_041": {
+      "label": "各干扰源正常运行，摇头风扇位于A点未开启。单人从检测区域外进入场地内，在检测区域点位A正对雷达静坐，打开风扇摇头吹风后，保持身体相对静止坐立，维持30s后,背对雷达静坐，维持30s后,离开检测区域。"
+    },
+    "20260912/group_042": {
+      "label": "各干扰源正常运行，摇头风扇位于A点未开启。单人从检测区域外进入场地内，在检测区域点位A正对雷达静躺，打开风扇摇头吹风后，保持身体相对静止躺立，维持30s后,对雷达静躺，离开检测区域。"
+    },
+    "20260912/group_043": {
+      "label": "各干扰源正常运行，摇头风扇位于H点未开启。单人从检测区域外进入场地内，在检测区域点位H正对雷达静躺，打开风扇摇头吹风后，保持身体相对静止躺立，维持30s后,对雷达静躺，离开检测区域。"
+    },
+    "20260912/group_044": {
+      "label": "各干扰源正常运行，摇头风扇位于G点未开启。单人从检测区域外进入场地内，在检测区域点位G正对雷达静躺，打开风扇摇头吹风后，保持身体相对静止躺立，维持30s后,对雷达静躺，离开检测区域。"
+    },
+    "20260912/group_045": {
+      "label": "各干扰源正常运行，摇头风扇位于F点未开启。单人从检测区域外进入场地内，在检测区域点位F正对雷达静躺，打开风扇摇头吹风后，保持身体相对静止躺立，维持30s后,对雷达静躺，离开检测区域。"
+    },
+    "20260912/group_046": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域内，随意行走30s遍历核心检测区域并尽快经过各干扰源，并且依次做站、坐、躺动作，每个动作维持15s以上，随后离开检测区域"
+    },
+    "20260912/group_047": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在检测区域内静坐在书桌前学习，书桌对人体造成遮挡，桌子旁有摇头风扇和绿植在吹动，维持30s后离开检测区域。"
+    },
+    "20260912/group_048": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在检测区躺在沙发上盖毯子，同时沙发靠背在人与传感器中间造成遮挡，沙发旁有摇头风扇和绿植在吹动，维持30s后离开检测区域。"
+    },
+    "20260912/group_049": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持15s，背对传感器依次做站、坐、躺动作，侧对传感器依次做站、坐、躺动作，随后离开检测区域"
+    },
+    "20260912/group_050": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持15s，背对传感器依次做站、坐、躺动作，侧对传感器依次做站、坐、躺动作，随后离开检测区域"
+    },
+    "20260912/group_051": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持15s，背对传感器依次做站、坐、躺动作，侧对传感器依次做站、坐、躺动作，随后离开检测区域"
+    },
+    "20260912/group_095": {
+      "label": "关闭并移除场地内可用干扰源。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内并走到椅子旁，B静坐，A绕B走动10s后离开检测区域，B3min后离开检测区域。（第1组/共3组）"
+    },
+    "20260912/group_096": {
+      "label": "关闭并移除场地内可用干扰源。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人在区域内随意行走3min以上且相互不遮挡，分别依次做站、坐、躺动作，每个动作维持30s以上，完成后离开检测区域"
+    },
+    "20260912/group_097": {
+      "label": "关闭并移除场地内可用干扰源。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人相互不遮挡，一起做开合跳持续30s后离开检测区域。"
+    },
+    "20260912/group_098": {
+      "label": "关闭并移除场地内可用干扰源。A从检测区域外进入后静坐在椅子上，之后B和C并排间隔50cm进入房间走向A，路过A时B停下静站，C在两人旁边活动10s后离开，间隔2min后B起身离开，再经过2min后A离开。"
+    },
+    "20260912/group_099": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡，随后各自依次完成站、坐、躺姿动作，每个姿态维持30s，最后依次离开检测区域。"
+    },
+    "20260912/group_100": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡间隔50cm以上，随后一起正对传感器开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20260912/group_101": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡间隔50cm以上，随后一起背对传感器开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20260912/group_102": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡间隔50cm以上，随后一起侧对传感器开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20260912/group_103": {
+      "label": "关闭并移除场地内可用干扰源。1号进入核心检测区域后随意走动1min后2号进入，2号随意走动1min后3号进入，3号随意走动1min后4号进入，随后4人在区域内随意走动，每人重复三轮站、坐、躺动作后，1号和2号离开检测区域，随后5号进入检测区域随意走动1min后6号再次进入随意走动1min，然后6号离开检测区域，7号进入后随意走动1min，随后按照3、4、7、5的顺序依次离开检测区域."
+    },
+    "20260912/group_104": {
+      "label": "各干扰源正常运行。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内并走到椅子旁，B静坐，A绕B走动10s后离开检测区域，B3min后离开检测区域。"
+    },
+    "20260912/group_105": {
+      "label": "各干扰源正常运行。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人在区域内随意行走3min以上且相互不遮挡，并且分别依次做站、坐、躺动作，每个动作维持30s以上，完成后离开检测区域"
+    },
+    "20260912/group_106": {
+      "label": "各干扰源正常运行。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人相互不遮挡，一起做开合跳持续30s后离开检测区域。"
+    },
+    "20260912/group_107": {
+      "label": "各干扰源正常运行。A从检测区域外进入后静坐在椅子上，打开旁边的摇头风扇吹风，之后B和C并排间隔50cm进入房间走向A，路过A时B停下静站，C在两人旁边活动10s后离开，间隔2min后B起身离开，再经过2min后A离开。"
+    },
+    "20260912/group_108": {
+      "label": "各干扰源正常运行。4人分别从不同方向进入核心检测区域，彼此保持不遮挡，随后各自依次完成站、坐、躺姿动作，每个姿态维持30s，最后依次离开检测区域。"
+    },
+    "20260912/group_109": {
+      "label": "各干扰源正常运行。4人分别从不同方向进入检测区域，彼此保持不遮挡，正对传感器随后一起开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20260912/group_110": {
+      "label": "各干扰源正常运行。4人分别从不同方向进入检测区域，彼此保持不遮挡，背对传感器随后一起开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20260912/group_111": {
+      "label": "各干扰源正常运行。1号进入核心检测区域后随意走动1min后2号进入，2号随意走动1min后3号进入，3号随意走动1min后4号进入，随后4人在区域内随意走动，每人重复三轮站、坐、躺动作后，1号和2号离开检测区域，随后5号进入检测区域随意走动1min后6号再次进入随意走动1min，然后6号离开检测区域，7号进入后随意走动1min，随后按照3、4、7、5的顺序依次离开检测区域."
+    },
+    "20260912/group_112": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260912/group_113": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260912/group_114": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260912/group_115": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260912/group_116": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260912/group_117": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260912/group_118": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260912/group_119": {
+      "label": "椭圆区域行走4min"
+    },
+    "20260913/group_011": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内正对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续20s，背对传感器做开合跳，持续20s，侧对传感器做开合跳，持续20s，后离开检测区域。"
+    },
+    "20260913/group_012": {
+      "label": "单人进入核心检测区域，打开风扇吹风摇头后离开检测区域"
+    },
+    "20260913/group_013": {
+      "label": "单人进入核心检测区域，经过窗帘且带动窗帘飘动后离开检测区域"
+    },
+    "20260913/group_014": {
+      "label": "单人进入核心检测区域，经过大型绿植且带动绿植晃动后离开检测区域"
+    },
+    "20260913/group_015": {
+      "label": "单人进入核心检测区域，已有扫地机在工作，人跟在扫地机后面30s后离开检测区域。"
+    },
+    "20260913/group_016": {
+      "label": "单人进入核心检测区域，经过动摆件且拨动摆件后离开检测区域"
+    },
+    "20260913/group_017": {
+      "label": "各干扰源正常运行，单人抱着被子进入房间，将被子扔到床上后离开"
+    },
+    "20260913/group_018": {
+      "label": "单人抱着大型熊玩偶进入房间，将玩偶扔到床上后离开。"
+    },
+    "20260913/group_019": {
+      "label": "单人推办公椅/婴儿车进入检测区域后人离开"
+    },
+    "20260913/group_020": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在床上（核心检测区域内）静躺维持3min后离开检测区域。"
+    },
+    "20260918/group_011": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_012": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_013": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_014": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_015": {
+      "label": "中心区域竖移"
+    },
+    "20260918/group_016": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_017": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_018": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_019": {
+      "label": "中心区域横移"
+    },
+    "20260918/group_020": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_011": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_012": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_013": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_014": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_015": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_016": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_017": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_018": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_019": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_020": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_021": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_022": {
+      "label": "测试集无干扰"
+    },
+    "20260919/group_023": {
+      "label": "测试集无干扰"
+    },
+    "20260919/group_024": {
+      "label": "测试集有干扰"
+    },
+    "20260919/group_025": {
+      "label": "测试集有干扰"
+    },
+    "20260919/group_026": {
+      "label": "测试集有干扰"
+    },
+    "20260919/group_027": {
+      "label": "测试集无干扰"
+    },
+    "20260919/group_028": {
+      "label": "测试集无干扰"
+    },
+    "20260919/group_029": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_030": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_031": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_032": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_033": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_034": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_035": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_036": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_037": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_038": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_039": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_040": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_041": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_042": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_043": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_044": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_045": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_046": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_047": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_048": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_049": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_050": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_051": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_052": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_053": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_054": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_055": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_056": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_057": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_058": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_059": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_060": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_061": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_062": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_063": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_064": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_065": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_066": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_067": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_068": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_069": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_070": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_071": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_072": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_073": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_074": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_075": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_076": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_077": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_078": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_079": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_080": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_081": {
+      "label": "中心区域随意走（高位机自此被踢了一脚移位）"
+    },
+    "20260919/group_082": {
+      "label": "中心区域随意走"
+    },
+    "20260919/group_083": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_084": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_085": {
+      "label": "中心区域横移"
+    },
+    "20260919/group_086": {
+      "label": "中心区域竖移"
+    },
+    "20260919/group_087": {
+      "label": "中心区域竖移"
+    },
+    "20261009/group_013": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_015": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_016": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_017": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_018": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_019": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_020": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_021": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_022": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_023": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_024": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_025": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261009/group_026": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域内，随意行走3min遍历核心检测区域，并且依次做站、坐、躺动作，每个动作维持30s以上，随后离开检测区域。"
+    },
+    "20261009/group_027": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域内，随意行走3min遍历核心检测区域并尽快经过各干扰源，并且依次做站、坐、躺动作，每个动作维持30s以上，随后离开检测区域。"
+    },
+    "20261009/group_028": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_029": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_030": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_031": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_032": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_033": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_034": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_035": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_036": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_037": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_038": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_039": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点侧对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261009/group_040": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内正对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261009/group_041": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内背对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261009/group_042": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内侧对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261009/group_043": {
+      "label": "单人进入核心检测区域，打开风扇吹风摇头后离开检测区域"
+    },
+    "20261009/group_044": {
+      "label": "单人进入核心检测区域，经过窗帘且带动窗帘飘动后离开检测区域"
+    },
+    "20261009/group_045": {
+      "label": "单人进入核心检测区域，经过大型绿植且带动绿植晃动后离开检测区域"
+    },
+    "20261009/group_046": {
+      "label": "单人进入核心检测区域，经过动摆件且拨动摆件后离开检测区域"
+    },
+    "20261009/group_047": {
+      "label": "单人进入核心检测区域，已有扫地机在工作，人跟在扫地机后面30s后离开检测区域。"
+    },
+    "20261009/group_048": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内正对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261009/group_049": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内背对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261009/group_050": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内侧对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261009/group_051": {
+      "label": "关闭并移除场地内可用干扰源。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人在区域内随意行走3min以上且相互不遮挡，分别依次做站、坐、躺动作，每个动作维持30s以上，完成后离开检测区域"
+    },
+    "20261009/group_052": {
+      "label": "关闭并移除场地内可用干扰源。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人相互不遮挡，一起做开合跳持续30s后离开检测区域。"
+    },
+    "20261009/group_053": {
+      "label": "各干扰源正常运行。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人在区域内随意行走3min以上且相互不遮挡，并且分别依次做站、坐、躺动作，每个动作维持30s以上，完成后离开检测区域"
+    },
+    "20261009/group_054": {
+      "label": "各干扰源正常运行。A、B两人一同并肩间隔50cm从检测区域外进入核心检测区域内，两人相互不遮挡，一起做开合跳持续30s后离开检测区域。"
+    },
+    "20261010/group_011": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域左顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_012": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域上顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_013": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域右顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_014": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域下顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_015": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在床上（核心检测区域内）静躺维持3min后离开检测区域。"
+    },
+    "20261010/group_016": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在床上（核心检测区域内）夜晚睡眠4min后离开检测区域。"
+    },
+    "20261010/group_017": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域左顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_018": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域上顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_019": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域右顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_020": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域下顶点背对雷达静坐，维持3min后离开检测区域。"
+    },
+    "20261010/group_021": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在床上（核心检测区域内）静躺维持3min后离开检测区域。"
+    },
+    "20261010/group_022": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在床上（核心检测区域内）夜晚睡眠4min后离开检测区域。"
+    },
+    "20261010/group_023": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡，随后各自依次完成站、坐、躺姿动作，每个姿态维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_024": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡间隔50cm以上，随后一起正对传感器开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_025": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡间隔50cm以上，随后一起背对传感器开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_026": {
+      "label": "关闭并移除场地内可用干扰源。4人分别从不同方向进入检测区域，彼此保持不遮挡间隔50cm以上，随后一起侧对传感器开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_027": {
+      "label": "关闭并移除场地内可用干扰源。1号进入核心检测区域后随意走动1min后2号进入，随后2号在区域内随意走动1min，每人重复三轮站、坐、躺动作后，1号离开检测区域，随后3号进入检测区域随意走动1min后4号进入随意走动1min，然后按照2、4、3的顺序依次离开检测区域"
+    },
+    "20261010/group_028": {
+      "label": "各干扰源正常运行。4人分别从不同方向进入核心检测区域，彼此保持不遮挡，随后各自依次完成站、坐、躺姿动作，每个姿态维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_029": {
+      "label": "各干扰源正常运行。4人分别从不同方向进入检测区域，彼此保持不遮挡，正对传感器随后一起开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_030": {
+      "label": "各干扰源正常运行。4人分别从不同方向进入检测区域，彼此保持不遮挡，侧对传感器随后一起开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_031": {
+      "label": "各干扰源正常运行。4人分别从不同方向进入检测区域，彼此保持不遮挡，背对传感器随后一起开合跳维持30s，最后依次离开检测区域。"
+    },
+    "20261010/group_032": {
+      "label": "各干扰源正常运行。1号进入核心检测区域后随意走动1min后2号进入，随后2号在区域内随意走动1min，每人重复三轮站、坐、躺动作后，1号离开检测区域，随后3号进入检测区域随意走动1min后4号进入随意走动1min，然后按照2、4、3的顺序依次离开检测区域"
+    },
+    "20261010/group_033": {
+      "label": "中心区域随意行走4分钟"
+    },
+    "20261010/group_034": {
+      "label": "中心区域随意行走4分钟"
+    },
+    "20261010/group_035": {
+      "label": "中心区域随意行走4分钟"
+    },
+    "20261010/group_036": {
+      "label": "中心区域随意行走4分钟"
+    },
+    "20261012/group_012": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_013": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_014": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_017": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_019": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_021": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_023": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_025": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_032": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_034": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_035": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_036": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_037": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_038": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_039": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_040": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_041": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_042": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_043": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_044": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_045": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_046": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_047": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_048": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_051": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_052": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_053": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_054": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_055": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_056": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_057": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_058": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_059": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261012/group_060": {
+      "label": "贴点躺姿 正侧背"
+    },
+    "20261013/group_011": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_012": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_013": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_014": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_015": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_016": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_017": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_018": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_019": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_020": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_021": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域（动雷达）"
+    },
+    "20261013/group_022": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261013/group_023": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域内，随意行走3min遍历核心检测区域，并且依次做站、坐、躺动作，每个动作维持30s以上，随后离开检测区域。"
+    },
+    "20261013/group_024": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内正对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261013/group_025": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内背对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261013/group_026": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内侧对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261013/group_027": {
+      "label": "角反数据"
+    },
+    "20261013/group_028": {
+      "label": "左半区域站立 正侧背"
+    },
+    "20261013/group_029": {
+      "label": "左半区域站立 正侧背"
+    },
+    "20261013/group_030": {
+      "label": "右半区域站立 正侧背"
+    },
+    "20261013/group_031": {
+      "label": "右半区域坐下 正侧背"
+    },
+    "20261013/group_032": {
+      "label": "右半区域坐下 正侧背（雷达数据有问题，删除）"
+    },
+    "20261013/group_034": {
+      "label": "左半区域坐下 正侧背"
+    },
+    "20261013/group_035": {
+      "label": "左半区域坐下 正侧背"
+    },
+    "20261013/group_036": {
+      "label": "随意行走（4min，穿单衣）"
+    },
+    "20261013/group_037": {
+      "label": "随意行走（4min，穿单衣）"
+    },
+    "20261013/group_038": {
+      "label": "横向Z字折返行走（4min，穿单衣）"
+    },
+    "20261013/group_039": {
+      "label": "横向沿固定线段来回行走（4min，穿单衣）"
+    },
+    "20261013/group_040": {
+      "label": "纵向Z字折返行走（4min，穿单衣）"
+    },
+    "20261013/group_041": {
+      "label": "纵向沿固定线段来回行走（4min，穿单衣）"
+    },
+    "20261013/group_042": {
+      "label": "左对角线斜向来回行走（4min，穿单衣）"
+    },
+    "20261013/group_043": {
+      "label": "右对角线斜向来回行走（4min，穿单衣）"
+    },
+    "20261013/group_044": {
+      "label": "随意行走（4min，穿外套）"
+    },
+    "20261013/group_045": {
+      "label": "随意行走（4min，穿外套）"
+    },
+    "20261013/group_046": {
+      "label": "随意行走（4min，穿单衣）"
+    },
+    "20261013/group_047": {
+      "label": "随意行走（4min，穿单衣）"
+    },
+    "20261013/group_048": {
+      "label": "横向Z字折返行走（4min，穿单衣）"
+    },
+    "20261013/group_049": {
+      "label": "横向沿固定线段来回行走（4min，穿单衣）"
+    },
+    "20261013/group_050": {
+      "label": "纵向Z字折返行走（4min，穿单衣）"
+    },
+    "20261013/group_051": {
+      "label": "纵向沿固定线段来回行走（4min，穿单衣）"
+    },
+    "20261013/group_052": {
+      "label": "左对角线斜向来回行走（4min，穿单衣）"
+    },
+    "20261013/group_055": {
+      "label": "右对角线斜向来回行走（4min，穿单衣）"
+    },
+    "20261013/group_056": {
+      "label": "随意行走（4min，穿外套）"
+    },
+    "20261014/group_011": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域内，随意行走3min遍历核心检测区域并尽快经过各干扰源，并且依次做站、坐、躺动作，每个动作维持30s以上，随后离开检测区域。"
+    },
+    "20261014/group_012": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_013": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_014": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_015": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_016": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_017": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_018": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_019": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_020": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_021": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_022": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_023": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点侧对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261014/group_024": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内正对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261014/group_025": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内背对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261014/group_026": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内侧对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261014/group_027": {
+      "label": "单人进入核心检测区域，打开风扇吹风摇头后离开检测区域"
+    },
+    "20261014/group_028": {
+      "label": "单人进入核心检测区域，经过窗帘且带动窗帘飘动后离开检测区域"
+    },
+    "20261014/group_029": {
+      "label": "单人进入核心检测区域，经过大型绿植且带动绿植晃动后离开检测区域"
+    },
+    "20261014/group_030": {
+      "label": "单人进入核心检测区域，经过动摆件且拨动摆件后离开检测区域"
+    },
+    "20261014/group_031": {
+      "label": "单人进入核心检测区域，已有扫地机在工作，人跟在扫地机后面30s后离开检测区域。"
+    },
+    "20261014/group_032": {
+      "label": "左半区躺下，正侧背。"
+    },
+    "20261014/group_033": {
+      "label": "左半区域 站立 正侧背 十分钟"
+    },
+    "20261014/group_034": {
+      "label": "右半区域 站立 正侧背 十分钟"
+    },
+    "20261014/group_035": {
+      "label": "右半区域 坐 正侧背 十五分钟"
+    },
+    "20261014/group_036": {
+      "label": "左半区域 坐 正侧背 十分钟"
+    },
+    "20261014/group_037": {
+      "label": "左半区域 躺 正侧背 二十一分钟"
+    },
+    "20261014/group_038": {
+      "label": "右半区域 躺 正侧背 十六分钟"
+    },
+    "20261014/group_039": {
+      "label": "随意行走（4min，穿单衣）"
+    },
+    "20261014/group_040": {
+      "label": "随意行走（4min，穿单衣）"
+    },
+    "20261014/group_041": {
+      "label": "横向Z字折返行走（4min，穿单衣）"
+    },
+    "20261014/group_042": {
+      "label": "横向沿固定线段来回行走（4min，穿单衣）"
+    },
+    "20261014/group_043": {
+      "label": "纵向Z字折返行走（4min，穿单衣）"
+    },
+    "20261014/group_044": {
+      "label": "纵向沿固定线段来回行走（4min，穿单衣）"
+    },
+    "20261014/group_045": {
+      "label": "左对角线斜向来回行走（4min，穿单衣）"
+    },
+    "20261014/group_046": {
+      "label": "右对角线斜向来回行走（4min，穿单衣）"
+    },
+    "20261014/group_047": {
+      "label": "随意行走（4min，穿外套）"
+    },
+    "20261014/group_048": {
+      "label": "随意行走（4min，穿外套）"
+    },
+    "20261015/group_011": {
+      "label": "左半区域站立 正侧背 十分钟"
+    },
+    "20261015/group_012": {
+      "label": "右半区域站立 正侧背 十分钟"
+    },
+    "20261015/group_013": {
+      "label": "右半区域开合跳 正侧背 十分钟"
+    },
+    "20261015/group_014": {
+      "label": "右半区域 坐 正侧背 十五分钟"
+    },
+    "20261015/group_015": {
+      "label": "右半区域 躺 正侧背 十五分钟"
+    },
+    "20261015/group_016": {
+      "label": "左半区域开合跳 正侧背 十分钟"
+    },
+    "20261015/group_017": {
+      "label": "左半区域开合跳 正侧背 十分钟"
+    },
+    "20261015/group_018": {
+      "label": "左半区域 坐 正侧背 十五分钟"
+    },
+    "20261015/group_019": {
+      "label": "左顶点区域 坐 正侧背 80s"
+    },
+    "20261015/group_020": {
+      "label": "左半区域 躺 正侧背 二十一分钟"
+    },
+    "20261015/group_021": {
+      "label": "右半区域 躺 正侧背 十五分钟"
+    },
+    "20261016/group_011": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_012": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_013": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域左顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_014": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_015": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_016": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域右顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_017": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_018": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_019": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域上顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_020": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点正对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_021": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点背对传感器，依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域（动雷达）"
+    },
+    "20261016/group_022": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心椭圆区域下顶点侧对传感器（胸腔朝区域外），依次做站、坐、躺动作，每个动作维持30s，随后离开检测区域"
+    },
+    "20261016/group_023": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入场地内，在核心检测区域内，随意行走3min遍历核心检测区域，并且依次做站、坐、躺动作，每个动作维持30s以上，随后离开检测区域。"
+    },
+    "20261016/group_024": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内正对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261016/group_025": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内背对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261016/group_026": {
+      "label": "关闭并移除场地内可用干扰源。单人从检测区域外进入核心区域内侧对传感器做开合跳，持续30s以上后离开检测区域。"
+    },
+    "20261016/group_027": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心检测区域内，随意行走3min遍历核心检测区域并尽快经过各干扰源，并且依次做站、坐、躺动作，每个动作维持30s以上，随后离开检测区域。"
+    },
+    "20261016/group_028": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_029": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_030": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域左顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_031": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_032": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_033": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域右顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_034": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_035": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_036": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域上顶点侧对传感器（胸腔朝外）依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_037": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点正对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_038": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点背对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_039": {
+      "label": "各干扰源正常运行。单人从检测区域外进入场地内，在核心椭圆区域下顶点侧对传感器依次做站、坐、躺动作，人旁边有绿植在被风吹动但不对人造成遮挡，每个动作维持30s以上，随后离开检测区域"
+    },
+    "20261016/group_040": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内正对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261016/group_041": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内背对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261016/group_042": {
+      "label": "各干扰源正常运行。单人从检测区域外进入核心区域内侧对传感器做开合跳，人旁边有绿植在被风吹动但不对人造成遮挡，持续30s以上后离开检测区域。"
+    },
+    "20261016/group_043": {
+      "label": "单人进入核心检测区域，打开风扇吹风摇头后离开检测区域"
+    },
+    "20261016/group_044": {
+      "label": "单人进入核心检测区域，经过窗帘且带动窗帘飘动后离开检测区域"
+    },
+    "20261016/group_045": {
+      "label": "单人进入核心检测区域，经过大型绿植且带动绿植晃动后离开检测区域"
+    },
+    "20261016/group_046": {
+      "label": "单人进入核心检测区域，经过动摆件且拨动摆件后离开检测区域"
+    },
+    "20261016/group_047": {
+      "label": "单人进入核心检测区域，已有扫地机在工作，人跟在扫地机后面30s后离开检测区域。"
+    }
+  }
+}

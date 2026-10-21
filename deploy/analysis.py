@@ -1,4 +1,5 @@
 import pickle
+from functools import lru_cache
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -8,11 +9,16 @@ from matplotlib.lines import Line2D
 
 plt.switch_backend('webagg')
 
-date = "20260912"
-group = "group_051"
+date = "20260921"
+group = "group_011"
 
 ACCEPTANCE_CENTER_XY = np.array([2.0, 0.0])
 ACCEPTANCE_RADII_XY = np.array([1.6, 2.4])
+GT_BBOX_MARGIN = 0.30
+DYNAMIC_STATIC_RATIO_THRESHOLD = 0.20
+MAX_ACCUMULATION_HISTORY_FRAMES = 100
+DYNAMIC_POINT_TAG = 1.0
+MAX_DISPLAY_STATIC_POINTS = 5000
 
 
 def acceptance_mask(poses):
@@ -72,23 +78,69 @@ calib_path = f"/mnt/huawei/{date}/calib"
 high_extrinsic = load_extrinsic_npz(f"{calib_path}/extrinsic_img_to_radar_high.npz")
 low_extrinsic = load_extrinsic_npz(f"{calib_path}/extrinsic_img_to_radar_low.npz")
 
-fig = plt.figure(figsize=(18, 7))
-fig.subplots_adjust(bottom=0.24)
-ax1 = fig.add_subplot(131, projection='3d')
-ax2 = fig.add_subplot(132, projection='3d')
-ax3 = fig.add_subplot(133)
+
+@lru_cache(maxsize=512)
+def gt_crop(frame, uid):
+    """返回指定 UID 的 GT 框选点、动点 mask、动静比和框中心。"""
+    record = data[frame]
+    poses = np.asarray(record['pose_gt']).reshape(-1, 17, 3)
+    if uid >= len(poses):
+        return None
+    points = np.asarray(record['point_cloud'])
+    bbox = np.concatenate((poses[uid].min(axis=0) - GT_BBOX_MARGIN,
+                           poses[uid].max(axis=0) + GT_BBOX_MARGIN))
+    cloud = points[((points[:, :3] >= bbox[:3]) &
+                    (points[:, :3] <= bbox[3:])).all(axis=1)]
+    dynamic = np.isclose(cloud[:, -1], DYNAMIC_POINT_TAG)
+    ratio = int(dynamic.sum()) / max(int((~dynamic).sum()), 1)
+    return cloud, dynamic, ratio, (bbox[:3] + bbox[3:]) / 2
+
+
+@lru_cache(maxsize=32)
+def accumulated_gt_cloud(frame):
+    """当前比例低于阈值时，向前补静点，遇到比例高于阈值即停止。"""
+    clouds = []
+    people = len(np.asarray(data[frame]['pose_gt']).reshape(-1, 17, 3))
+    for uid in range(people):
+        current, _, ratio, center = gt_crop(frame, uid)
+        clouds.append(current)
+        if ratio >= DYNAMIC_STATIC_RATIO_THRESHOLD:
+            continue
+        for previous in range(frame - 1,
+                              max(-1, frame - MAX_ACCUMULATION_HISTORY_FRAMES - 1), -1):
+            cropped = gt_crop(previous, uid)
+            if cropped is None:
+                break
+            historical, historical_dynamic, historical_ratio, historical_center = cropped
+            if historical_ratio > DYNAMIC_STATIC_RATIO_THRESHOLD:
+                break
+            historical_static = historical[~historical_dynamic].copy()
+            historical_static[:, :3] += center - historical_center
+            clouds.append(historical_static)
+    return np.concatenate(clouds) if clouds else np.empty((0, 6), dtype=np.float32)
+
+
+fig = plt.figure(figsize=(12, 8), constrained_layout=False)
+fig.subplots_adjust(bottom=0.14, hspace=0.18, wspace=0.08)
+ax1 = fig.add_subplot(221, projection='3d')
+ax2 = fig.add_subplot(222, projection='3d')
+ax4 = fig.add_subplot(223, projection='3d')
+ax3 = fig.add_subplot(224)
 
 scat_dyn = ax1.scatter([], [], [], c='r', label='dynamic')
 scat_sta = ax1.scatter([], [], [], c='b', label='static')
 scat_gt_ax1 = ax1.scatter([], [], [], c='g', label='ground truth')
 scat_gt_ax2 = ax2.scatter([], [], [], c='g', label='ground truth')
 scat_pre_ax2 = ax2.scatter([], [], [], c='#984ea3', label='prediction')
+scat_acc_dyn = ax4.scatter([], [], [], c='r', label='dynamic')
+scat_acc_sta = ax4.scatter([], [], [], c='b', label='static')
+scat_gt_ax4 = ax4.scatter([], [], [], c='g', label='ground truth')
 
 angle = np.linspace(0, 2 * np.pi, 100)
 radius = np.linspace(0, 1, 20)
 ellipse_x = ACCEPTANCE_CENTER_XY[0] + ACCEPTANCE_RADII_XY[0] * np.outer(radius, np.cos(angle))
 ellipse_y = ACCEPTANCE_CENTER_XY[1] + ACCEPTANCE_RADII_XY[1] * np.outer(radius, np.sin(angle))
-for ax in (ax1, ax2):
+for ax in (ax1, ax2, ax4):
     ax.plot_surface(ellipse_x, ellipse_y, np.full_like(ellipse_x, -2.0),
                     color='#FFF2CC', alpha=0.35, shade=False)
     ax.plot(ellipse_x[-1], ellipse_y[-1], np.full_like(angle, -2.0),
@@ -213,6 +265,21 @@ def update(frame):
         np.asarray(record['raw_inference']['poses']).reshape(-1, 3),
         high_extrinsic, low_extrinsic,
     )
+    accumulated = accumulated_gt_cloud(frame)
+    accumulated_dynamic = np.isclose(accumulated[:, -1], DYNAMIC_POINT_TAG)
+    accumulated_dynamic_points = accumulated[accumulated_dynamic]
+    accumulated_static_points = accumulated[~accumulated_dynamic]
+    if len(accumulated_static_points) > MAX_DISPLAY_STATIC_POINTS:
+        accumulated_static_points = accumulated_static_points[np.linspace(
+            0, len(accumulated_static_points) - 1,
+            MAX_DISPLAY_STATIC_POINTS, dtype=int,
+        )]
+    accumulated_dynamic_xyz = transform_points_between_radars(
+        accumulated_dynamic_points[:, :3], high_extrinsic, low_extrinsic
+    )
+    accumulated_static_xyz = transform_points_between_radars(
+        accumulated_static_points[:, :3], high_extrinsic, low_extrinsic
+    )
 
     inside = acceptance_mask(pose_gt)
     errors = uid_mpjpe(poses, person_indices, target, inside)
@@ -223,6 +290,9 @@ def update(frame):
     scat_gt_ax1._offsets3d = tuple(pose_gt.T)
     scat_gt_ax2._offsets3d = tuple(pose_gt.T)
     scat_pre_ax2._offsets3d = tuple(pre_pose.T)
+    scat_acc_dyn._offsets3d = tuple(accumulated_dynamic_xyz.T)
+    scat_acc_sta._offsets3d = tuple(accumulated_static_xyz.T)
+    scat_gt_ax4._offsets3d = tuple(pose_gt.T)
     for text in uid_texts:
         text.remove()
     uid_texts.clear()
@@ -271,8 +341,11 @@ def update(frame):
     ax2.legend(handles=handles, fontsize=7.5, loc='upper right')
     ax1.set_title(f"Point cloud + GT | Frame {frame + 1}/{len(data)}")
     ax2.set_title(f"GT + Prediction | Frame {frame + 1}/{len(data)}")
+    ax4.set_title(f"Accumulated GT crops | {len(accumulated)} points, "
+                  f"showing {len(accumulated_dynamic_xyz) + len(accumulated_static_xyz)}")
     draw_top_view(frame)
-    return scat_dyn, scat_sta, scat_gt_ax1, scat_gt_ax2, scat_pre_ax2
+    return (scat_dyn, scat_sta, scat_gt_ax1, scat_gt_ax2, scat_pre_ax2,
+            scat_acc_dyn, scat_acc_sta, scat_gt_ax4)
 
 
 current_frame = 0
@@ -348,7 +421,7 @@ previous_button.on_clicked(lambda event: step(-1))
 next_button.on_clicked(lambda event: step(1))
 play_button.on_clicked(lambda event: set_playing(not playing))
 fig.canvas.mpl_connect('key_press_event', on_key)
-timer = fig.canvas.new_timer(interval=120)
+timer = fig.canvas.new_timer(interval=250)
 timer.add_callback(tick)
 show_frame(0)
 timer.start()

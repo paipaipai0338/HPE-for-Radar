@@ -19,6 +19,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 
 from data2datasets.load_json import get_meta_info
+from data2datasets.alignment_cache import load_or_build_alignment
 from preprocess.radarprocess import (
     Radar_Config,
     bin_buffer_to_cube_range_fft,
@@ -39,11 +40,11 @@ class PackedFrame:
     length: int
 
 
-def _collate_base(batch, max_points=300, max_people=4):
+def _collate_base(batch, max_points=None, max_people=4):
     """统一多任务 Dataset 私有的点云与 GT padding 实现。"""
     if not batch:
         raise ValueError("batch 不能为空")
-    if max_points <= 0 or max_people <= 0:
+    if (max_points is not None and max_points <= 0) or max_people <= 0:
         raise ValueError("max_points 和 max_people 必须大于 0")
 
     variable_config = {
@@ -80,6 +81,8 @@ def _collate_base(batch, max_points=300, max_people=4):
             continue
 
         max_var, fixed_dims, random_sample = variable_config[key]
+        if max_var is None:
+            max_var = max(1, max((len(arr) for sample in batch for arr in sample[key] if arr is not None), default=0))
         padded = torch.zeros(
             B, T, max_var, *fixed_dims, dtype=torch.float32
         )
@@ -121,12 +124,12 @@ def _collate_base(batch, max_points=300, max_people=4):
 
 def collate_fn(
     batch: List[Dict[str, Any]],
-    max_points: int = 300,
+    max_points: Optional[int] = None,
     max_people: int = 4,
     bbox_threshold: float = 0.3,
 ) -> Dict[str, Any]:
     """
-    对统一多任务样本进行 padding，并生成雷达坐标系下的 3D 包围盒。
+    对统一多任务样本动态 padding（max_points=None），并生成 3D 包围盒。
 
     Returns:
         radar_low_pc / radar_high_pc:
@@ -196,7 +199,7 @@ def collate_fn(
         {
             key: value
             for key, value in sample.items()
-            if key != 'action'
+            if key not in {'action', 'group_id'}
         }
         for sample in batch
     ]
@@ -246,6 +249,8 @@ def collate_fn(
                 0.0,
             )
 
+    if 'group_id' in batch[0]:
+        collated['group_id'] = [sample['group_id'] for sample in batch]
     return collated
 
 
@@ -253,10 +258,7 @@ class HPE_Dataset(Dataset):
 
     FILE_READ_MAX_ATTEMPTS = 5
     FILE_READ_RETRY_BASE_DELAY_SEC = 0.03
-    MIN_RADAR_POINTS_PER_FRAME = 20
-    _ROTATION_ROLL_RANGE_DEG = (-2.0, 2.0)
-    _ROTATION_PITCH_RANGE_DEG = (-2.0, 2.0)
-    _ROTATION_YAW_RANGE_DEG = (-2.0, 2.0)
+    MIN_RADAR_POINTS_PER_FRAME = 5
     DEFAULT_BAD_BIN_FRAMES_PATH = Path(__file__).with_name(
         'bad_bin_frames.json'
     )
@@ -272,7 +274,6 @@ class HPE_Dataset(Dataset):
         T=8,
         acc_frame=0,
         preload_cache=True,
-        enable_rotation=False,
         enable_action=False,
         radar_config: Optional[Radar_Config] = None,
         bad_bin_frames_path: Optional[Union[str, Path]] = (
@@ -280,16 +281,16 @@ class HPE_Dataset(Dataset):
         ),
         max_groups: Optional[int] = None,
         packed_data_root: Optional[Union[str, Path]] = None,
+        pointcloud_source: str = "files",
+        include_kxyz: bool = False,
+        window_stride: Optional[int] = None,
+        train_groups: Optional[Dict[str, List[str]]] = None,
+        val_person_id: str = "4",
     ):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
         split_method = split_method.lower()
         assert split_method in ['person', 'group', 'sequence'], 'split_method has unmatched method'
-        if not isinstance(enable_rotation, bool):
-            raise TypeError(
-                "enable_rotation 必须为 bool，"
-                f"实际为 {type(enable_rotation).__name__}"
-            )
         if not isinstance(enable_action, bool):
             raise TypeError(
                 "enable_action 必须为 bool，"
@@ -298,9 +299,40 @@ class HPE_Dataset(Dataset):
         if isinstance(acc_frame, bool) or not isinstance(acc_frame, int) or acc_frame < 0:
             raise ValueError("acc_frame 必须为非负整数")
 
+        if isinstance(T, bool) or not isinstance(T, int) or T < 1:
+            raise ValueError('T 必须为正整数')
+        if window_stride is None:
+            window_stride = 1
+        if isinstance(window_stride, bool) or not isinstance(window_stride, int) or window_stride < 1:
+            raise ValueError('window_stride 必须为正整数')
+        self.window_stride = window_stride
+
+        if pointcloud_source not in ('files', 'skyrelay'):
+            raise ValueError('pointcloud_source 必须为 files 或 skyrelay')
+        if not isinstance(include_kxyz, bool):
+            raise TypeError('include_kxyz 必须为 bool')
+        if include_kxyz and (pointcloud_source != 'files' or acc_frame != 0):
+            raise ValueError('KXYZ 直接读取 BIN，要求 pointcloud_source=files、acc_frame=0')
+        self.spectra_history = 0
+        if include_kxyz:
+            from preprocess.radarpreprocess_skyrelay import MAX_FRAME_NUM
+            self.spectra_history = MAX_FRAME_NUM - 1
+        if include_kxyz and (base_source != 'radar_high_bin' or not sensor_config or not sensor_config.get(base_source)):
+            raise ValueError('KXYZ 当前要求启用 radar_high_bin 并作为 base_source')
+        self.pointcloud_source = pointcloud_source
+        self.sky_history = 0
+        if pointcloud_source == 'skyrelay':
+            from preprocess.radarpreprocess_skyrelay import MAX_FRAME_NUM
+            self.sky_history = MAX_FRAME_NUM - 1
+            if radar_config is None:
+                raise ValueError('Sky 点云需要 radar_config')
+            if base_source != 'radar_high_bin' or not sensor_config or not sensor_config.get(base_source):
+                raise ValueError('Sky 基线要求 base_source=radar_high_bin 并启用该传感器')
+            if sensor_config.get('radar_high_pc') or sensor_config.get('radar_low_bin') or sensor_config.get('radar_low_pc'):
+                raise ValueError('Sky 基线只读取高位 BIN，不能同时读取已有雷达点云或低位雷达')
+
         self.root_path = Path(root_path)
         self.mode = mode
-        self.enable_rotation = enable_rotation
         self.enable_action = enable_action
         self.radar_config = radar_config
         self.bad_bin_frames = self._load_bad_bin_frames(
@@ -324,30 +356,20 @@ class HPE_Dataset(Dataset):
         self.pointcloud_cache = {}
         self.gt_cache = {}
         self.action_cache = {}
+        self.action_pack_indices = {}
         self.skip_bad_samples = 0
         self.bad_files = set()
         self.npy_valid_cache = {}
+        self.low_point_files = set()
         self.bin_valid_cache = {}
         self.packed_bin_cache = {}
         self.packed_bin_cache_pid = os.getpid()
 
-        # 加载元信息
-        json_path = self._source_file('data description.json')
-        self.meta_info = get_meta_info(json_path)
-        if split_method == 'person':
-            # 预筛选与后续划分共用同一份人员名单。
-            train_person_ids = {'0', '1', '2', '5', '6', '7', '8'}
-            val_person_ids = {'3', '4'}
-            person_ids = (
-                train_person_ids
-                if mode == 'train'
-                else val_person_ids
-            )
-            self.meta_info = {
-                person_id: person_data
-                for person_id, person_data in self.meta_info.items()
-                if person_id in person_ids
-            }
+        # 数据范围由 JSON 配置及运行时覆盖项决定。
+        self.meta_info = get_meta_info(
+            split_method=split_method, mode=mode,
+            val_person_id=val_person_id, train_groups=train_groups,
+        )
         if max_groups is not None:
             if max_groups <= 0:
                 raise ValueError("max_groups 必须大于 0")
@@ -370,6 +392,19 @@ class HPE_Dataset(Dataset):
                 if person_data
             }
         
+        if split_method == 'group':
+            # 先分组再对齐，避免 train/val 各自处理全量数据。
+            rng = random.Random(42)
+            for person_data in self.meta_info.values():
+                for entry in person_data:
+                    valid_group = entry['valid_group'].copy()
+                    rng.shuffle(valid_group)
+                    split = int(ratio * len(valid_group))
+                    entry['valid_group'] = (
+                        valid_group[:split] if mode == 'train'
+                        else valid_group[split:]
+                    )
+
         # 定义传感器，是否选取该传感器
         self.sensor_config = {
             'lidar': False,
@@ -398,40 +433,27 @@ class HPE_Dataset(Dataset):
         }
         # 更新 meta_info
         self._build_aligned_data()
+        if mode == 'train' and train_groups is not None:
+            requested = {(date, group) for date, groups in train_groups.items() for group in groups}
+            aligned = {(entry['date'], group) for entries in self.meta_info.values() for entry in entries for group in entry['valid_group']}
+            if requested - aligned:
+                raise ValueError(f'train_groups 中存在缺失或无法对齐的组: {sorted(requested - aligned)}')
         
         # 数据划分 TODO：sequence
-        self.meta_info_splited = {'train': copy.deepcopy(self.meta_info), 'val': copy.deepcopy(self.meta_info)}
-        if split_method == 'person':
-            # 按人来划分
-            self.meta_info_splited['train'] = {
-                person_id: person_data
-                for person_id, person_data in self.meta_info.items()
-                if person_id in train_person_ids
-            }
-            self.meta_info_splited['val'] = {
-                person_id: person_data
-                for person_id, person_data in self.meta_info.items()
-                if person_id in val_person_ids
-            } 
-
-        elif split_method == 'group':
-            # 按照组来划分
-            rng = random.Random(42)
-            for person, person_data in self.meta_info.items():
-                for idx, entry in enumerate(person_data):
-                    valid_group = entry['valid_group'].copy()
-                    rng.shuffle(valid_group)
-                    self.meta_info_splited['train'][person][idx]['valid_group'] = valid_group[:int(ratio*len(valid_group))]
-                    self.meta_info_splited['train'][person][idx]['group_data_path'] = {k: self.meta_info_splited['train'][person][idx]['group_data_path'][k] for k in self.meta_info_splited['train'][person][idx]['valid_group']}
-                    self.meta_info_splited['val'][person][idx]['valid_group'] = valid_group[int(ratio*len(valid_group)):]
-                    self.meta_info_splited['val'][person][idx]['group_data_path'] = {k: self.meta_info_splited['val'][person][idx]['group_data_path'][k] for k in self.meta_info_splited['val'][person][idx]['valid_group']}
-        elif split_method == 'sequence':
+        self.meta_info_splited = (
+            {mode: self.meta_info, 'val' if mode == 'train' else 'train': {}}
+            if split_method in {'person', 'group'} else
+            {'train': copy.deepcopy(self.meta_info), 'val': copy.deepcopy(self.meta_info)}
+        )
+        if split_method == 'sequence':
             # 按照序列来划分
             pass
         self._display_meta_info(self.meta_info_splited[mode])
 
-        # meta_info 展平按 T 划分
+        # meta_info 展平为长度 T、步长 window_stride 的窗口
         self.mode_meta_info = self.meta_info_splited[mode]
+        self.sample_groups = []
+        self.sky_start_indices = []
         self.data_path_list = {k: [] for k in self.sensor_config if self.sensor_config[k]}
         self.acc_path_list = {k: [] for k in self.data_path_list if k in {'radar_high_pc', 'radar_low_pc'}}
         for person_id, person_data in self.mode_meta_info.items():
@@ -440,18 +462,32 @@ class HPE_Dataset(Dataset):
                 group_data_path = entry['group_data_path']
                 for group in valid_group:
                     frame = len(group_data_path[group][base_source])
-                    starts = list(range(0, frame - T + 1, T))
+                    sky_extra = self.sky_history + acc_frame if self.sky_history else self.spectra_history
+                    bin_times = ([self._frame_timestamp_ns(p) for p in group_data_path[group][base_source]]
+                                 if sky_extra else [])
+                    typical_interval = np.median(np.diff(bin_times)) if len(bin_times) > 1 else 0
+                    starts = list(range(0, frame - T + 1, self.window_stride))
                     windows = [(start, start + T) for start in starts]
                     for start_idx, end_idx in windows:
+                        if start_idx < sky_extra:
+                            continue
+                        if sky_extra:
+                            intervals = np.diff(bin_times[start_idx-sky_extra:end_idx])
+                            if np.any(intervals <= 0) or np.any(intervals > 1.5*typical_interval):
+                                self.skip_bad_samples += 1
+                                continue
                         window_by_sensor = {}
                         for sensor_name in self.data_path_list.keys():
                             all_sensor_files = group_data_path[group][sensor_name]
-                            window_by_sensor[sensor_name] = all_sensor_files[start_idx:end_idx]
+                            begin = start_idx-sky_extra if sky_extra and sensor_name == base_source else start_idx
+                            window_by_sensor[sensor_name] = all_sensor_files[begin:end_idx]
 
                         if not self._is_valid_window(window_by_sensor):
                             self.skip_bad_samples += 1
                             continue
 
+                        self.sample_groups.append(f"{entry['date']}/{group}")
+                        self.sky_start_indices.append(start_idx-sky_extra)
                         for sensor_name, window_files in window_by_sensor.items():
                             # 将文件路径列表添加到 data_path_list 中
                             self.data_path_list[sensor_name].append(window_files)
@@ -468,6 +504,37 @@ class HPE_Dataset(Dataset):
 
         if self.preload_cache:
             self.preload_data_cache()
+
+    @staticmethod
+    def _frame_timestamp_ns(path):
+        if isinstance(path, PackedFrame):
+            return path.timestamp_ns
+        seconds, nanos = Path(path).stem.split('_')
+        return int(seconds)*10**9 + int(nanos)
+
+    def _sky_pointcloud_sequence(self, cubes, start_index):
+        from preprocess.radarpreprocess_skyrelay import (
+            AlgCfg, StructParam, SignalProcessConfig, StatsInfo, range_cube_to_point_cloud,
+            fft1dMeanCalc, validate_range_cube,
+        )
+        from preprocess.radarprocess import get_radar_res
+        if len(cubes) != self.T + self.sky_history + self.acc_frame:
+            raise ValueError('Sky BIN 窗口长度必须为 T + 历史预热 + acc_frame')
+        config, state = AlgCfg(StructParam()), StatsInfo()
+        signal = SignalProcessConfig()
+        signal.init_winVel(config)
+        # 预热只构建微动缓存；无需对不会输出的历史帧执行完整测角。
+        for cube in cubes[:self.sky_history]:
+            cube = validate_range_cube(cube, config)
+            fft1d = cube.transpose(1, 2, 0).reshape(64, 4, 4, 256)
+            state.hist_fft1d_winvel_mean.append(
+                fft1dMeanCalc(fft1d * signal.winVel.T[:, :, None, None]).astype(np.complex64))
+        state.frame_cnt = start_index + self.sky_history
+        range_res, velocity_res, *_ = get_radar_res(self.radar_config)
+        points = [range_cube_to_point_cloud(cube, alg_cfg=config, stats_info=state,
+                  range_resolution=range_res, velocity_resolution=velocity_res)
+                  for cube in cubes[self.sky_history:]]
+        return self._accumulate_pointcloud_sequence(points, self.acc_frame, self.acc_frame)
 
     @staticmethod
     def _load_bad_bin_frames(
@@ -599,19 +666,21 @@ class HPE_Dataset(Dataset):
             _ = array.shape
             _ = array.dtype
 
-            # 点云窗口中只要有一帧为空或形状非法，就将该文件标记为
-            # 无效；_is_valid_window 会据此跳过包含它的整个 T 窗口。
+            # 低点数帧按窗口占比筛选；损坏文件或非法形状仍直接拒绝。
             if sensor_name in {'radar_low_pc', 'radar_high_pc'}:
                 if (
                     array.ndim != 2
-                    or array.shape[0] < self.MIN_RADAR_POINTS_PER_FRAME
                     or array.shape[1] < 3
                 ):
                     raise ValueError(
                         "雷达点云必须为 [N,C]、"
-                        f"N>={self.MIN_RADAR_POINTS_PER_FRAME} 且 C>=3，"
+                        "C>=3，"
                         f"实际形状={array.shape}"
                     )
+                if array.shape[0] < self.MIN_RADAR_POINTS_PER_FRAME:
+                    self.low_point_files.add(cache_key)
+                    self.npy_valid_cache[cache_key] = False
+                    return False
             del array
             valid = True
 
@@ -697,18 +766,23 @@ class HPE_Dataset(Dataset):
         self,
         window_by_sensor: Dict[str, List[str]],
     ) -> bool:
+        low_point_frames = set()
         for sensor_name, window_files in window_by_sensor.items():
             suffix = self.suffix_map[sensor_name]
             if suffix == '.npy':
-                for file_path in window_files:
+                for frame_idx, file_path in enumerate(window_files):
                     if not self._is_valid_npy(sensor_name, file_path):
-                        return False
+                        if str(file_path) in self.low_point_files:
+                            low_point_frames.add(frame_idx)
+                        else:
+                            return False
             elif suffix == '.bin' and 'radar_' in sensor_name:
                 for file_path in window_files:
                     if not self._is_valid_radar_bin(sensor_name, file_path):
                         return False
 
-        return True
+        window_length = len(next(iter(window_by_sensor.values()), []))
+        return not low_point_frames or len(low_point_frames) * 4 < window_length * 3
         
     def _build_aligned_data(self) -> None:
         '''
@@ -754,13 +828,28 @@ class HPE_Dataset(Dataset):
                     sensor_paths = self._build_sensor_paths(group_dir)
                     
                     # 执行对齐
-                    aligned_frames = self._align_multi_sensor_files(
-                        sources=sensor_paths, 
-                        base_source=self.base_source, 
-                        # time_offsets_sec={
-                        #     "gt": -0.2
-                        # },
-                        )
+                    config = {
+                        'algorithm_version': 'global_dp_v1',
+                        'base_source': self.base_source,
+                        'max_delta_sec': 0.3,
+                        'one_to_one': True,
+                        'time_offsets_sec': {},
+                        'enabled_sensors': {
+                            name: self.suffix_map[name]
+                            for name, path in sorted(sensor_paths.items())
+                            if path is not None
+                        },
+                    }
+                    aligned_frames = load_or_build_alignment(
+                        group_dir, sensor_paths, config,
+                        lambda: self._align_multi_sensor_files(
+                            sources=sensor_paths, base_source=self.base_source,
+                            max_delta_sec=config['max_delta_sec'],
+                            one_to_one=config['one_to_one'],
+                            time_offsets_sec=config['time_offsets_sec'],
+                        ),
+                        PackedFrame,
+                    )
                     
                     if not aligned_frames or not aligned_frames.get(self.base_source):
                         print(f"{group_name} 对齐后没有数据")
@@ -1229,7 +1318,7 @@ class HPE_Dataset(Dataset):
 
         return get_data_function_dict[sensor_name]
 
-    def _get_action_path(self, gt_path: Path | str) -> Path:
+    def _get_action_path(self, gt_path: Path | str) -> Path | PackedFrame:
         """
         action 文件由对应 GT 文件生成，因此二者使用相同文件名。
 
@@ -1239,6 +1328,7 @@ class HPE_Dataset(Dataset):
             camera results/action label/<timestamp>.pkl
 
         同时兼容已有数据中的 ``<timestamp>.npz``。
+        优先读取同目录下的 frames.actionpack，缺帧时回退到独立文件。
         """
         gt_path = Path(gt_path)
         action_dir = gt_path.parent.parent / 'action label'
@@ -1246,6 +1336,36 @@ class HPE_Dataset(Dataset):
         for source_root in (self.packed_data_root, self.root_path):
             if source_root is None:
                 continue
+            packed_dir = source_root / relative_dir
+            pack_path = packed_dir / 'frames.actionpack'
+            index_path = packed_dir / 'frames_index.npz'
+            if pack_path.is_file() and index_path.is_file():
+                cache_key = str(pack_path)
+                if cache_key not in self.action_pack_indices:
+                    with np.load(index_path, allow_pickle=False) as index:
+                        names = index['frame_names'].astype(str).reshape(-1)
+                        offsets = index['offsets'].reshape(-1)
+                        lengths = index['lengths'].reshape(-1)
+                        timestamps = index['timestamps_ns'].reshape(-1)
+                    count = len(names)
+                    if not (len(offsets) == len(lengths) == len(timestamps) == count):
+                        raise ValueError(f'action 打包索引字段长度不一致: {index_path}')
+                    if count and (
+                        offsets[0] != 0 or np.any(lengths < 0)
+                        or np.any(offsets[1:] != offsets[:-1] + lengths[:-1])
+                        or offsets[-1] + lengths[-1] != pack_path.stat().st_size
+                    ):
+                        raise ValueError(f'action 打包索引越界或不连续: {index_path}')
+                    if len(set(names)) != count:
+                        raise ValueError(f'action 打包索引文件名重复: {index_path}')
+                    self.action_pack_indices[cache_key] = {
+                        name: PackedFrame(cache_key, name, int(timestamp), int(offset), int(length))
+                        for name, timestamp, offset, length in zip(names, timestamps, offsets, lengths)
+                    }
+                for suffix in ('.pkl', '.npz'):
+                    ref = self.action_pack_indices[cache_key].get(f'{gt_path.stem}{suffix}')
+                    if ref is not None:
+                        return ref
             for suffix in ('.pkl', '.npz'):
                 candidate = source_root / relative_dir / f'{gt_path.stem}{suffix}'
                 if (self._packed_path_exists(candidate) if source_root == self.packed_data_root
@@ -1271,7 +1391,7 @@ class HPE_Dataset(Dataset):
         gt_path = Path(gt_path)
         action_path = self._get_action_path(gt_path)
 
-        if not action_path.exists():
+        if not isinstance(action_path, PackedFrame) and not action_path.exists():
             raise FileNotFoundError(
                 f"GT 对应的 action 文件不存在: {action_path}"
             )
@@ -1289,7 +1409,14 @@ class HPE_Dataset(Dataset):
         raw_gt = (self._load_packed_frame(packed_gt, raw_gt=True)
                   if packed_gt is not None else load_pickle(gt_path))
 
-        if action_path.suffix.lower() == '.npz':
+        if isinstance(action_path, PackedFrame):
+            raw_action = io.BytesIO(self._packed_bytes(action_path).tobytes())
+            if action_path.frame_name.lower().endswith('.npz'):
+                with np.load(raw_action, allow_pickle=False) as action_npz:
+                    action_data = {key: action_npz[key].copy() for key in action_npz.files}
+            else:
+                action_data = pickle.load(raw_action)
+        elif action_path.suffix.lower() == '.npz':
             def load_action_npz() -> Dict[str, np.ndarray]:
                 with np.load(action_path) as action_npz:
                     return {
@@ -1514,6 +1641,7 @@ class HPE_Dataset(Dataset):
         self.pointcloud_cache.clear()
         self.gt_cache.clear()
         self.action_cache.clear()
+        self.action_pack_indices.clear()
         self.packed_bin_cache.clear()
 
     def _load_calib_T(self, date: str) -> Dict[str, Dict[str, np.ndarray]]:
@@ -1801,77 +1929,6 @@ class HPE_Dataset(Dataset):
             copy=False,
         )
 
-    def _sample_rotation_matrix(self) -> np.ndarray:
-        """
-        为一个 T 帧窗口采样一次安装角扰动。
-
-        使用 PyTorch 随机数生成器，使 DataLoader worker 的标准随机种子
-        机制能够控制增强的可复现性。
-        """
-        roll_deg = torch.empty((), dtype=torch.float32).uniform_(
-            *self._ROTATION_ROLL_RANGE_DEG
-        ).item()
-        pitch_deg = torch.empty((), dtype=torch.float32).uniform_(
-            *self._ROTATION_PITCH_RANGE_DEG
-        ).item()
-        yaw_deg = torch.empty((), dtype=torch.float32).uniform_(
-            *self._ROTATION_YAW_RANGE_DEG
-        ).item()
-
-        return self._rotation_matrix_from_euler_deg(
-            roll_deg=roll_deg,
-            pitch_deg=pitch_deg,
-            yaw_deg=yaw_deg,
-        )
-
-    @staticmethod
-    def _rotate_pointcloud_sequence(
-        pointcloud_sequence: List,
-        rotation: np.ndarray,
-    ) -> List[np.ndarray]:
-        """
-        绕雷达原点旋转点云序列的 xyz，保持其余点特征不变。
-        """
-        rotation = np.asarray(rotation, dtype=np.float32)
-        if rotation.shape != (3, 3):
-            raise ValueError(
-                f"rotation 应为 [3,3]，实际为 {rotation.shape}"
-            )
-
-        rotated_sequence = []
-
-        for frame_idx, pointcloud_frame in enumerate(
-            pointcloud_sequence
-        ):
-            if pointcloud_frame is None:
-                rotated_sequence.append(None)
-                continue
-
-            pointcloud = np.array(
-                pointcloud_frame,
-                dtype=np.float32,
-                copy=True,
-            )
-
-            if (
-                pointcloud.ndim != 2
-                or pointcloud.shape[-1] < 3
-            ):
-                raise ValueError(
-                    "雷达点云必须为 [N,C] 且 C>=3，"
-                    f"frame_idx={frame_idx}, "
-                    f"实际形状={pointcloud.shape}"
-                )
-
-            if pointcloud.shape[0] > 0:
-                pointcloud[:, :3] = (
-                    rotation @ pointcloud[:, :3].T
-                ).T
-
-            rotated_sequence.append(pointcloud)
-
-        return rotated_sequence
-
     @staticmethod
     def _accumulate_pointcloud_sequence(frames: List[np.ndarray], history_count: int, acc_frame: int) -> List[np.ndarray]:
         """当前帧与同组前 acc_frame 帧直接拼接，不改变时间维长度。"""
@@ -1884,7 +1941,7 @@ class HPE_Dataset(Dataset):
         return len(self.data_path_list[self.base_source])
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        samples = {}
+        samples = {'group_id': self.sample_groups[idx]}
         # 获取数据
         for sensor_name, flag in self.sensor_config.items():
             if not flag:
@@ -1914,6 +1971,12 @@ class HPE_Dataset(Dataset):
                     sensor_name,
                     paths,
                 )
+                if self.spectra_history and sensor_name == self.base_source:
+                    begin = self.sky_start_indices[idx]
+                    samples['bin_frame_index'] = list(range(begin, begin+len(data)))
+                if self.sky_history and sensor_name == self.base_source:
+                    samples['radar_high_pc'] = self._sky_pointcloud_sequence(data, self.sky_start_indices[idx])
+                    continue
                 if sensor_name in self.acc_path_list and self.acc_frame:
                     history_paths = self.acc_path_list[sensor_name][idx]
                     history = self._get_sensor_data_from_path(sensor_name, history_paths)
@@ -1930,42 +1993,6 @@ class HPE_Dataset(Dataset):
         R_high_to_low = calib['high_to_low']['R']
         t_high_to_low = calib['high_to_low']['t']
 
-        # 新增人体增广始终使用未扰动的低位机重力坐标系。
-        R_high_to_gravity = R_high_to_low.copy()
-        t_high_to_gravity = t_high_to_low.copy()
-
-        if self.enable_rotation:
-            # 雷达安装角在一个 T 帧窗口内固定；高低雷达使用同一个 A。
-            rotation = self._sample_rotation_matrix()
-            R_high_to_gravity = R_high_to_gravity @ rotation.T
-
-            for radar_key in (
-                'radar_high_pc',
-                'radar_low_pc',
-            ):
-                if radar_key in samples:
-                    samples[radar_key] = (
-                        self._rotate_pointcloud_sequence(
-                            pointcloud_sequence=samples[radar_key],
-                            rotation=rotation,
-                        )
-                    )
-
-            # p_radar_aug = A @ (R @ p_gt + t)
-            R_high = rotation @ R_high
-            t_high = rotation @ t_high
-            R_low = rotation @ R_low
-            t_low = rotation @ t_low
-
-            # 高低雷达坐标同时使用 A 后：
-            # p_low_aug = A R_hl A.T p_high_aug + A t_hl
-            R_high_to_low = (
-                rotation
-                @ R_high_to_low
-                @ rotation.T
-            )
-            t_high_to_low = rotation @ t_high_to_low
-
         samples['gt_for_high'] = (
             self._transform_gt_sequence(
                 gt_sequence=raw_gt,
@@ -1981,9 +2008,6 @@ class HPE_Dataset(Dataset):
                 t=t_low,
             )
         )
-
-        samples['high_to_gravity_R'] = [R_high_to_gravity.copy() for _ in range(self.T)]
-        samples['high_to_gravity_t'] = [t_high_to_gravity.copy() for _ in range(self.T)]
 
         samples['high_to_low_R'] = [
             R_high_to_low.copy()

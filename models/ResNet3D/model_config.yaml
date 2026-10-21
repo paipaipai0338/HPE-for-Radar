@@ -1,9 +1,11 @@
 num_joints: 17
-max_people: 4
-groups: 4
-inchannels: 64
+groups: 1
+inchannels: 70  # 64 个 Doppler + 6 组历史差分
 num_channels: [64, 64, 64, 64, 64, 128, 128, 256, 256, 512]
 kernel_sizes: [3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 strides: [1, 1, 1, 2, 1, 1, 2, 2, 3, 3]
 padding: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 if_sum: [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]
+
+xyz_limits: [[0.0, 6.0], [-3.0, 3.0], [-2.0, 2.0]]
+roi_cube_size: [32, 32, 32]

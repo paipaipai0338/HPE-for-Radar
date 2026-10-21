@@ -147,6 +147,62 @@ def range_cube_to_range_doppler_azi_ele(
     )
 
 
+def _cartesian_sampling_grid(range_axis, azimuth_axis_rad, elevation_axis_rad,
+                             xyz_limits, cube_size):
+    """Shared Cartesian grid construction; callers validate axes and bounds."""
+    X, Y, Z = cube_size
+    device, dtype = range_axis.device, range_axis.dtype
+    x_axis = torch.linspace(
+        xyz_limits[0][0],
+        xyz_limits[0][1],
+        X,
+        dtype=dtype,
+        device=device,
+    )
+    y_axis = torch.linspace(
+        xyz_limits[1][0],
+        xyz_limits[1][1],
+        Y,
+        dtype=dtype,
+        device=device,
+    )
+    z_axis = torch.linspace(
+        xyz_limits[2][0],
+        xyz_limits[2][1],
+        Z,
+        dtype=dtype,
+        device=device,
+    )
+
+    x_grid, y_grid, z_grid = torch.meshgrid(
+        x_axis,
+        y_axis,
+        z_axis,
+        indexing="ij",
+    )
+    horizontal_range = torch.sqrt(x_grid.square() + y_grid.square())
+    range_grid = torch.sqrt(horizontal_range.square() + z_grid.square())
+    azimuth_grid = torch.atan2(y_grid, x_grid)
+    elevation_grid = torch.atan2(z_grid, horizontal_range)
+
+    def normalize(grid: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
+        return 2.0 * (grid - axis[0]) / (axis[-1] - axis[0]) - 1.0
+
+    # For 5-D grid_sample the grid components address input W, H and D.
+    # The polar input is laid out as [R, A, E], hence the component order is
+    # [elevation, azimuth, range].
+    sampling_grid = torch.stack(
+        (
+            normalize(elevation_grid, elevation_axis_rad),
+            normalize(azimuth_grid, azimuth_axis_rad),
+            normalize(range_grid, range_axis),
+        ),
+        dim=-1,
+    ).unsqueeze(0)
+
+    return sampling_grid, x_axis, y_axis, z_axis
+
+
 def range_doppler_azi_ele_to_doppler_xyz(
     range_doppler_azi_ele: torch.Tensor,
     range_axis: torch.Tensor,
@@ -246,53 +302,9 @@ def range_doppler_azi_ele_to_doppler_xyz(
         "elevation_axis_rad",
     )
 
-    x_axis = torch.linspace(
-        xyz_limits[0][0],
-        xyz_limits[0][1],
-        X,
-        dtype=dtype,
-        device=device,
+    sampling_grid, x_axis, y_axis, z_axis = _cartesian_sampling_grid(
+        range_axis, azimuth_axis_rad, elevation_axis_rad, xyz_limits, cube_size
     )
-    y_axis = torch.linspace(
-        xyz_limits[1][0],
-        xyz_limits[1][1],
-        Y,
-        dtype=dtype,
-        device=device,
-    )
-    z_axis = torch.linspace(
-        xyz_limits[2][0],
-        xyz_limits[2][1],
-        Z,
-        dtype=dtype,
-        device=device,
-    )
-
-    x_grid, y_grid, z_grid = torch.meshgrid(
-        x_axis,
-        y_axis,
-        z_axis,
-        indexing="ij",
-    )
-    horizontal_range = torch.sqrt(x_grid.square() + y_grid.square())
-    range_grid = torch.sqrt(horizontal_range.square() + z_grid.square())
-    azimuth_grid = torch.atan2(y_grid, x_grid)
-    elevation_grid = torch.atan2(z_grid, horizontal_range)
-
-    def normalize(grid: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
-        return 2.0 * (grid - axis[0]) / (axis[-1] - axis[0]) - 1.0
-
-    # For 5-D grid_sample the grid components address input W, H and D.
-    # The polar input is laid out as [R, A, E], hence the component order is
-    # [elevation, azimuth, range].
-    sampling_grid = torch.stack(
-        (
-            normalize(elevation_grid, elevation_axis_rad),
-            normalize(azimuth_grid, azimuth_axis_rad),
-            normalize(range_grid, range_axis),
-        ),
-        dim=-1,
-    ).unsqueeze(0)
 
     polar_input = range_doppler_azi_ele.permute(0, 1, 3, 2, 4, 5).reshape(
         B * T * D,
