@@ -1,4 +1,4 @@
-"""Pack radar BIN, PC, GT and action labels per group without changing their bytes."""
+"""默认打包 WD2TB 下 20261020、20261022 的 DPCT 高位机 PC 和 smoothed 3D，保留原始字节。"""
 
 import argparse
 import hashlib
@@ -11,9 +11,10 @@ import numpy as np
 
 PACK_NAMES = {".bin": "frames.binpack", ".npy": "frames.pcpack", ".pkl": "frames.gtpack"}
 SENSOR_DIRS = {
-    "dpct高位机/Bin": ".bin", 
+    # "dpct高位机/Bin": ".bin", 
     # "dpct低位机/Bin": ".bin",
     "dpct高位机/PC": ".npy", 
+    # "fftGen/PC": ".npy",
     # "dpct低位机/PC": ".npy",
     "camera results/smoothed 3D": ".pkl",
     "camera results/action label": (".pkl", ".npz"),
@@ -27,7 +28,7 @@ def timestamp_ns(path: Path) -> int:
     return int(second) * 1_000_000_000 + int(nanosecond)
 
 
-def discover_data_dirs(root: Path, dates: list[str] | None, groups: list[str] | None = None) -> list[tuple[Path, str | tuple[str, ...]]]:
+def discover_data_dirs(root: Path, dates: list[str] | None, groups: list[str] | None = None, sensors: list[str] | None = None) -> list[tuple[Path, str | tuple[str, ...]]]:
     requested = set(dates) if dates else None
     requested_groups = set(groups) if groups else None
     directories = []
@@ -41,6 +42,8 @@ def discover_data_dirs(root: Path, dates: list[str] | None, groups: list[str] | 
             if requested_groups is not None and f"{date_dir.name}/{group_dir.name}" not in requested_groups:
                 continue
             for relative_dir, suffix in SENSOR_DIRS.items():
+                if sensors is not None and relative_dir not in sensors:
+                    continue
                 data_dir = group_dir / relative_dir
                 if data_dir.is_dir():
                     directories.append((data_dir, suffix))
@@ -174,12 +177,15 @@ def process_directory(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-root", type=Path, default=Path("/mnt/huawei"))
+    parser.add_argument("--source-root", type=Path, default=Path("/media/ubuntu/WD2TB"))
     parser.add_argument("--target-root", type=Path, default=Path("/mnt/ssd/Huawei/"))
-    parser.add_argument("--dates", nargs="*")
+    parser.add_argument("--dates", nargs="*", default=["20261020", "20261022"])
     parser.add_argument("--groups", nargs="+", help="只处理指定组，格式：20261009/group_013")
+    parser.add_argument("--sensors", nargs="+", choices=SENSOR_DIRS,
+                        default=["dpct高位机/PC", "camera results/smoothed 3D"],
+                        help="只打包指定传感器目录，默认高位机 PC 和 smoothed 3D")
     parser.add_argument("--overwrite", action="store_true", help="显式重建已有打包数据，默认直接跳过")
-    parser.add_argument("--workers", type=int, default=8, help="并行打包线程数，默认 1")
+    parser.add_argument("--workers", type=int, default=8, help="并行打包线程数，默认 8")
     args = parser.parse_args()
     if args.workers < 1:
         parser.error("--workers 必须大于 0")
@@ -188,8 +194,8 @@ def main() -> None:
     target_root = args.target_root.resolve()
     if source_root == target_root:
         parser.error("source-root 和 target-root 必须不同")
-    directories = discover_data_dirs(source_root, args.dates, args.groups)
-    print(f"Discovered {len(directories)} BIN/PC/GT/action directories", flush=True)
+    directories = discover_data_dirs(source_root, args.dates, args.groups, args.sensors)
+    print(f"Discovered {len(directories)} sensor directories", flush=True)
 
     counts = {"packed": 0, "reused": 0, "empty": 0}
     total_frames = 0

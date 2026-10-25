@@ -68,3 +68,4 @@ fig/
 # Local RHL and WSC modules
 RHL/
 WSC/
+finetune/

@@ -7,12 +7,14 @@ import os
 from pathlib import Path
 import tempfile
 
+import numpy as np
 
-def load_or_build_alignment(group_dir, sources, config, build, packed_frame_type):
+
+def load_or_build_alignment(group_dir, sources, config, build, packed_frame_type, *, cache_only=False):
     group_dir = Path(group_dir)
     sources = {name: Path(path) for name, path in sources.items() if path is not None}
     if not sources:
-        return build()
+        return None if cache_only else build()
     digest = hashlib.sha256(json.dumps(config, ensure_ascii=False, sort_keys=True,
                                       separators=(',', ':')).encode()).hexdigest()[:16]
     cache_path = group_dir / 'cache' / f'alignment_{digest}.json'
@@ -85,6 +87,8 @@ def load_or_build_alignment(group_dir, sources, config, build, packed_frame_type
     cached = load(expected)
     if cached is not None:
         return cached
+    if cache_only:
+        return None
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         lock = cache_path.with_suffix('.json.lock').open('a+')
@@ -126,3 +130,54 @@ def load_or_build_alignment(group_dir, sources, config, build, packed_frame_type
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
         return frames
+
+
+def reuse_bin_alignment(group_dir, sources, config, packed_frame_type):
+    """FFTGen keeps BIN timestamps; reuse matching only when both full timelines agree."""
+    sources = {name: Path(path) for name, path in sources.items() if path is not None}
+    if (set(sources) != {'radar_high_pc', 'gt'}
+            or config['base_source'] != 'radar_high_pc'
+            or config.get('time_offsets_sec')):
+        return None
+    pc_dir = sources['radar_high_pc']
+    bin_dir = pc_dir.parent.parent / 'dpct高位机/Bin'
+    if not all((bin_dir / name).is_file() for name in ('frames.binpack', 'frames_index.npz')):
+        bin_dir = Path(group_dir) / 'dpct高位机/Bin'
+    bin_config = {**config, 'base_source': 'radar_high_bin',
+                  'enabled_sensors': {'gt': '.pkl', 'radar_high_bin': '.bin'}}
+    cached = load_or_build_alignment(
+        group_dir, {'gt': sources['gt'], 'radar_high_bin': bin_dir}, bin_config,
+        None, packed_frame_type, cache_only=True,
+    )
+    if cached is None:
+        return None
+    try:
+        pack = pc_dir / 'frames.pcpack'
+        if (bin_dir / 'frames_index.npz').is_file():
+            with np.load(bin_dir / 'frames_index.npz', allow_pickle=False) as bins:
+                bin_names, bin_times = bins['frame_names'], bins['timestamps_ns']
+        else:
+            bin_names = sorted(n for n in os.listdir(bin_dir) if n.lower().endswith('.bin'))
+            bin_times = [int(Path(n).stem.split('_')[0]) * 1_000_000_000
+                         + int(Path(n).stem.split('_')[1]) for n in bin_names]
+        with np.load(pc_dir / 'frames_index.npz', allow_pickle=False) as pc:
+            names, times = pc['frame_names'], pc['timestamps_ns']
+            offsets, lengths = pc['offsets'], pc['lengths']
+            if (not np.array_equal(times, bin_times)
+                    or [Path(str(n)).stem for n in names] != [Path(str(n)).stem for n in bin_names]
+                    or not len(names) == len(times) == len(offsets) == len(lengths)
+                    or len(set(map(int, times))) != len(times)
+                    or (len(names) and (offsets[0] != 0 or np.any(lengths < 0)
+                        or np.any(offsets[1:] != offsets[:-1] + lengths[:-1])
+                        or offsets[-1] + lengths[-1] != pack.stat().st_size))):
+                return None
+            refs = {Path(str(n)).stem: packed_frame_type(str(pack), str(n), int(t), int(o), int(l))
+                    for n, t, o, l in zip(names, times, offsets, lengths)}
+        result = {'gt': cached['gt'], 'radar_high_pc': [
+            refs[Path(ref.frame_name if isinstance(ref, packed_frame_type) else ref).stem]
+            for ref in cached['radar_high_bin']
+        ]}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    print(f'复用 BIN→GT 对齐: {group_dir}，{len(result["gt"])} 帧', flush=True)
+    return result

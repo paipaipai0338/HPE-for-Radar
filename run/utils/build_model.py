@@ -4,7 +4,7 @@ from importlib import import_module
 from run.utils.load_config import load_config
 
 
-def build_model(model_name):
+def build_model(model_name, **model_options):
     model_dirs = {
         'P4Transformer': 'models/P4Transformer',
         'RPM2': 'models/RPM2',
@@ -23,6 +23,7 @@ def build_model(model_name):
     model_dir = project_root / model_dirs[model_name]
     model_config_path = model_dir / 'model_config.yaml'
     model_cfg = load_config(model_config_path)
+    model_cfg.update(model_options)
 
     module_path = '.'.join(model_dirs[model_name].split('/') + [model_name])
     module = import_module(module_path)

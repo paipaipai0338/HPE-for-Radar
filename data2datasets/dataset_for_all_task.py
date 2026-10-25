@@ -1,4 +1,5 @@
 import random
+from collections import OrderedDict
 import io
 import sys
 import os
@@ -19,7 +20,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.dataloader import default_collate
 
 from data2datasets.load_json import get_meta_info
-from data2datasets.alignment_cache import load_or_build_alignment
+from data2datasets.alignment_cache import load_or_build_alignment, reuse_bin_alignment
 from preprocess.radarprocess import (
     Radar_Config,
     bin_buffer_to_cube_range_fft,
@@ -307,8 +308,8 @@ class HPE_Dataset(Dataset):
             raise ValueError('window_stride 必须为正整数')
         self.window_stride = window_stride
 
-        if pointcloud_source not in ('files', 'skyrelay'):
-            raise ValueError('pointcloud_source 必须为 files 或 skyrelay')
+        if pointcloud_source not in ('files', 'skyrelay', 'fftgen'):
+            raise ValueError('pointcloud_source 必须为 files、skyrelay 或 fftgen')
         if not isinstance(include_kxyz, bool):
             raise TypeError('include_kxyz 必须为 bool')
         if include_kxyz and (pointcloud_source != 'files' or acc_frame != 0):
@@ -363,6 +364,7 @@ class HPE_Dataset(Dataset):
         self.low_point_files = set()
         self.bin_valid_cache = {}
         self.packed_bin_cache = {}
+        self.decoded_bin_cache = OrderedDict()
         self.packed_bin_cache_pid = os.getpid()
 
         # 数据范围由 JSON 配置及运行时覆盖项决定。
@@ -840,16 +842,29 @@ class HPE_Dataset(Dataset):
                             if path is not None
                         },
                     }
-                    aligned_frames = load_or_build_alignment(
-                        group_dir, sensor_paths, config,
-                        lambda: self._align_multi_sensor_files(
-                            sources=sensor_paths, base_source=self.base_source,
-                            max_delta_sec=config['max_delta_sec'],
-                            one_to_one=config['one_to_one'],
-                            time_offsets_sec=config['time_offsets_sec'],
-                        ),
-                        PackedFrame,
-                    )
+                    if self.pointcloud_source == 'fftgen':
+                        pc_dir = sensor_paths['radar_high_pc']
+                        if (not (pc_dir / 'frames_index.npz').is_file()
+                                and next(pc_dir.glob('*.npy'), None) is None):
+                            print(f'{group_dir} 没有 FFTGen 点云，跳过')
+                            continue
+                        aligned_frames = reuse_bin_alignment(group_dir, sensor_paths, config, PackedFrame)
+                        if aligned_frames is None:
+                            raise ValueError(
+                                f'{group_dir}: FFTGen 要求有效的 BIN→GT 缓存及完全一致的时间戳；'
+                                '请检查 BIN 缓存和 FFTGen 打包索引'
+                            )
+                    else:
+                        aligned_frames = load_or_build_alignment(
+                            group_dir, sensor_paths, config,
+                            lambda: self._align_multi_sensor_files(
+                                sources=sensor_paths, base_source=self.base_source,
+                                max_delta_sec=config['max_delta_sec'],
+                                one_to_one=config['one_to_one'],
+                                time_offsets_sec=config['time_offsets_sec'],
+                            ),
+                            PackedFrame,
+                        )
                     
                     if not aligned_frames or not aligned_frames.get(self.base_source):
                         print(f"{group_name} 对齐后没有数据")
@@ -1221,7 +1236,7 @@ class HPE_Dataset(Dataset):
         for sensor_name, (relative_dir, pack_name) in {
             'radar_high_bin': ('dpct高位机/Bin', 'frames.binpack'),
             'radar_low_bin': ('dpct低位机/Bin', 'frames.binpack'),
-            'radar_high_pc': ('dpct高位机/PC', 'frames.pcpack'),
+            'radar_high_pc': ('fftGen/PC' if self.pointcloud_source == 'fftgen' else 'dpct高位机/PC', 'frames.pcpack'),
             'radar_low_pc': ('dpct低位机/PC', 'frames.pcpack'),
             'gt': ('camera results/smoothed 3D', 'frames.gtpack'),
             'lidar': ('robosense', None),
@@ -1591,6 +1606,7 @@ class HPE_Dataset(Dataset):
         current_pid = os.getpid()
         if self.packed_bin_cache_pid != current_pid:
             self.packed_bin_cache.clear()
+            self.decoded_bin_cache.clear()
             self.packed_bin_cache_pid = current_pid
 
         pack_path = ref.pack_path
@@ -1624,14 +1640,17 @@ class HPE_Dataset(Dataset):
         output = []
         for ref in frame_refs:
             raw = self._packed_bytes(ref)
-            frame = bin_buffer_to_cube_range_fft(
-                raw,
-                self.radar_config,
-                source_name=ref.frame_name,
-            )
+            frame = self.decoded_bin_cache.pop(ref, None)
             if frame is None:
-                raise ValueError(f"打包 BIN 帧大小错误: {ref.frame_name}")
-            output.append(frame)
+                frame = bin_buffer_to_cube_range_fft(
+                    raw, self.radar_config, source_name=ref.frame_name)
+                if frame is None:
+                    raise ValueError(f"打包 BIN 帧大小错误: {ref.frame_name}")
+            self.decoded_bin_cache[ref] = frame
+            # Overlapping history windows reuse decoded frames; bounded to 64 MiB per worker at default shape.
+            if len(self.decoded_bin_cache) > 32:
+                self.decoded_bin_cache.popitem(last=False)
+            output.append(frame.copy())
         return output
 
     def clear_data_cache(self) -> None:
@@ -1643,6 +1662,7 @@ class HPE_Dataset(Dataset):
         self.action_cache.clear()
         self.action_pack_indices.clear()
         self.packed_bin_cache.clear()
+        self.decoded_bin_cache.clear()
 
     def _load_calib_T(self, date: str) -> Dict[str, Dict[str, np.ndarray]]:
         """

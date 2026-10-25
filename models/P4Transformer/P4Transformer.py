@@ -246,8 +246,15 @@ class P4Transformer(nn.Module):
                  emb_relu=False,
                  dim=1024, depth=10, heads=8, dim_head=256,
                  mlp_dim=2048, dropout1=0.0, dropout2=0.0,                                            # dropout
+                 center_output_on_hip=False,
                 ):                                           
         super().__init__()
+
+        if not isinstance(center_output_on_hip, bool):
+            raise TypeError('center_output_on_hip must be bool')
+        if center_output_on_hip and num_joints != 17:
+            raise ValueError('Hip-centered output requires the 17 COCO joints')
+        self.center_output_on_hip = center_output_on_hip
 
         self.tube_embedding = P4DConv(in_planes=feat_dim, mlp_planes=[dim], mlp_batch_norm=[False], mlp_activation=[False],
                                   spatial_kernel_size=[radius, nsamples], spatial_stride=spatial_stride,
@@ -337,6 +344,9 @@ class P4Transformer(nn.Module):
         output = torch.max(input=output, dim=2, keepdim=False, out=None)[0]
         
         pose = self.mlp_head_pose(output).view(B, T, 1, self.num_joints, 3)
+        if self.center_output_on_hip:
+            pose = pose.float()
+            pose = pose - pose[..., [11, 12], :].mean(dim=-2, keepdim=True)
 
         pre = {
             'pose': pose,

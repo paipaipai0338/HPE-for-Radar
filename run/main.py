@@ -3,7 +3,7 @@ from pathlib import Path
 from functools import partial
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, Subset
 from tqdm import tqdm
 
 from preprocess.radarprocess import Radar_Config
@@ -35,6 +35,19 @@ def parse_args():
     return parser.parse_args()
 
 
+def get_train_windows(dataset, dense_window_start_epoch, epoch):
+    if dense_window_start_epoch is None:
+        return dataset
+    if type(dense_window_start_epoch) is not int or dense_window_start_epoch < 1:
+        raise ValueError('dense_window_start_epoch 必须为从 1 开始的正整数')
+    if dataset.window_stride != 1 or dataset.sky_history or dataset.spectra_history:
+        raise ValueError('分阶段滑窗要求基础步长为 1，且没有额外 BIN 历史帧')
+    if epoch + 1 >= dense_window_start_epoch:
+        return dataset
+    stride = max(1, dataset.T // 2)
+    return Subset(dataset, [i for i, start in enumerate(dataset.sky_start_indices) if start % stride == 0])
+
+
 def main():
     # 加载 cfg
     args = parse_args()
@@ -47,6 +60,7 @@ def main():
     # 判断模型重复值是否相等
     model_config_path = (Path(__file__).resolve().parents[1] / 'models' / cfg['model']['name'] / 'model_config.yaml')
     cfg_model_arch = load_config(model_config_path)
+    cfg_model_arch.update(cfg['model'].get('options', {}))
     if 'max_people' in cfg_model_arch:
         assert cfg['data']['max_people'] == cfg_model_arch['max_people'], 'max_people mismatch: ' f'data={cfg["data"]["max_people"]}, model={cfg_model_arch["max_people"]}'
 
@@ -88,7 +102,7 @@ def main():
             raise ValueError(f'ResNet3D inchannels 应为 {channels}（D + 可选 6 组 K）')
 
     # 获取模型
-    model = build_model(cfg['model']['name'])
+    model = build_model(cfg['model']['name'], **cfg['model'].get('options', {}))
     model = model.to(device)
     model = model_init(model)
 
@@ -97,6 +111,16 @@ def main():
         init_checkpoint = cfg['model'].get('init_checkpoint')
         if init_checkpoint and not cfg['task']['train']['resume']['enabled']:
             load_init_checkpoint(init_checkpoint, model)
+
+        if not cfg['task']['train']['resume']['enabled']:
+            paths = build_experiment(
+                output_root=cfg['experiment']['output_path'],
+                model_name=cfg['experiment'].get('group', cfg['model']['name']),
+                source_config_path=args.config,
+                model=model,
+                model_config=cfg_model_arch,
+            )
+            save_radar_config(paths['config'], radar_config)
 
         # 获取dataloader
         dataset = {
@@ -112,16 +136,25 @@ def main():
                 )
         collate_fn = partial(dataset_collate_fn, max_people=cfg['data']['max_people'])
         steps_per_epoch = cfg['task']['train'].get('steps_per_epoch')
-        train_sampler = None
         if steps_per_epoch is not None:
             if type(steps_per_epoch) is not int or steps_per_epoch <= 0:
                 raise ValueError("task.train.steps_per_epoch 必须是正整数")
-            train_sampler = RandomSampler(
-                dataset['train'], replacement=True,
-                num_samples=steps_per_epoch * cfg['task']['batch_size'],
+        dense_window_start_epoch = cfg['task']['train'].get('dense_window_start_epoch')
+
+        def build_train_loader(epoch):
+            windows = get_train_windows(dataset['train'], dense_window_start_epoch, epoch)
+            if not len(windows):
+                raise ValueError('当前滑窗步长下训练集为空')
+            train_sampler = None if steps_per_epoch is None else RandomSampler(
+                windows, replacement=True, num_samples=steps_per_epoch * cfg['task']['batch_size'],
             )
+            return DataLoader(windows, batch_size=cfg['task']['batch_size'], collate_fn=collate_fn,
+                              shuffle=cfg['task']['train']['shuffle'] if train_sampler is None else False,
+                              sampler=train_sampler, num_workers=cfg['data']['num_workers'],
+                              pin_memory=True, persistent_workers=True, prefetch_factor=2)
+
         dataloader = {
-            'train': DataLoader(dataset['train'], batch_size=cfg['task']['batch_size'], collate_fn=collate_fn, shuffle=cfg['task']['train']['shuffle'] if train_sampler is None else False, sampler=train_sampler, num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2),
+            'train': build_train_loader(0),
             'val': DataLoader(dataset['val'], batch_size=cfg['task']['batch_size'], collate_fn=collate_fn, shuffle=cfg['task']['val']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
         }
         # 指标构建
@@ -194,12 +227,6 @@ def main():
         else:
             start_epoch = 0
             best_metric = float('inf')
-            paths = build_experiment(
-                output_root=cfg['experiment']['output_path'],
-                model_name=cfg['experiment'].get('group', cfg['model']['name']),
-                source_config_path=args.config,
-                model=model,
-            )
 
         save_radar_config(paths['config'], radar_config)
 
@@ -224,8 +251,17 @@ def main():
                       'accumulated GT-crop points >= 10 before sampling; continuous valid frames only')
         write_log(log_path, f"Best metric: {best_metric_name}: {best_metric}")
         write_log(log_path, f"Batches per epoch: train={len(dataloader['train'])}, val={len(dataloader['val'])}")
+        if dense_window_start_epoch is not None:
+            write_log(log_path, f'Train window stride: {max(1, dataset["train"].T // 2)} before epoch '
+                      f'{dense_window_start_epoch}, then 1; val={dataset["val"].window_stride}')
 
         for epoch in range(start_epoch, cfg['task']['train']['epoch']):
+            if (dense_window_start_epoch is not None and epoch + 1 >= dense_window_start_epoch
+                    and isinstance(dataloader['train'].dataset, Subset)):
+                del dataloader['train']
+                dataloader['train'] = build_train_loader(epoch)
+                write_log(log_path, f'Epoch {epoch + 1}: train window stride switched to 1; '
+                          f'batches={len(dataloader["train"])}')
             epoch_lr = optimizer.param_groups[0]['lr']
             train_metrics, metric['train'] = train_one_epoch(
                 model,
@@ -275,8 +311,10 @@ def main():
             write_log(group_log_path, f"MPJPE by label (m) | train={train_labels} | val={val_labels}")
             for group, values in val_groups.items():
                 inside_mpjpe = 'N/A' if values['mpjpe_inside'] is None else f"{values['mpjpe_inside']:.6f}"
+                inside_centered = 'N/A' if values['centered_mpjpe_inside'] is None else f"{values['centered_mpjpe_inside']:.6f}"
                 write_log(group_log_path, f"Val group {group} | label={values['label']} | "
-                          f"MPJPE={values['mpjpe']:.6f} m / {inside_mpjpe} m | count={values['count']}")
+                          f"MPJPE={values['mpjpe']:.6f} m / {inside_mpjpe} m | "
+                          f"centered MPJPE={values['centered_mpjpe']:.6f} m / {inside_centered} m | count={values['count']}")
 
             current = val_metrics[best_metric_name]
             if current < best_metric:

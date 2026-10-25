@@ -1,3 +1,4 @@
+import math
 import torch
 from torch import nn
 from models.ResNet3D.roi_align import crop_spectra_to_gt, restore_spectra_people
@@ -38,6 +39,9 @@ class ResNet3D(nn.Module):
         if_sum,
         xyz_limits,
         roi_cube_size,
+        roi_shift_m=0.0,
+        roi_mirror_probability=0.0,
+        roi_power_gain=False,
     ):
         super().__init__()
         if not (
@@ -52,6 +56,17 @@ class ResNet3D(nn.Module):
         self.num_joints = num_joints
         self.xyz_limits = xyz_limits
         self.roi_cube_size = roi_cube_size
+        if not math.isfinite(roi_shift_m) or roi_shift_m < 0:
+            raise ValueError('roi_shift_m must be finite and nonnegative')
+        self.roi_shift_m = roi_shift_m
+        if not math.isfinite(roi_mirror_probability) or not 0 <= roi_mirror_probability <= 1:
+            raise ValueError('roi_mirror_probability must be finite and within [0,1]')
+        if roi_mirror_probability and num_joints != 17:
+            raise ValueError('ROI mirroring requires the COCO 17-joint ordering')
+        self.roi_mirror_probability = roi_mirror_probability
+        if not isinstance(roi_power_gain, bool):
+            raise TypeError('roi_power_gain must be a boolean')
+        self.roi_power_gain = roi_power_gain
         self.inchannels = inchannels
         self.if_sum = [bool(value) for value in if_sum]
 
@@ -129,8 +144,12 @@ class ResNet3D(nn.Module):
             raise ValueError('ResNet3D input must be full [B,T,D,X,Y,Z] spectra')
         if radar_cube.shape[2] != self.inchannels:
             raise ValueError(f'ResNet3D expects {self.inchannels} channels, got {radar_cube.shape[2]}')
+        boxes = model_input['bbox']
+        if self.training and self.roi_shift_m:
+            shift = torch.empty_like(boxes[..., :3]).uniform_(-self.roi_shift_m, self.roi_shift_m)
+            boxes = boxes + shift.repeat(1, 1, 1, 2)
         crops, context = crop_spectra_to_gt(
-            radar_cube, {'bbox': model_input['bbox'], 'mask': model_input['bbox_mask']},
+            radar_cube, {'bbox': boxes, 'mask': model_input['bbox_mask']},
             self.xyz_limits, self.roi_cube_size)
         instances, frames, channels, size_x, size_y, size_z = crops['input'].shape
         if instances == 0:
@@ -140,6 +159,16 @@ class ResNet3D(nn.Module):
                 'confidence': radar_cube.new_zeros(0, frames, 1)+anchor,
             }, context)
         x = crops['input'].reshape(instances*frames, channels, size_x, size_y, size_z)
+        if self.training and self.roi_power_gain:
+            gain = torch.empty(instances, device=x.device, dtype=x.dtype).uniform_(-1., 1.).exp2()
+            gain = gain.repeat_interleave(frames)[:, None, None, None, None]
+            # Equivalent to log1p(gain * expm1(x)), without overflowing for large log-power.
+            x = x + torch.log1p((gain - 1.) * (-torch.expm1(-x)))
+        mirrored = None
+        if self.training and self.roi_mirror_probability:
+            mirrored = torch.rand(instances, device=x.device) < self.roi_mirror_probability
+            x = torch.where(mirrored.repeat_interleave(frames)[:, None, None, None, None],
+                            x.flip(-2), x)
 
         residual = x
         for layer, shortcut, add_residual in zip(
@@ -151,6 +180,11 @@ class ResNet3D(nn.Module):
                 residual = x
         pooled = self.pool(x).flatten(1)
         pose = self.pose_head(pooled).reshape(instances, frames, 1, self.num_joints, 3)
+        if mirrored is not None:
+            # Undo the local Y reflection and restore anatomical left/right labels.
+            permutation = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+            unmirrored = pose[..., permutation, :] * pose.new_tensor([1., -1., 1.])
+            pose = torch.where(mirrored[:, None, None, None, None], unmirrored, pose)
         confidence = torch.sigmoid(self.confidence_head(pooled)).reshape(instances, frames, 1)
         return restore_spectra_people({'pose': pose, 'confidence': confidence}, context)
 

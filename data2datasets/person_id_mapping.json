@@ -5,82 +5,169 @@
   ],
   "notes": [
     "person_id 为字符串，每个人具有独立且唯一的编号，与 data description.json 一致。",
-    "-1 专用于多人组；按人员划分时直接进入训练集，不因参与者包含验证人员而进入验证集。",
-    "原始采集表中的李靖、张晓姿重号 10：李靖保留 10，张晓姿改为 12。",
-    "多人剧本中的角色序号不是 person_id。"
+    "-1 专用于多人组；按人员划分时直接进入训练集。"
   ],
   "people": [
     {
       "name": "某不知名男生",
-      "person_id": "0"
+      "person_id": "0",
+      "height": 1.69,
+      "weight": 60,
+      "gender": "male"
     },
     {
       "name": "张浩楠",
-      "person_id": "1"
+      "person_id": "1",
+      "height": 1.68,
+      "weight": 55,
+      "gender": "male"
     },
     {
       "name": "熊宇聪",
-      "person_id": "2"
+      "person_id": "2",
+      "height": 1.78,
+      "weight": 96,
+      "gender": "male"
     },
     {
       "name": "冯豪迪",
-      "person_id": "3"
+      "person_id": "3",
+      "height": 1.78,
+      "weight": 90,
+      "gender": "male"
     },
     {
       "name": "张北昌",
-      "person_id": "4"
+      "person_id": "4",
+      "height": 1.68,
+      "weight": 55,
+      "gender": "male"
     },
     {
       "name": "任馨怡",
-      "person_id": "5"
+      "person_id": "5",
+      "height": 1.61,
+      "weight": 54,
+      "gender": "female"
     },
     {
       "name": "任欢乐",
-      "person_id": "6"
+      "person_id": "6",
+      "height": 1.79,
+      "weight": 53,
+      "gender": "male"
     },
     {
       "name": "唐佳杰",
-      "person_id": "7"
+      "person_id": "7",
+      "height": 1.78,
+      "weight": 58,
+      "gender": "male"
     },
     {
       "name": "李金旭",
-      "person_id": "8"
+      "person_id": "8",
+      "height": 1.70,
+      "weight": 53,
+      "gender": "male"
     },
     {
       "name": "王世橙",
-      "person_id": "9"
+      "person_id": "9",
+      "height": 1.81,
+      "weight": 56,
+      "gender": "male"
     },
     {
       "name": "李靖",
-      "person_id": "10"
-    },
-    {
-      "name": "张晓姿",
-      "person_id": "12"
+      "person_id": "10",
+      "height": 1.55,
+      "weight": 64,
+      "gender": "male"
     },
     {
       "name": "殷熙遥",
-      "person_id": "11"
+      "person_id": "11",
+      "height": 1.63,
+      "weight": 53,
+      "gender": "female"
+    },
+    {
+      "name": "张晓姿",
+      "person_id": "12",
+      "height": 1.59,
+      "weight": 51,
+      "gender": "female"
     },
     {
       "name": "王昱博",
-      "person_id": "13"
+      "person_id": "13",
+      "height": 1.84,
+      "weight": 74,
+      "gender": "male"
     },
     {
       "name": "郑宇捷",
-      "person_id": "14"
+      "person_id": "14",
+      "height": 1.75,
+      "weight": 72,
+      "gender": "male"
     },
     {
       "name": "杨皓宇",
-      "person_id": "15"
+      "person_id": "15",
+      "height": 1.80,
+      "weight": 75,
+      "gender": "male"
     },
     {
       "name": "彭程远",
-      "person_id": "16"
+      "person_id": "16",
+      "height": 1.80,
+      "weight": 75,
+      "gender": "male"
     },
     {
       "name": "龚思凡",
-      "person_id": "17"
+      "person_id": "17",
+      "height": 1.85,
+      "weight": 80,
+      "gender": "male"
+    },
+    {
+      "name": "胡涛",
+      "person_id": "18",
+      "height": 1.65,
+      "weight": 65,
+      "gender": "male"
+    },
+    {
+      "name": "陈奕阳",
+      "person_id": "19",
+      "height": 1.80,
+      "weight": 80,
+      "gender": "male"
+    },
+    {
+      "name": "张驰艺",
+      "person_id": "20",
+      "height": 1.62,
+      "weight": 60,
+      "gender": "female"
+    },
+    {
+      "name": "邵烽智",
+      "person_id": "21",
+      "height": 1.68,
+      "weight": 66,
+      "gender": "male"
+    },
+    {
+      "name": "彭锦曦",
+      "person_id": "22",
+      "height": 1.75,
+      "weight": 62,
+      "gender": "male"
     }
   ]
 }

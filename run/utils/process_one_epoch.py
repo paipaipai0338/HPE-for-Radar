@@ -314,6 +314,17 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
                 f'训练 loss 出现 NaN 或 Inf: {loss.item()}'
             )
 
+        if cfg_model['name'] == 'ResNet3D' and loss.detach().item() > 1.0:
+            # Preserve difficult samples; record evidence for transient numerical spikes.
+            valid = gt['mask'].bool()
+            print({'event': 'resnet3d_large_train_loss', 'loss_m': loss.detach().item(),
+                   'groups': samples.get('group_id'),
+                   'input_max_abs': model_input['input'].abs().max().item(),
+                   'input_max_abs_by_sample': model_input['input'].abs().flatten(1).amax(dim=1).tolist(),
+                   'gt_max_abs': gt['padded'][valid].abs().max().item() if valid.any() else 0.,
+                   'prediction_max_abs': pre['pose'][valid].abs().max().item() if valid.any() else 0.},
+                  flush=True)
+
         if scaler is None:
             loss.backward()
             optimizer.step()

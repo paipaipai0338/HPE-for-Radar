@@ -16,8 +16,8 @@ def crop_spectra_to_gt(cube, target, xyz_limits, roi_size):
         raise ValueError('GT boxes/mask must align with spectra B,T')
     if not torch.isfinite(boxes[mask]).all() or ((boxes[..., 3:]-boxes[..., :3])[mask] <= 0).any():
         raise ValueError('Valid GT boxes must be finite and have positive extent')
-    overlap = (boxes[..., 3:] > bounds[:, 0]).all(-1) & (boxes[..., :3] < bounds[:, 1]).all(-1)
-    valid = mask & overlap
+    # Out-of-volume boxes receive zero-padded crops, but still require predictions.
+    valid = mask
     instance_valid = valid.any(dim=1)  # [B,K]，仅移除整个窗口无效的人。
     indices = instance_valid.nonzero(as_tuple=False)
     frame_valid = valid.permute(0, 2, 1)[instance_valid]

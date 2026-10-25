@@ -90,7 +90,7 @@ def bin_buffer_to_cube_range_fft(
     source_name: str = '<buffer>',
 ) -> Optional[np.ndarray]:
     def _pseudo_float_cplx_to_complex(pf_u32: np.ndarray) -> np.ndarray:
-        pf = pf_u32.astype(np.uint32)
+        pf = pf_u32.astype(np.uint32, copy=False)
 
         exp = (pf >> 28).astype(np.int32)  # 4-bit exponent
         real = (pf & 0x3FFF).astype(np.int32)  # 14-bit signed
@@ -100,7 +100,7 @@ def bin_buffer_to_cube_range_fft(
         real[real >= (1 << 13)] -= (1 << 14)
         imag[imag >= (1 << 13)] -= (1 << 14)
 
-        scale = np.power(2.0, exp - 13).astype(np.float32)
+        scale = np.exp2(exp - 13, dtype=np.float32)
         out = (real.astype(np.float32) + 1j * imag.astype(np.float32)) * scale
         return out.astype(np.complex64)
     num_samp = radar_config.num_samp
@@ -114,7 +114,7 @@ def bin_buffer_to_cube_range_fft(
               f"{raw.size} != {expected_bytes}, skip.")
         return None
     raw8 = raw.reshape(-1, 8)[:, ::-1].reshape(-1)
-    pf_u32 = np.frombuffer(raw8.tobytes(), dtype="<u4")
+    pf_u32 = raw8.view("<u4")
     vec_cplx = _pseudo_float_cplx_to_complex(pf_u32)
     mcu_timing = vec_cplx.reshape((use_range, num_ant, num_chirp), order="F")
     adc_data_range_FFT = np.transpose(mcu_timing, (0, 2, 1))

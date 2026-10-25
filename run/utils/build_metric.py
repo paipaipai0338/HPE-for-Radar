@@ -62,6 +62,7 @@ class Metric:
             raise ValueError("pose_confidence_weight must be non-negative")
         self.fun_call_dict = {
             'positive_mpjpe': get_mpjpe,
+            'all_gt_mpjpe': get_mpjpe,
             'center_mpjpe': get_center_mpjpe,
             'relative_pose_mpjpe': get_relative_pose_mpjpe,
             'negative_mpjpe': get_mpjpe,
@@ -146,7 +147,7 @@ class Metric:
         confidence_target = gt_mask
 
         pose_metric_names = {
-            'positive_mpjpe', 'center_mpjpe', 'relative_pose_mpjpe',
+            'positive_mpjpe', 'all_gt_mpjpe', 'center_mpjpe', 'relative_pose_mpjpe',
             'negative_mpjpe',
             'pampjpe', 'bone_length', 'bce', 'time_smoothness', 'pose_direction'
         }
@@ -183,24 +184,33 @@ class Metric:
 
         for name, weight in self.cfg_metrics.items():
             if name in [
-                'positive_mpjpe', 'center_mpjpe',
+                'positive_mpjpe', 'all_gt_mpjpe', 'center_mpjpe',
                 'relative_pose_mpjpe', 'pampjpe', 'bone_length'
             ]:
+                if name == 'all_gt_mpjpe' and any(value is None for value in (pose_pre_for_metric, pose_gt, gt_mask)):
+                    raise ValueError('all_gt_mpjpe requires predictions, GT poses and GT mask')
                 if pose_pre_for_metric is None or pose_gt is None or pose_mask is None:
                     reference = pose_gt if pose_pre_for_metric is None else pose_pre_for_metric
                     batch_metrics[name] = torch.tensor(0.0, device=reference.device if reference is not None else 'cpu')
                     total_loss = total_loss + weight * batch_metrics[name]
                     continue
-                # Tensor batches represent missing poses with a validity mask.
+                evaluation_mask = gt_mask.bool() if name == 'all_gt_mpjpe' else pose_mask
+                # Full-GT evaluation retains missing predictions instead of dropping their targets.
                 metric = self.fun_call_dict[name](
-                    pose_pre_for_metric.masked_fill(~pose_mask[..., None, None], 0),
-                    pose_gt.masked_fill(~pose_mask[..., None, None], 0), type='coco'
+                    pose_pre_for_metric.masked_fill(~evaluation_mask[..., None, None], 0),
+                    pose_gt.masked_fill(~evaluation_mask[..., None, None], 0), type='coco'
                 )
-                if name == 'positive_mpjpe' and group_ids is not None:
-                    self._record_group_mpjpe(metric.detach(), pose_mask, group_ids, group_gt_low)
+                if group_ids is not None and (name == 'all_gt_mpjpe' or (
+                        name == 'positive_mpjpe' and 'all_gt_mpjpe' not in self.cfg_metrics) or (
+                        name == 'relative_pose_mpjpe'
+                        and not {'all_gt_mpjpe', 'positive_mpjpe'} & self.cfg_metrics.keys())):
+                    centered_errors = get_relative_pose_mpjpe(
+                        pose_pre_for_metric.detach(), pose_gt.detach(), type='coco')
+                    self._record_group_mpjpe(
+                        metric.detach(), evaluation_mask, group_ids, group_gt_low, centered_errors)
                 metric_value, metric_num = _masked_mean_over_people(
                     metric,
-                    pose_mask,
+                    evaluation_mask,
                 )
                 self.metrics_state[name]['sum'] += (
                     metric_value.detach().item() * metric_num
@@ -356,8 +366,8 @@ class Metric:
 
         return total_loss, batch_metrics
 
-    def _record_group_mpjpe(self, errors, mask, group_ids, gt_low):
-        if len(group_ids) != errors.shape[0] or errors.shape != mask.shape:
+    def _record_group_mpjpe(self, errors, mask, group_ids, gt_low, centered_errors):
+        if len(group_ids) != errors.shape[0] or errors.shape != mask.shape or centered_errors.shape != errors.shape:
             raise ValueError('group_ids、MPJPE 与有效人体 mask 的 batch/shape 不一致')
         if gt_low is None or gt_low.shape != (*errors.shape, 17, 3):
             raise ValueError('分组椭圆统计需要与 MPJPE 对齐的低位机 GT [B,T,K,17,3]')
@@ -371,14 +381,18 @@ class Metric:
         counts = mask.sum(dim=(1, 2)).cpu().tolist()
         inside_sums = errors.masked_fill(~inside, 0).sum(dim=(1, 2)).cpu().tolist()
         inside_counts = inside.sum(dim=(1, 2)).cpu().tolist()
-        for group, total, count, inside_total, inside_count in zip(
-                group_ids, sums, counts, inside_sums, inside_counts):
+        centered_sums = centered_errors.masked_fill(~mask, 0).sum(dim=(1, 2)).cpu().tolist()
+        centered_inside_sums = centered_errors.masked_fill(~inside, 0).sum(dim=(1, 2)).cpu().tolist()
+        for group, total, count, inside_total, inside_count, centered_total, centered_inside_total in zip(
+                group_ids, sums, counts, inside_sums, inside_counts, centered_sums, centered_inside_sums):
             if count:
-                state = self.group_mpjpe.setdefault(group, [0.0, 0, 0.0, 0])
+                state = self.group_mpjpe.setdefault(group, [0.0, 0, 0.0, 0, 0.0, 0.0])
                 state[0] += total
                 state[1] += count
                 state[2] += inside_total
                 state[3] += inside_count
+                state[4] += centered_total
+                state[5] += centered_inside_total
 
     def epoch_end(self):
         epoch_metrics = {}
@@ -399,11 +413,13 @@ class Metric:
         if self.group_mpjpe:
             labels = {}
             groups = {}
-            for group, (total, count, inside_total, inside_count) in sorted(self.group_mpjpe.items()):
+            for group, (total, count, inside_total, inside_count, centered_total, centered_inside_total) in sorted(self.group_mpjpe.items()):
                 label = self.group_labels.get(group, {'label': 'unlabelled'})['label']
                 groups[group] = {'mpjpe': total / count, 'count': count, 'label': label,
                                  'mpjpe_inside': inside_total / inside_count if inside_count else None,
-                                 'count_inside': inside_count}
+                                 'count_inside': inside_count,
+                                 'centered_mpjpe': centered_total / count,
+                                 'centered_mpjpe_inside': centered_inside_total / inside_count if inside_count else None}
                 state = labels.setdefault(label, [0.0, 0])
                 state[0] += total
                 state[1] += count

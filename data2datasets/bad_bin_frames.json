@@ -10,9 +10,9 @@
     "min_eq15_fraction": 0.0001
   },
   "summary": {
-    "numeric": 606,
+    "numeric": 610,
     "length": 423,
-    "total": 1029
+    "total": 1033
   },
   "bad_frames": [
     {
@@ -14602,6 +14602,66 @@
       "details": {
         "actual_bytes": 487424,
         "expected_bytes": 1048576
+      }
+    },
+    {
+      "date": "20261014",
+      "group": "group_037",
+      "sensor": "dpct高位机",
+      "frame_index": 3884,
+      "frame_name": "1791964891_326737468.bin",
+      "group_frame_count": 3885,
+      "bad_type": "numeric",
+      "details": {
+        "max_exponent": 15,
+        "fraction_exp_eq15": 0.027538299560546875,
+        "abs_mean": 810.4497680664062,
+        "abs_max": 46295.7109375
+      }
+    },
+    {
+      "date": "20260919",
+      "group": "group_025",
+      "sensor": "dpct高位机",
+      "frame_index": 28,
+      "frame_name": "1789791112_975041473.bin",
+      "group_frame_count": 4865,
+      "bad_type": "numeric",
+      "details": {
+        "max_exponent": 15,
+        "fraction_exp_eq15": 0.02083587646484375,
+        "abs_mean": 880.0078125,
+        "abs_max": 43975.390625
+      }
+    },
+    {
+      "date": "20261014",
+      "group": "group_036",
+      "sensor": "dpct高位机",
+      "frame_index": 640,
+      "frame_name": "1791962959_199126872.bin",
+      "group_frame_count": 4983,
+      "bad_type": "numeric",
+      "details": {
+        "max_exponent": 15,
+        "fraction_exp_eq15": 0.0091705322265625,
+        "abs_mean": 274.7796325683594,
+        "abs_max": 45608.34375
+      }
+    },
+    {
+      "date": "20261014",
+      "group": "group_047",
+      "sensor": "dpct高位机",
+      "frame_index": 410,
+      "frame_name": "1791972098_153715756.bin",
+      "group_frame_count": 1988,
+      "bad_type": "numeric",
+      "details": {
+        "max_exponent": 15,
+        "fraction_exp_eq15": 0.029186248779296875,
+        "abs_mean": 953.5339965820312,
+        "abs_max": 46326.80859375
       }
     }
   ]

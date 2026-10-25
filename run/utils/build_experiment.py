@@ -31,7 +31,7 @@ def save_radar_config(config_dir, radar_config):
         )
 
 
-def build_experiment(output_root, model_name, source_config_path, model):
+def build_experiment(output_root, model_name, source_config_path, model, model_config=None):
     # {output_root}/
     # └── {model_name}/
     #     └── 20260916_13450201/
@@ -75,7 +75,10 @@ def build_experiment(output_root, model_name, source_config_path, model):
     shutil.copy2(model_source_path, paths["config"] / model_source_path.name)
 
     model_config_path = model_source_path.parent / "model_config.yaml"
-    if model_config_path.exists():
+    if model_config is not None:
+        with (paths['config'] / 'model_config.yaml').open('w', encoding='utf-8') as file:
+            yaml.safe_dump(model_config, file, allow_unicode=True, sort_keys=False)
+    elif model_config_path.exists():
         shutil.copy2(model_config_path, paths["config"] / "model_config.yaml")
 
     return paths
