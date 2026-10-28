@@ -14,6 +14,7 @@ def build_model(model_name, **model_options):
         'P4TransformerMlp': 'models/P4TransformerMlp',
         'ConvNeXtV2': 'models/ConvNeXtV2',
         'PointNeXt': 'models/PointNeXt',
+        'STPoseTransformer': 'models/STPoseTransformer',
     }
 
     if model_name not in model_dirs:

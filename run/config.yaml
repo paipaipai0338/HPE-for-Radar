@@ -1,6 +1,6 @@
 experiment:
-  description: P4Transformer_Skyrelay
-  output_path: /home/pai/Huawei/experiments
+  description: STPoseTransformer_FFTGen_low
+  output_path: /home/orange/Projects/HPE-for-Radar/experiments
 
 data:
     # NAS 地址
@@ -9,7 +9,7 @@ data:
     packed_data_root: /mnt/ssd/Huawei/
     # files: 读取已有点云；skyrelay: BIN -> 动态点 + 六组历史差分微动点
     # Sky 自动读取 T + 6 + acc_frame 帧，生成/积累点云后只保留 T 帧
-    pointcloud_source: files
+    pointcloud_source: fftgen
     # 时钟基准
     base_source: radar_high_pc
     # train / total
@@ -69,7 +69,7 @@ data:
     # BIN 预处理：在频移 FFT/角度谱计算前是否减去 chirp 维复数均值
     remove_static: true
 model:
-    name: P4Transformer
+    name: STPoseTransformer
     # 可填 checkpoint 路径，仅加载完全匹配的模型权重；null 不加载，resume 优先
     init_checkpoint: null
 
@@ -78,14 +78,14 @@ radar:
     angle_method: bartlett
 
 task:
-    coordinate: high  # 最终训练坐标系 high / low；使用原始标定，保留增广
+    coordinate: low  # 最终训练坐标系 high / low；使用原始标定，保留增广
     stage: train
     input: radar_high_pc
     output: gt_for_high
     device: 1
     seed: 42
     # BIN 解码和 Sky 处理的 worker 内存开销较大，先用小 batch 建立基线
-    batch_size: 64
+    batch_size: 128
     # 数值精度: FP32 / FP16 / BF16
     precision: BF16
     # 坐标归一化，仅适配于点云
@@ -94,6 +94,7 @@ task:
     center_xy_in_low: false
     train:
         epoch: 300
+        dense_window_start_epoch: 201  # 前 200 轮步长 T//2，之后步长 1
         init_lr: 0.001
         warmup_epoch: 10
         resume:

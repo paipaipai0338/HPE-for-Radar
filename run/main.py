@@ -368,7 +368,7 @@ def main():
         model.eval()
         with torch.no_grad():
             for samples in tqdm(dataloader['val'], total=len(dataloader['val'])):
-                samples = adapt_coordinate_frame(samples, cfg['task'], cfg['data'], 'val')
+                samples = adapt_coordinate_frame(samples, cfg['task'], cfg['data'], 'val', device=device)
                 model_input = {}
                 if 'pc' in cfg['task']['input']:
                     model_input, gt, valid_instance_mask, cropped_points, cropped_mask, pointcloud_center = prepare_person_pointcloud(

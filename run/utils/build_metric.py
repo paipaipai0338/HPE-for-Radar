@@ -372,25 +372,28 @@ class Metric:
         if gt_low is None or gt_low.shape != (*errors.shape, 17, 3):
             raise ValueError('分组椭圆统计需要与 MPJPE 对齐的低位机 GT [B,T,K,17,3]')
         # 使用原始低位机 GT，避免点云中心化或增广改变验收区域。
-        roots = gt_low[..., [11, 12], :2].mean(dim=-2)
+        roots = gt_low.to(errors.device, non_blocking=True)[..., [11, 12], :2].mean(dim=-2)
         inside = (((roots - roots.new_tensor([2.0, 0.0])) /
                    roots.new_tensor([1.6, 2.4])).square().sum(-1) <= 1.0)
         mask = mask.bool()
-        inside = inside.to(mask.device) & mask
-        sums = errors.masked_fill(~mask, 0).sum(dim=(1, 2)).cpu().tolist()
-        counts = mask.sum(dim=(1, 2)).cpu().tolist()
-        inside_sums = errors.masked_fill(~inside, 0).sum(dim=(1, 2)).cpu().tolist()
-        inside_counts = inside.sum(dim=(1, 2)).cpu().tolist()
-        centered_sums = centered_errors.masked_fill(~mask, 0).sum(dim=(1, 2)).cpu().tolist()
-        centered_inside_sums = centered_errors.masked_fill(~inside, 0).sum(dim=(1, 2)).cpu().tolist()
-        for group, total, count, inside_total, inside_count, centered_total, centered_inside_total in zip(
-                group_ids, sums, counts, inside_sums, inside_counts, centered_sums, centered_inside_sums):
+        inside = inside & mask
+        # 每批一次回传，避免各项分组统计分别同步 CPU/GPU。
+        statistics = torch.stack((
+            errors.masked_fill(~mask, 0).sum(dim=(1, 2)),
+            mask.sum(dim=(1, 2)),
+            errors.masked_fill(~inside, 0).sum(dim=(1, 2)),
+            inside.sum(dim=(1, 2)),
+            centered_errors.masked_fill(~mask, 0).sum(dim=(1, 2)),
+            centered_errors.masked_fill(~inside, 0).sum(dim=(1, 2)),
+        ), dim=-1).cpu().tolist()
+        for group, values in zip(group_ids, statistics):
+            total, count, inside_total, inside_count, centered_total, centered_inside_total = values
             if count:
                 state = self.group_mpjpe.setdefault(group, [0.0, 0, 0.0, 0, 0.0, 0.0])
                 state[0] += total
-                state[1] += count
+                state[1] += int(count)
                 state[2] += inside_total
-                state[3] += inside_count
+                state[3] += int(inside_count)
                 state[4] += centered_total
                 state[5] += centered_inside_total
 

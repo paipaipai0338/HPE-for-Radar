@@ -43,13 +43,17 @@ def validate_center_xy_in_low(cfg_task, cfg_data):
 
 
 @torch.no_grad()
-def adapt_coordinate_frame(samples, cfg_task, cfg_data=None, stage='val'):
+def adapt_coordinate_frame(samples, cfg_task, cfg_data=None, stage='val', device=None):
     """共享场景变换：高度在原始 low 中施加，角度在 high 中施加。"""
     if 'pc' not in cfg_task['input']:
         return samples
     augmentation = (cfg_data or {}).get('augmentation', {})
     cloud, target = samples[cfg_task['input']], samples[cfg_task['output']]
-    rotation, translation = samples['high_to_low_R'], samples['high_to_low_t']
+    device = cloud['padded'].device if device is None else device
+    rotation = samples['high_to_low_R'].to(device, non_blocking=True)
+    translation = samples['high_to_low_t'].to(device, non_blocking=True)
+    point_mask = cloud['mask'].to(device, non_blocking=True)
+    person_mask = target['mask'].to(device, non_blocking=True)
     batch_size = cloud['padded'].shape[0]
     height = augmentation.get('radar_height', {})
     angles = augmentation.get('radar_rotation', {})
@@ -64,50 +68,57 @@ def adapt_coordinate_frame(samples, cfg_task, cfg_data=None, stage='val'):
     if height.get(f'enabled_{stage}', False):
         delta[..., 2].uniform_(*height['delta_height_range_m'])
 
+    matrices = matrices.to(device, non_blocking=True)[:, None].transpose(-1, -2)
+    delta = delta.to(device, non_blocking=True)
+    # 合成原有坐标与增广变换，整批点云只做一次矩阵乘法。
+    linear = rotation.transpose(-1, -2) @ rotation @ matrices
+    offset = (-delta @ rotation) @ matrices
+    if cfg_task.get('coordinate', 'high') == 'low':
+        linear = linear @ rotation.transpose(-1, -2)
+        offset = offset @ rotation.transpose(-1, -2) + translation.unsqueeze(-2)
+
     def transform(xyz, mask):
         original_shape = xyz.shape
         xyz = xyz.reshape(batch_size, xyz.shape[1], -1, 3)
-        # high -> 原始 low -> 高度偏移 -> high。
-        low = xyz @ rotation.transpose(-1, -2) + translation.unsqueeze(-2)
-        xyz = (low - delta - translation.unsqueeze(-2)) @ rotation
-        xyz = xyz @ matrices[:, None].transpose(-1, -2)
-        if cfg_task.get('coordinate', 'high') == 'low':
-            # 使用原始外参，保留角度与高度扰动。
-            xyz = xyz @ rotation.transpose(-1, -2) + translation.unsqueeze(-2)
+        xyz = xyz @ linear + offset
         return xyz.reshape(original_shape).masked_fill(~mask, 0.)
 
-    points = cloud['padded'].clone()
-    points[..., :3] = transform(points[..., :3], cloud['mask'][..., None])
-    pose = transform(target['padded'], target['mask'][..., None, None])
-    bbox = get_gt_boxes(pose, target['mask'], threshold=0.3).masked_fill(~target['mask'][..., None], 0.)
-    return {**samples, cfg_task['input']: {**cloud, 'padded': points},
-            cfg_task['output']: {**target, 'padded': pose, 'bbox': bbox}}
+    points = cloud['padded'].to(device, non_blocking=True).clone()
+    points[..., :3] = transform(points[..., :3], point_mask[..., None])
+    pose = transform(target['padded'].to(device, non_blocking=True), person_mask[..., None, None])
+    bbox = get_gt_boxes(pose, person_mask, threshold=0.3).masked_fill(~person_mask[..., None], 0.)
+    return {**samples, cfg_task['input']: {**cloud, 'padded': points, 'mask': point_mask},
+            cfg_task['output']: {**target, 'padded': pose, 'mask': person_mask, 'bbox': bbox}}
 
 
 def resample_cropped_pointcloud(points, mask, max_points=200, random=True):
     """固定点数；空帧保留零输入，不借用其他帧。"""
-    output = points.new_zeros(*points.shape[:-2], max_points, points.shape[-1])
-    output_mask = mask.new_zeros(*mask.shape[:-1], max_points)
-    for instance_idx in range(points.shape[0]):
-        for time_idx in range(points.shape[1]):
-            valid = points[instance_idx, time_idx, mask[instance_idx, time_idx]]
-            count = len(valid)
-            if not count:
-                continue
-            if random:
-                if count >= max_points:
-                    indices = torch.randperm(count, device=points.device)[:max_points]
-                else:
-                    indices = torch.cat((torch.arange(count, device=points.device),
-                                         torch.randint(count, (max_points-count,), device=points.device)))
-                    indices = indices[torch.randperm(max_points, device=points.device)]
-            elif count >= max_points:
-                indices = torch.linspace(0, count-1, max_points, device=points.device).long()
-            else:
-                indices = torch.arange(max_points, device=points.device) % count
-            output[instance_idx, time_idx] = valid[indices]
-            output_mask[instance_idx, time_idx] = True
-    return output, output_mask
+    if not points.numel():
+        return (points.new_zeros(*points.shape[:-2], max_points, points.shape[-1]),
+                mask.new_zeros(*mask.shape[:-1], max_points))
+    counts = mask.sum(-1, keepdim=True)
+    slots = torch.arange(max_points, device=points.device)
+    if random:
+        scores = torch.rand(mask.shape, device=points.device).masked_fill(~mask, float('inf'))
+        order = scores.topk(min(max_points, points.shape[-2]), dim=-1, largest=False).indices
+        repeats = (torch.rand(*mask.shape[:-1], max_points, device=points.device) * counts).long()
+        ranks = torch.where(slots < counts, slots, repeats)
+        indices = order.gather(-1, ranks)
+        # 稀疏帧先保留全部有效点，再补点并打乱顺序。
+        shuffle = torch.rand(indices.shape, device=points.device).argsort(-1)
+        indices = indices.gather(-1, shuffle)
+    else:
+        positions = torch.arange(points.shape[-2], device=points.device).expand_as(mask)
+        ranks = (mask.cumsum(-1) - 1).clamp_min(0)
+        order = torch.zeros_like(ranks).scatter_add_(-1, ranks, positions * mask)
+        ranks = torch.where(counts >= max_points,
+                            torch.div(slots * (counts - 1).clamp_min(0), max(1, max_points - 1),
+                                      rounding_mode='floor'),
+                            slots % counts.clamp_min(1))
+        indices = order.gather(-1, ranks)
+    output_mask = (counts > 0).expand(*mask.shape[:-1], max_points).clone()
+    output = points.gather(-2, indices[..., None].expand(*indices.shape, points.shape[-1]))
+    return output.masked_fill(~output_mask[..., None], 0.), output_mask
 
 
 def center_cropped_pointcloud(points, mask):
@@ -250,7 +261,7 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
     model.train()
     autocast_dtype = get_autocast_dtype(cfg_task.get('precision', 'FP32'))
     for samples in tqdm(dataloader, total=len(dataloader)):
-        samples = adapt_coordinate_frame(samples, cfg_task, cfg_data, 'train')
+        samples = adapt_coordinate_frame(samples, cfg_task, cfg_data, 'train', device=device)
         # 获取模型输入
         input_key = cfg_task['input']
         target_key = cfg_task['output']
@@ -345,7 +356,7 @@ def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_mod
     evaluated_batches = 0
     with torch.no_grad():
         for samples in tqdm(dataloader, total=len(dataloader)):
-            samples = adapt_coordinate_frame(samples, cfg_task, cfg_data, 'val')
+            samples = adapt_coordinate_frame(samples, cfg_task, cfg_data, 'val', device=device)
             input_key = cfg_task['input']
             target_key = cfg_task['output']
             model_input = {}

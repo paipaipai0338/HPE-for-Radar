@@ -652,7 +652,7 @@ class SelectedGroupVisualizer:
             rotation, translation = self.high_to_low
             samples["high_to_low_R"] = torch.from_numpy(rotation.copy())[None, None].expand(1, T, -1, -1)
             samples["high_to_low_t"] = torch.from_numpy(translation.copy())[None, None].expand(1, T, -1)
-            samples = adapt_coordinate_frame(samples, training_task, training_data, 'val')
+            samples = adapt_coordinate_frame(samples, training_task, training_data, 'val', device=self.device)
             model_input, gt_data, valid_instances, cropped_points, cropped_mask, pointcloud_center = prepare_person_pointcloud(
                 samples, training_task, training_data, self.device, 'val')
             # 缺 GT 或裁剪不足 10 点均打断窗口，不能拆成短片段推理。
