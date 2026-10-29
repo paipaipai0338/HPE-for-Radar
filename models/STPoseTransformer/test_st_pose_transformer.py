@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import torch
 
-from models.STPoseTransformer.STPoseTransformer import _voxel_local_pooling
+from models.STPoseTransformer.STPoseTransformer import _position_context, _voxel_local_pooling
 from preprocess.gtprocess import get_gt_boxes
 from run.utils.build_experiment import build_experiment
 from run.utils.build_metric import Metric
@@ -24,6 +24,19 @@ class STPoseTransformerTest(unittest.TestCase):
         points = torch.randn(batch, 16, 200, 6)
         points[..., :3] = points[..., :3] * .2 + torch.tensor([2., -.5, 1.])
         return {'input': points, 'mask': torch.rand(batch, 16, 200) > .2}
+
+    def test_soft_position_context_mask_median_and_empty_frame(self):
+        xyz = torch.tensor([[[1., -2., 0.], [3., 0., 0.], [100., 100., 0.]],
+                            [[9., 9., 0.], [8., 8., 0.], [7., 7., 0.]],
+                            [[5., 2., 0.], [5., 2., 0.], [5., 2., 0.]]])
+        mask = torch.tensor([[True, True, False], [False, False, False], [True, True, True]])
+        context = _position_context(xyz, mask, ((0., 6.), (-3., 3.)))
+        expected = torch.tensor([[.25, .25, 0., .25, .25, 0., 0., 0., 0.],
+                                 [0.] * 9, [0.] * 8 + [1.]])
+        torch.testing.assert_close(context, expected)
+        model = model_init(build_model('STPoseTransformer'))
+        self.assertEqual(model.position_film_weight.count_nonzero().item(), 0)
+        self.assertEqual(model.position_film_bias.count_nonzero().item(), 0)
 
     # Native CPU kernels also exercise BF16 backward on hosts without AVX512.
     @torch.backends.mkldnn.flags(enabled=False)

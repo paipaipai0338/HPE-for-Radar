@@ -5,7 +5,7 @@ num_joints: 17
 embed_dim: 64
 temporal_joint_dim: 12
 vel_mask_floor: 0.1
-spatial_max_points: 128
+spatial_max_points: 200
 spatial_voxel_sizes: [0.1, 0.2, 0.4]
 # 低位机绝对坐标的场景范围，与 data.xyz_limits 一致。
 spatial_voxel_x_range: [0, 6]

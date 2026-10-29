@@ -1,4 +1,4 @@
-"""训练式 4 帧积累、GT 裁剪、200 点重采样 → P4Transformer → WebAgg。
+"""训练配置中的点云积累、GT 裁剪和重采样 → 姿态模型 → WebAgg。
 
 运行：python deploy/Inference_selected_group.py（VISUALIZE=False 时自动评估整组）
 VISUALIZE=True 或 --visualize：空格/右箭头下一帧，左箭头缓存回看；组末输出整组指标。
@@ -7,7 +7,8 @@ INFERENCE_TRAIN_CONFIG 可显式指定与权重配套的训练配置。
 优先读取 /mnt/ssd/Huawei 打包数据，缺失时回退 /mnt/huawei；
 INFERENCE_PACKED_DATA_ROOT 可覆盖 SSD 根目录。
 仅对连续 T 帧有效的人体窗口取末帧；缺帧后重新等待 T 帧。
-使用 last.pth；点数不足持续保留可信骨架，点数充足但突变时离线三帧确认/回填。
+默认使用 best.pth；可用 INFERENCE_MODEL_PATH 和 INFERENCE_CHECKPOINT 覆盖。
+同时显示原始预测和离线三帧确认/回填的后处理结果。
 默认只输出终端指标；--save-results / --save-raw-cache 显式启用结果保存。
 """
 
@@ -39,9 +40,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT_PATH = Path("/mnt/huawei")
 PACKED_DATA_ROOT = Path(os.environ.get("INFERENCE_PACKED_DATA_ROOT", "/mnt/ssd/Huawei"))
 DATE = os.environ.get("INFERENCE_DATE", "20261016")
-GROUP = os.environ.get("INFERENCE_GROUP", "group_014")
+GROUP = os.environ.get("INFERENCE_GROUP", "group_019")
 VISUALIZE = True   # False 自动跑完整组并输出 MPJPE； True WebAgg 逐帧交互。
-MODEL_POSE_PATH = PROJECT_ROOT / "experiments/P4Transformer/20261019_161657"
+MODEL_POSE_PATH = Path(os.environ.get("INFERENCE_MODEL_PATH", str(PROJECT_ROOT / "experiments/STPoseTransformer/20261028_104106")))
+CHECKPOINT_NAME = os.environ.get("INFERENCE_CHECKPOINT", "best.pth")
 TRAIN_CONFIG_PATH = Path(os.environ.get("INFERENCE_TRAIN_CONFIG", str(MODEL_POSE_PATH / "config" / "config.yaml")))
 TRAIN_CONFIG = load_config(TRAIN_CONFIG_PATH)
 T = TRAIN_CONFIG["data"]["T"]
@@ -81,16 +83,17 @@ def load_models(device):
     from run.utils.checkpoint import load_model_checkpoint
 
     experiment_config = MODEL_POSE_PATH / "config"
-    model_source = experiment_config / "P4Transformer.py"
-    spec = importlib.util.spec_from_file_location("trained_p4transformer", model_source)
+    model_name = TRAIN_CONFIG["model"]["name"]
+    model_source = experiment_config / f"{model_name}.py"
+    spec = importlib.util.spec_from_file_location("trained_pose_model", model_source)
     if spec is None or spec.loader is None:
         raise ImportError(f"无法加载训练时保存的模型源码：{model_source}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    pose_model = module.P4Transformer(
+    pose_model = getattr(module, model_name)(
         **load_config(experiment_config / "model_config.yaml")
     ).to(device)
-    load_model_checkpoint(MODEL_POSE_PATH / "checkpoint/last.pth", pose_model, device)
+    load_model_checkpoint(MODEL_POSE_PATH / "checkpoint" / CHECKPOINT_NAME, pose_model, device)
     return pose_model.eval()
 
 
@@ -501,9 +504,28 @@ class SelectedGroupVisualizer:
                 torch.cuda.current_device() if device_id is None else device_id
             )
         group_path = ROOT_PATH / DATE / "data_collection" / GROUP
-        self.paths = data_files(group_path / "dpct高位机/PC", ".npy")
+        pc_folder = group_path / ("fftGen/PC" if TRAIN_CONFIG["data"].get("pointcloud_source") == "fftgen" else "dpct高位机/PC")
+        self.paths = data_files(pc_folder, ".npy")
+        self.aligned_gt = None
+        if TRAIN_CONFIG["data"].get("pointcloud_source") == "fftgen":
+            from data2datasets.alignment_cache import reuse_bin_alignment
+            from data2datasets.dataset_for_all_task import PackedFrame
+            gt_folder = group_path / "camera results/smoothed 3D"
+            config = dict(algorithm_version="global_dp_v1", base_source="radar_high_pc",
+                          max_delta_sec=0.3, one_to_one=True, time_offsets_sec={},
+                          enabled_sensors={"gt": ".pkl", "radar_high_pc": ".npy"})
+            pc_source = PACKED_DATA_ROOT / pc_folder.relative_to(ROOT_PATH) if packed_directory(pc_folder) is not None else pc_folder
+            gt_source = PACKED_DATA_ROOT / gt_folder.relative_to(ROOT_PATH) if packed_directory(gt_folder) is not None else gt_folder
+            aligned = reuse_bin_alignment(group_path, {"radar_high_pc": pc_source,
+                                                        "gt": gt_source}, config, PackedFrame)
+            if aligned is None:
+                raise ValueError(f"{group_path}: 无法复用训练用 BIN→GT 对齐缓存")
+            self.paths = [pc_folder / ref.frame_name for ref in aligned["radar_high_pc"]]
+            self.aligned_gt = {str(pc): gt_folder / (gt.frame_name if isinstance(gt, PackedFrame) else Path(gt).name)
+                               for pc, gt in zip(self.paths, aligned["gt"])}
         if not self.paths:
-            raise FileNotFoundError(f"没有点云文件：{group_path / 'dpct高位机/PC'}")
+            raise FileNotFoundError(f"没有点云文件：{pc_folder}")
+        print(f"模型：{MODEL_POSE_PATH}；权重：{CHECKPOINT_NAME}")
         print(f"训练配置：{TRAIN_CONFIG_PATH}；T={T}，单人点数={TRAIN_MAX_POINTS}，acc_frame={TRAIN_CONFIG['data'].get('acc_frame', 0)}")
         self.pose_model = load_models(self.device)
         self.gt_folder = group_path / "camera results/smoothed 3D"
@@ -593,7 +615,8 @@ class SelectedGroupVisualizer:
             record["gt"] = np.empty((0, 17, 3), dtype=np.float32)
             record["has_gt"] = False
             if self.extrinsics is not None:
-                pose_file = closest_timestamp_file(Path(record["path"]), self.gt_folder)
+                pose_file = (self.aligned_gt.get(record["path"]) if self.aligned_gt is not None
+                             else closest_timestamp_file(Path(record["path"]), self.gt_folder))
                 if pose_file is not None:
                     record["gt_pose_path"] = str(pose_file)
                     with open_data_file(pose_file) as source:
@@ -803,7 +826,7 @@ class SelectedGroupVisualizer:
             "regions": regions,
         }
         fmt = lambda value: "N/A" if value is None else f"{value:.3f}"
-        print(f"{DATE}/{GROUP}: checkpoint=last.pth；离线三帧确认/回填")
+        print(f"{DATE}/{GROUP}: checkpoint={CHECKPOINT_NAME}；离线三帧确认/回填")
         print("| 区域 | 方法 | 人帧数 | MPJPE mm | Centered mm | PA mm |")
         print("|---|---|---:|---:|---:|---:|")
         labels = ("原始全量", "旧处理全量", "原始保留子集", "旧处理保留子集", "新时序处理")

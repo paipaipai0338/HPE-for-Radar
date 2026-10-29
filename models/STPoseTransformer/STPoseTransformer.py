@@ -7,6 +7,22 @@ from torch import nn
 from torch.nn import functional as F
 
 
+def _position_context(xyz, mask, xy_ranges):
+    """Nine continuous region weights from each frame's valid XY median."""
+    counts = mask.sum(-1)
+    ordered = xyz[..., :2].float().masked_fill(~mask[..., None], float('inf')).sort(dim=1).values
+    lower = ((counts - 1).clamp_min(0) // 2)[:, None, None].expand(-1, 1, 2)
+    upper = (counts // 2)[:, None, None].expand(-1, 1, 2)
+    center = (ordered.gather(1, lower) + ordered.gather(1, upper)).squeeze(1) * .5
+    center = torch.where(counts[:, None] > 0, center, torch.zeros_like(center))
+    bounds = center.new_tensor(xy_ranges)
+    step = (bounds[:, 1] - bounds[:, 0]) / 3
+    position = ((center - bounds[:, 0]) / step - .5).clamp(0, 2)
+    weights = (1 - (position[..., None] - torch.arange(3, device=xyz.device)).abs()).clamp_min(0)
+    context = (weights[:, 0, :, None] * weights[:, 1, None, :]).reshape(-1, 9)
+    return context * (counts > 0)[:, None]
+
+
 def _select_point_subset(features, key_padding_mask, velocity, xyz, max_points):
     count = min(max_points, features.shape[1])
     if count == features.shape[1]:
@@ -107,6 +123,9 @@ class STPoseTransformer(nn.Module):
         self.query_norm = nn.LayerNorm(embed_dim)
         self.spatial_cross_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         self.spatial_norm = nn.LayerNorm(embed_dim)
+        # Parameters stay zero-initialized under the project's generic model_init.
+        self.position_film_weight = nn.Parameter(torch.zeros(2 * embed_dim, 9))
+        self.position_film_bias = nn.Parameter(torch.zeros(2 * embed_dim))
         self.temporal_joint_proj = nn.Sequential(
             nn.LayerNorm(embed_dim), nn.Linear(embed_dim, temporal_joint_dim), nn.GELU(),
             nn.Linear(temporal_joint_dim, temporal_joint_dim),
@@ -141,6 +160,7 @@ class STPoseTransformer(nn.Module):
         frame_mask = mask.any(-1)
         points = points.reshape(batch * frames, count, self.point_in_dim)
         xyz, velocity = points[..., :3], points[..., 3:4]
+        position_context = _position_context(xyz, mask.reshape(batch * frames, count), self.xyz_ranges[:2])
         features = self.point_feat_norm(self.point_mlp(points))
         scale = F.softplus(self.velocity_scale_raw) + 1e-6
         gate = self.vel_mask_floor + (1. - self.vel_mask_floor) * torch.tanh(scale * velocity.abs())
@@ -159,6 +179,9 @@ class STPoseTransformer(nn.Module):
         joint_features, _ = self.spatial_cross_attn(
             queries, features, features, key_padding_mask=key_padding_mask, need_weights=False)
         joint_features = self.spatial_norm(joint_features + queries)
+        scale, shift = F.linear(position_context.to(joint_features.dtype), self.position_film_weight,
+                                self.position_film_bias).tanh().chunk(2, dim=-1)
+        joint_features = joint_features * (1 + .1 * scale[:, None]) + .1 * shift[:, None]
         temporal = self.temporal_joint_proj(joint_features) + self.temporal_joint_skip(joint_features)
         temporal = self.temporal_pos(temporal.reshape(batch, frames, self.num_joints * self.temporal_joint_dim))
         valid_frames = frame_mask.clone()
