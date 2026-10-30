@@ -69,3 +69,7 @@ fig/
 RHL/
 WSC/
 finetune/
+
+# Local Codex experiment files
+/codex/
+/@codex/
