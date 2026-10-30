@@ -1,0 +1,12 @@
+# Per-frame single-person pose: ISAB encoder -> PMA joint queries -> SAB decoder.
+num_joints: 17
+# xyz + velocity + amplitude; trailing point-type tags are ignored.
+feat_dim: 2
+dim: 128
+num_heads: 4
+# Learned feature vectors, not FPS samples; all valid input points participate.
+num_inducing_points: 32
+encoder_layers: 2
+decoder_layers: 1
+ffn_dim: 256
+dropout: 0.0

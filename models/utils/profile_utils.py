@@ -1,7 +1,71 @@
-import os
 import time
 
 import torch
+
+
+def _count_sparse_conv(module, inputs, output):
+    """Logical active-pair MACs; excludes padded work inside GPU kernels."""
+    if module.conv1x1:
+        pairs = output.features.shape[0]
+    else:
+        data = output.indice_dict[module.indice_key]
+        if not hasattr(data, 'pair_fwd'):
+            raise NotImplementedError('Sparse MAC counting requires spconv implicit-GEMM indices')
+        indices = data.pair_bwd if module.inverse else data.pair_fwd
+        pairs = int((indices >= 0).sum().item())
+    module.total_ops += pairs * module.in_channels * module.out_channels
+
+
+def _count_attention(module, inputs, output):
+    query, key, value = inputs[:3]
+    if query.ndim == 2:
+        batch, nq, nk, nv = 1, query.shape[0], key.shape[0], value.shape[0]
+    else:
+        bdim, tdim = (0, 1) if module.batch_first else (1, 0)
+        batch, nq, nk, nv = query.shape[bdim], query.shape[tdim], key.shape[tdim], value.shape[tdim]
+    dim = module.embed_dim
+    projections = batch * dim * (nq * query.shape[-1] + nk * key.shape[-1]
+                                + nv * value.shape[-1] + nq * dim)
+    extra = int(module.bias_k is not None) + int(module.add_zero_attn)
+    module.total_ops += projections + 2 * batch * nq * (nk + extra) * dim
+
+
+def _profile_macs(model, inputs):
+    from thop import profile
+
+    modules = list(model.modules())
+    custom_ops = {torch.nn.MultiheadAttention: _count_attention}
+    sparse = [m for m in modules if type(m).__module__ == 'spconv.pytorch.conv'
+              and hasattr(m, 'kernel_size')]
+    # Profiling needs pair maps even for convolutions that normally do not cache them.
+    original_keys = [(m, m.indice_key) for m in sparse]
+    state = [(m, m.training, set(m._forward_hooks),
+              {k: m._buffers[k] for k in ('total_ops', 'total_params') if k in m._buffers})
+             for m in modules]
+    try:
+        for index, module in enumerate(sparse):
+            custom_ops[type(module)] = _count_sparse_conv
+            if module.indice_key is None:
+                module.indice_key = f'__profile_{id(module)}_{index}'
+        # Fused Transformer paths can bypass child modules and their counting hooks.
+        fastpath = torch.backends.mha.get_fastpath_enabled()
+        try:
+            torch.backends.mha.set_fastpath_enabled(False)
+            macs, _ = profile(model, inputs=inputs, custom_ops=custom_ops, verbose=False)
+        finally:
+            torch.backends.mha.set_fastpath_enabled(fastpath)
+        return macs
+    finally:
+        for module, key in original_keys:
+            module.indice_key = key
+        # THOP leaves buffers on unregistered modules, and hooks behind if forward fails.
+        for module, training, hooks, buffers in state:
+            module.training = training
+            for key in set(module._forward_hooks) - hooks:
+                del module._forward_hooks[key]
+            for key in ('total_ops', 'total_params'):
+                module._buffers.pop(key, None)
+            module._buffers.update(buffers)
 
 
 def _output_shape(output):
@@ -61,6 +125,17 @@ def _time_forward(model, x, device, warmup=20, repeat=100):
 
 
 def profile_model(model_name, model, x, warmup=20, repeat=100):
+    training = [(module, module.training) for module in model.modules()]
+    try:
+        return _profile_model(model_name, model, x, warmup, repeat)
+    finally:
+        for module, flag in training:
+            module.training = flag
+
+
+def _profile_model(model_name, model, x, warmup, repeat):
+    if warmup < 0 or repeat < 1:
+        raise ValueError('warmup must be nonnegative and repeat must be positive')
     device = _input_device(x)
     model.eval()
 
@@ -80,18 +155,15 @@ def profile_model(model_name, model, x, warmup=20, repeat=100):
         peak_allocated_mb = torch.cuda.max_memory_allocated(device) / 1024 ** 2
         peak_reserved_mb = torch.cuda.max_memory_reserved(device) / 1024 ** 2
 
+    params_m = sum(p.numel() for p in model.parameters()) / 1000 ** 2
     try:
-        from thop import profile
-
         thop_inputs = x if isinstance(x, tuple) else (x,)
-        macs, params = profile(model, inputs=thop_inputs, verbose=False)
+        macs = _profile_macs(model, thop_inputs)
         macs_m = macs / 1000 ** 2
         flops_m = 2 * macs_m
-        params_m = params / 1000 ** 2
     except Exception as exc:
         macs_m = None
         flops_m = None
-        params_m = sum(p.numel() for p in model.parameters()) / 1000 ** 2
         print(f"THOP_ERROR = {type(exc).__name__}: {exc}")
 
     print("===== Model Profile =====")
@@ -102,7 +174,9 @@ def profile_model(model_name, model, x, warmup=20, repeat=100):
     print(f"FLOPs = {'N/A' if flops_m is None else f'{flops_m:.6f}'} M")
     print(f"MACs = {'N/A' if macs_m is None else f'{macs_m:.6f}'} M")
     print(f"Params = {params_m:.6f} M")
-    print(f"Inference time = {infer_ms:.6f} ms/sample")
+    print('MAC/FLOP scope = whole input forward; registered-module estimate, FLOPs = 2 * MACs')
+    print('Includes sparse active-pair convolutions and MHA projections/QK/AV; excludes unregistered modules/functional ops and kernel padding.')
+    print(f"Inference time = {infer_ms:.6f} ms/batch (whole input, not per frame)")
     if peak_allocated_mb is None:
         print("Memory allocated = N/A MB")
         print("Memory reserved = N/A MB")

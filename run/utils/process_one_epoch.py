@@ -5,6 +5,16 @@ from preprocess.gtprocess import get_gt_boxes
 from preprocess.radar_spectra import range_cube_to_training_spectra
 from preprocess.radarprocess_RPM2 import range_cube_to_rpm2_maps
 from preprocess.radarpreprocess_HRRadarPose import range_cube_to_range_doppler_azi_ele, range_doppler_azi_ele_to_doppler_xyz
+from utils.MOCAP21 import coco_to_mocap
+from utils.skeleton import get_pose_layout
+
+
+def prepare_pose_target(gt, pose_format='coco'):
+    get_pose_layout(pose_format)
+    if pose_format == 'mocap':
+        pose = gt['padded'].masked_fill(~gt['mask'][..., None, None], 0.)
+        return {**gt, 'padded': coco_to_mocap(pose)}
+    return gt
 
 def validate_coordinate_frame(cfg_task, cfg_data):
     if cfg_task.get('coordinate', 'high') not in ('high', 'low'):
@@ -24,13 +34,33 @@ def validate_coordinate_frame(cfg_task, cfg_data):
     probability = drop.get('probability', 0.)
     if not 0 <= probability <= 1:
         raise ValueError('point_dropout.probability 必须在 [0,1]')
+    jitter = augmentation.get('bbox_jitter', {})
+    for stage in ('train', 'val'):
+        if type(jitter.get(f'enabled_{stage}', False)) is not bool:
+            raise ValueError(f'bbox_jitter.enabled_{stage} 必须为布尔值')
+    for key, default in (('translation_max_m', [0.1] * 3), ('rotation_max_deg', [3.] * 3)):
+        limits = torch.as_tensor(jitter.get(key, default), dtype=torch.float32)
+        if limits.shape != (3,) or not torch.isfinite(limits).all() or (limits < 0).any():
+            raise ValueError(f'bbox_jitter.{key} 必须为三个有限的非负数')
+    scale = torch.as_tensor(jitter.get('scale_range', [0.9, 1.1]), dtype=torch.float32)
+    if scale.shape != (2,) or not torch.isfinite(scale).all() or scale[0] <= 0 or scale[0] > scale[1]:
+        raise ValueError('bbox_jitter.scale_range 必须为有限的正数 [min,max]')
+    for key, default in (('probability', 0.7), ('min_point_iou', 0.7), ('tracking_probability', 0.5)):
+        value = jitter.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+            raise ValueError(f'bbox_jitter.{key} 必须在 [0,1]')
+    if jitter.get('min_point_iou', 0.7) == 0:
+        raise ValueError('bbox_jitter.min_point_iou 必须大于 0')
+    attempts = jitter.get('max_attempts', 4)
+    if type(attempts) is not int or attempts <= 0:
+        raise ValueError('bbox_jitter.max_attempts 必须为正整数')
     if cfg_task.get('center_on_pointcloud', False) and cfg_task.get('center_xy_in_low', False):
         raise ValueError('两种中心化不能同时开启')
     height = augmentation.get('radar_height', {})
     if cfg_task.get('center_on_pointcloud', False) and any(height.get(f'enabled_{stage}', False) for stage in ('train', 'val')):
         raise ValueError('XYZ 中心化会抵消高度增广，不能同时开启')
     enabled_augmentation = any(augmentation.get(name, {}).get(f'enabled_{stage}', False)
-                               for name in ('radar_rotation', 'radar_height', 'point_dropout')
+                               for name in ('radar_rotation', 'radar_height', 'point_dropout', 'bbox_jitter')
                                for stage in ('train', 'val'))
     if enabled_augmentation or cfg_task.get('coordinate', 'high') == 'low':
         if cfg_task['input'] != 'radar_high_pc' or cfg_task['output'] != 'gt_for_high':
@@ -118,6 +148,63 @@ def center_cropped_pointcloud(points, mask):
 
 
 @torch.no_grad()
+def jitter_bbox_mask(xyz, bounds, valid_mask, original_mask, config, tracking_mask=None):
+    """每人每帧独立选择、采样和重试框扰动，不达标的帧保留原框。"""
+    probability = config.get('probability', 0.7)
+    if probability == 0:
+        return original_mask
+    counts = original_mask.sum(-1)
+    eligible = counts >= 10
+    if not eligible.any():
+        return original_mask
+    pending = eligible & (torch.rand(eligible.shape, device=xyz.device) < probability)
+    result = original_mask.clone()
+    if tracking_mask is not None:
+        if tracking_mask.shape != original_mask.shape or tracking_mask.dtype != torch.bool:
+            raise ValueError('tracking_mask 必须是与 original_mask 同形的布尔张量')
+        tracking_mask = tracking_mask & valid_mask
+        use_tracking = pending & tracking_mask.any(-1)
+        use_tracking &= torch.rand(eligible.shape, device=xyz.device) < config.get('tracking_probability', 0.5)
+        intersection = (tracking_mask & original_mask).sum(-1)
+        union = (tracking_mask | original_mask).sum(-1)
+        accepted = (use_tracking & (tracking_mask.sum(-1) >= 10) &
+                    (intersection >= config.get('min_point_iou', 0.7) * union))
+        result[accepted] = tracking_mask[accepted]
+        # 跟踪框是最终候选，不叠加随机扰动；不达标时保留该帧 GT 框。
+        pending &= ~use_tracking
+    translation_max = xyz.new_tensor(config.get('translation_max_m', [0.1] * 3))
+    rotation_max = xyz.new_tensor(config.get('rotation_max_deg', [3.] * 3))
+    scale_min, scale_max = config.get('scale_range', [0.9, 1.1])
+    for _ in range(config.get('max_attempts', 4)):
+        batch, person, frame = pending.nonzero(as_tuple=True)
+        if not len(batch):
+            break
+        values = torch.rand(len(batch), 9, device=xyz.device, dtype=xyz.dtype)
+        delta = (2 * values[:, :3] - 1) * translation_max
+        scale = scale_min + values[:, 3:6] * (scale_max - scale_min)
+        angles = torch.deg2rad((2 * values[:, 6:] - 1) * rotation_max)
+        sr, sp, sy = angles.sin().unbind(-1)
+        cr, cp, cy = angles.cos().unbind(-1)
+        rotation = torch.stack((cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr,
+                                sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr,
+                                -sp, cp * sr, cp * cr), dim=-1).reshape(-1, 3, 3)
+        box = bounds[batch, person, frame]
+        center = (box[..., :3] + box[..., 3:]) / 2 + delta
+        half_size = (box[..., 3:] - box[..., :3]) / 2 * scale
+        # 仅用框局部坐标判断归属；输入点和监督标签不做框变换。
+        local = (xyz[batch, 0, frame] - center[:, None]) @ rotation
+        candidate = (local.abs() <= half_size[:, None]).all(-1) & valid_mask[batch, person, frame]
+        original = original_mask[batch, person, frame]
+        intersection = (candidate & original).sum(-1)
+        union = (candidate | original).sum(-1)
+        accepted = ((intersection >= config.get('min_point_iou', 0.7) * union) &
+                    (candidate.sum(-1) >= 10))
+        result[batch[accepted], person[accepted], frame[accepted]] = candidate[accepted]
+        pending[batch[accepted], person[accepted], frame[accepted]] = False
+    return result
+
+
+@torch.no_grad()
 def prepare_person_pointcloud(samples, cfg_task, cfg_data, device, stage):
     """训练、验证和导出共用裁剪、中心化、采样与逐点丢弃。"""
     cloud, target = samples[cfg_task['input']], samples[cfg_task['output']]
@@ -127,10 +214,16 @@ def prepare_person_pointcloud(samples, cfg_task, cfg_data, device, stage):
     xyz = points[:, None, ..., :3]
     cropped_mask = ((xyz >= bounds[..., :3].unsqueeze(-2)) &
                     (xyz <= bounds[..., 3:].unsqueeze(-2))).all(-1)
-    cropped_mask &= point_mask[:, None] & person_mask.permute(0, 2, 1)[..., None]
-    if stage == 'val':
-        person_mask = person_mask & (cropped_mask.sum(-1).permute(0, 2, 1) >= 10)
-        cropped_mask &= person_mask.permute(0, 2, 1)[..., None]
+    valid_mask = point_mask[:, None] & person_mask.permute(0, 2, 1)[..., None]
+    cropped_mask &= valid_mask
+    jitter = cfg_data.get('augmentation', {}).get('bbox_jitter', {})
+    if jitter.get(f'enabled_{stage}', False):
+        tracking_mask = cloud.get('tracking_mask')
+        if tracking_mask is not None:
+            tracking_mask = tracking_mask.to(device)
+        cropped_mask = jitter_bbox_mask(xyz, bounds, valid_mask, cropped_mask, jitter, tracking_mask)
+    person_mask = person_mask & (cropped_mask.sum(-1).permute(0, 2, 1) >= 10)
+    cropped_mask &= person_mask.permute(0, 2, 1)[..., None]
     valid_instance_mask = cropped_mask.any(dim=(2, 3))
     cropped_points = points[:, None].expand(-1, person_mask.shape[2], -1, -1, -1)
     center = points.new_zeros(*person_mask.shape, 3)
@@ -149,26 +242,36 @@ def prepare_person_pointcloud(samples, cfg_task, cfg_data, device, stage):
     if dropout.get(f'enabled_{stage}', False):
         sampled_mask &= torch.rand(sampled_mask.shape, device=device) >= dropout['probability']
         sampled = sampled.masked_fill(~sampled_mask[..., None], 0.)
+        frame_mask = person_mask.permute(0, 2, 1).clone()
+        frame_mask[valid_instance_mask] = sampled_mask.any(-1)
+        person_mask = frame_mask.permute(0, 2, 1)
+        retained = sampled_mask.any(dim=(1, 2))
+        sampled, sampled_mask = sampled[retained], sampled_mask[retained]
+        valid_instance_mask &= frame_mask.any(-1)
+    pose = pose.masked_fill(~person_mask[..., None, None], 0.)
     gt = {'padded': pose, 'mask': person_mask,
           'bbox': get_gt_boxes(pose, person_mask, threshold=0.3).masked_fill(~person_mask[..., None], 0.)}
     return ({'input': sampled, 'mask': sampled_mask}, gt, valid_instance_mask,
             cropped_points, cropped_mask, center)
 
 
-@torch.no_grad()
 def predict_valid_person_frames(model, model_input):
-    """仅对连续有效帧推理；不跨越被筛除的帧拼接时序。"""
+    """仅前向连续有效帧，保留训练梯度，不跨越无效帧拼接时序。"""
     valid = model_input['mask'].any(-1)
     if not valid.any():
         raise ValueError('没有可推理的有效人帧')
     full = valid.all(-1)
     prediction = None
+    regularization = []
 
     def infer(indices, begin, end):
         nonlocal prediction
         inputs = {key: model_input[key][indices, begin:end].contiguous()
                   for key in ('input', 'mask')}
-        pose = model(inputs)['pose']
+        output = model(inputs)
+        pose = output['pose']
+        if 'transform_regularization' in output:
+            regularization.append(output['transform_regularization'] * pose.shape[0] * pose.shape[1])
         if prediction is None:
             prediction = pose.new_zeros(*valid.shape, *pose.shape[2:])
         prediction[indices, begin:end] = pose
@@ -180,7 +283,10 @@ def predict_valid_person_frames(model, model_input):
         changes = (flags[1:] - flags[:-1]).nonzero().flatten().tolist()
         for begin, end in zip(changes[::2], changes[1::2]):
             infer(slice(index, index + 1), begin, end)
-    return {'pose': prediction}
+    output = {'pose': prediction}
+    if regularization:
+        output['transform_regularization'] = torch.stack(regularization).sum() / valid.sum()
+    return output
 
 
 def get_autocast_dtype(precision):
@@ -266,6 +372,8 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
             gt = {key: samples[target_key][source].to(device, non_blocking=True)
                   for key, source in (('padded', 'padded'), ('mask', 'mask'), ('bbox', 'bbox'))}
 
+        gt = prepare_pose_target(gt, cfg_task.get('pose_format', 'coco'))
+
         if cfg_model['name'] == 'ResNet3D':
             model_input.update(bbox=gt['bbox'], bbox_mask=gt['mask'])
 
@@ -276,7 +384,8 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
         if cfg_model['name'] == 'HRRadarPose':
             body_center, center_indices, keypoint_offset, target_valid = model.output_encoder(
                 pose=gt['padded'], pose_valid=gt['mask'],
-                xyz_limits=cfg_data['xyz_limits'], cube_size=cfg_data['cube_size']
+                xyz_limits=cfg_data['xyz_limits'], cube_size=cfg_data['cube_size'],
+                center_joint_indices=get_pose_layout(cfg_task.get('pose_format', 'coco'))['root_indices'],
                 )
             gt['body_center'] = body_center
             gt['indices'] = center_indices
@@ -290,7 +399,8 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
             dtype=autocast_dtype,
             enabled=autocast_dtype is not None,
         ):
-            pre = model(model_input)
+            pre = (predict_valid_person_frames(model, model_input)
+                   if 'pc' in input_key else model(model_input))
 
 
         if 'pc' in input_key:
@@ -304,10 +414,12 @@ def train_one_epoch(model, dataloader, optimizer, metric, device, cfg_data, cfg_
             pose = instance_pose.new_zeros(B, K, T, instance_pose.shape[2], instance_pose.shape[3])
             pose[valid_instance_mask] = instance_pose
             pre['pose'] = pose.permute(0, 2, 1, 3, 4).contiguous()
-            pre['pose_valid'] = valid_instance_mask[:, None].expand(B, T, K).contiguous()
+            pre['pose_valid'] = gt['mask'].clone()
 
         loss, _ = metric.calculate_batch(pre, gt, group_ids=samples.get('group_id'),
                                             group_gt_low=samples['gt_for_low']['padded'])
+        if 'transform_regularization' in pre:
+            loss = loss + pre['transform_regularization']
 
         if not torch.isfinite(loss):
             raise FloatingPointError(
@@ -360,6 +472,8 @@ def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_mod
                 gt = {key: samples[target_key][source].to(device, non_blocking=True)
                       for key, source in (('padded', 'padded'), ('mask', 'mask'), ('bbox', 'bbox'))}
 
+            gt = prepare_pose_target(gt, cfg_task.get('pose_format', 'coco'))
+
             if cfg_model['name'] == 'ResNet3D':
                 model_input.update(bbox=gt['bbox'], bbox_mask=gt['mask'])
 
@@ -370,7 +484,8 @@ def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_mod
             if cfg_model['name'] == 'HRRadarPose':
                 body_center, center_indices, keypoint_offset, target_valid = model.output_encoder(
                     pose=gt['padded'], pose_valid=gt['mask'],
-                    xyz_limits=cfg_data['xyz_limits'], cube_size=cfg_data['cube_size']
+                    xyz_limits=cfg_data['xyz_limits'], cube_size=cfg_data['cube_size'],
+                    center_joint_indices=get_pose_layout(cfg_task.get('pose_format', 'coco'))['root_indices'],
                     )
                 gt['body_center'] = body_center
                 gt['indices'] = center_indices

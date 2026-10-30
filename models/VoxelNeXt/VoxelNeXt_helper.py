@@ -110,8 +110,8 @@ def pairwise_axis_aligned_iou_3d(
     ).clamp_min(1e-6)
 
 
-class FixedPersonQueryHead(nn.Module):
-    """Fixed-cardinality set-prediction head for axis-aligned human boxes."""
+class FixedJointQueryHead(nn.Module):
+    """Joint queries over sparse voxel features for one cropped person."""
 
     def __init__(
         self,
@@ -121,11 +121,10 @@ class FixedPersonQueryHead(nn.Module):
         num_layers,
         ffn_dim,
         dropout,
-        max_people,
-        xyz_limits,
+        num_joints,
     ):
         super().__init__()
-        self.max_people = int(max_people)
+        self.num_joints = int(num_joints)
         self.hidden_dim = int(hidden_dim)
         input_channels = int(input_channels)
         num_heads = int(num_heads)
@@ -135,18 +134,13 @@ class FixedPersonQueryHead(nn.Module):
                 f"query_num_heads={num_heads}"
             )
 
-        self.register_buffer(
-            "xyz_limits",
-            torch.as_tensor(xyz_limits, dtype=torch.float32),
-            persistent=False,
-        )
         self.input_projection = nn.Linear(input_channels, self.hidden_dim)
         self.position_embedding = nn.Sequential(
             nn.Linear(2, self.hidden_dim),
             nn.ReLU(),
             nn.Linear(self.hidden_dim, self.hidden_dim),
         )
-        self.query_embedding = nn.Embedding(self.max_people, self.hidden_dim)
+        self.query_embedding = nn.Embedding(self.num_joints, self.hidden_dim)
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=self.hidden_dim,
             nhead=num_heads,
@@ -158,12 +152,11 @@ class FixedPersonQueryHead(nn.Module):
         self.decoder = nn.TransformerDecoder(
             decoder_layer, num_layers=int(num_layers)
         )
-        self.box_head = nn.Sequential(
+        self.pose_head = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.ReLU(),
-            nn.Linear(self.hidden_dim, 6),
+            nn.Linear(self.hidden_dim, 3),
         )
-        self.objectness_head = nn.Linear(self.hidden_dim, 1)
 
     def _pad_sparse_memory(self, x, batch_size):
         features = self.input_projection(x.features)
@@ -187,16 +180,15 @@ class FixedPersonQueryHead(nn.Module):
         )
         features = features + self.position_embedding(positions)
 
-        for batch_idx in range(batch_size):
-            current = features[batch_indices == batch_idx]
-            count = current.shape[0]
-            if count:
-                memory[batch_idx, :count] = current
-                padding_mask[batch_idx, :count] = False
-            else:
-                # Keep one zero sentinel token so attention never receives an
-                # all-masked memory row.
-                padding_mask[batch_idx, 0] = False
+        # Preserve each frame's token order without a GPU boolean-index operation per frame.
+        order = torch.argsort(batch_indices, stable=True)
+        sorted_batch = batch_indices[order]
+        offsets = counts.cumsum(0) - counts
+        slots = torch.arange(len(order), device=features.device) - offsets[sorted_batch]
+        memory[sorted_batch, slots] = features[order]
+        padding_mask[sorted_batch, slots] = False
+        # Empty frames retain one unmasked zero token for attention.
+        padding_mask[:, 0] &= counts > 0
         return memory, padding_mask
 
     def forward(self, x, batch_size):
@@ -218,15 +210,7 @@ class FixedPersonQueryHead(nn.Module):
             memory=memory,
             memory_key_padding_mask=padding_mask,
         )
-        raw_boxes = self.box_head(decoded)
-        objectness_logits = self.objectness_head(decoded).squeeze(-1)
-
-        pc_min = self.xyz_limits[:, 0]
-        pc_extent = self.xyz_limits[:, 1] - pc_min
-        center = pc_min + raw_boxes[..., :3].sigmoid() * pc_extent
-        size = F.softplus(raw_boxes[..., 3:]).clamp_max(pc_extent)
-        boxes = torch.cat([center - size * 0.5, center + size * 0.5], dim=-1)
-        return boxes, objectness_logits
+        return self.pose_head(decoded)
 
 
 class PersonSetCriterion(nn.Module):

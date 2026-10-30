@@ -9,7 +9,7 @@ from typing import Tuple
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
-from utils.COCO import COCO_SKELETON
+from utils.skeleton import get_pose_layout
 
 
 def get_pose_hungarian_match(
@@ -21,7 +21,7 @@ def get_pose_hungarian_match(
     hip_joint_indices=(11, 12),
     pose_valid: torch.Tensor = None,
 ):
-    """按髋中心距离和 confidence 逐帧匹配预测 query 与有效 GT。"""
+    """按指定根节点中心距离和 confidence 逐帧匹配预测 query 与有效 GT。"""
     if pose_pre.ndim != 5 or pose_gt.ndim != 5:
         raise ValueError(
             "pose_pre and pose_gt must be [B, T, K, J, 3], "
@@ -59,22 +59,16 @@ def get_pose_hungarian_match(
     if confidence_weight > 0 and confidence is None:
         raise ValueError("confidence is required when confidence_weight > 0")
 
-    left_hip, right_hip = hip_joint_indices
-    if not (
-        0 <= left_hip < pose_pre.shape[-2]
-        and 0 <= right_hip < pose_pre.shape[-2]
+    if not hip_joint_indices or any(
+        not 0 <= index < pose_pre.shape[-2] for index in hip_joint_indices
     ):
         raise ValueError(
             f"hip_joint_indices are out of range: {hip_joint_indices}"
         )
 
     with torch.no_grad():
-        pred_hip = (
-            pose_pre[..., left_hip, :] + pose_pre[..., right_hip, :]
-        ) / 2
-        gt_hip = (
-            pose_gt[..., left_hip, :] + pose_gt[..., right_hip, :]
-        ) / 2
+        pred_hip = pose_pre[..., hip_joint_indices, :].mean(dim=-2)
+        gt_hip = pose_gt[..., hip_joint_indices, :].mean(dim=-2)
         # SciPy/NumPy 不支持 BF16，因此匹配代价固定使用 FP32。
         cost_cpu = torch.cdist(
             pred_hip.float().flatten(0, 1),
@@ -196,8 +190,7 @@ def get_detection_metric(confidence: torch.tensor, gt_mask: torch.tensor, ratio:
 def get_mpjpe(pre: torch.tensor, gt:torch.tensor, type:str='coco') -> torch.tensor:
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
     common_shape = gt.shape
-    if type.lower() == 'coco':
-        num_joint = 17
+    num_joint = len(get_pose_layout(type.lower())['names'])
     assert pre.shape[-2:] == (num_joint, 3), 'pre has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, pre.shape)
     assert gt.shape[-2:] == (num_joint, 3), 'gt has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, gt.shape)
 
@@ -206,19 +199,20 @@ def get_mpjpe(pre: torch.tensor, gt:torch.tensor, type:str='coco') -> torch.tens
     return mpjpe
 
 def get_center_mpjpe(pre: torch.Tensor, gt: torch.Tensor, type: str = 'coco') -> torch.Tensor:
-    """计算预测与 GT 左右髋中心的欧氏距离。"""
+    """计算预测与 GT 骨架根节点中心的欧氏距离。"""
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
-    if type.lower() == 'coco':
-        assert pre.shape[-2:] == (17, 3), f'pre has wrong shape: {pre.shape}'
-    pre_center = pre[..., [11, 12], :].mean(dim=-2)
-    gt_center = gt[..., [11, 12], :].mean(dim=-2)
+    layout = get_pose_layout(type.lower())
+    assert pre.shape[-2:] == (len(layout['names']), 3), f'pre has wrong shape: {pre.shape}'
+    pre_center = pre[..., layout['root_indices'], :].mean(dim=-2)
+    gt_center = gt[..., layout['root_indices'], :].mean(dim=-2)
     return torch.norm(pre_center - gt_center, dim=-1)
 
 def get_relative_pose_mpjpe(pre: torch.Tensor, gt: torch.Tensor, type: str = 'coco') -> torch.Tensor:
-    """分别减去左右髋中心后计算 MPJPE。"""
+    """分别减去骨架根节点中心后计算 MPJPE。"""
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
-    pre_center = pre[..., [11, 12], :].mean(dim=-2, keepdim=True)
-    gt_center = gt[..., [11, 12], :].mean(dim=-2, keepdim=True)
+    root_indices = get_pose_layout(type.lower())['root_indices']
+    pre_center = pre[..., root_indices, :].mean(dim=-2, keepdim=True)
+    gt_center = gt[..., root_indices, :].mean(dim=-2, keepdim=True)
     return get_mpjpe(pre - pre_center, gt - gt_center, type=type)
 
 def get_pampjpe(
@@ -236,8 +230,7 @@ def get_pampjpe(
     """
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
     common_shape = gt.shape
-    if type.lower() == 'coco':
-        num_joint = 17
+    num_joint = len(get_pose_layout(type.lower())['names'])
     assert pre.shape[-2:] == (num_joint, 3), 'pre has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, pre.shape)
     assert gt.shape[-2:] == (num_joint, 3), 'gt has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, gt.shape)
 
@@ -290,9 +283,9 @@ def get_pampjpe(
 def get_bone_length(pre: torch.tensor, gt:torch.tensor, type:str, return_all=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
     common_shape = gt.shape
-    if type.lower() == 'coco':
-        num_joint = 17
-        skeleton = COCO_SKELETON
+    layout = get_pose_layout(type.lower())
+    num_joint = len(layout['names'])
+    skeleton = layout['edges']
     assert pre.shape[-2:] == (num_joint, 3), 'pre has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, pre.shape)
     assert gt.shape[-2:] == (num_joint, 3), 'gt has wrong shape, epxected ({}, 3), but got {}'.format(num_joint, gt.shape)
     pre_bone_length, gt_bone_length = [], []
@@ -312,16 +305,15 @@ def get_bone_length(pre: torch.tensor, gt:torch.tensor, type:str, return_all=Fal
         return bone_length_error
 
 def get_pose_direction(pre: torch.Tensor, gt: torch.Tensor, type: str = 'coco') -> torch.Tensor:
-    """返回三维前向损失 1-cosine，形状为 [...,17,3] 的前导维度。
+    """返回三维前向损失 1-cosine，形状为 [...,J,3] 的前导维度。
 
     沿用 deploy/analysis.py：躯干向上轴与肩髋左右轴叉乘得到前向。
     肩髋坐标非有限或前向长度不大于 1e-8 时返回 NaN，汇总时排除。
     FP16/BF16 输入提升至 FP32，保留梯度。
     """
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
-    if type.lower() != 'coco':
-        raise ValueError(f'Unsupported pose type: {type}')
-    assert pre.shape[-2:] == (17, 3), f'pre has wrong shape: {pre.shape}'
+    layout = get_pose_layout(type.lower())
+    assert pre.shape[-2:] == (len(layout['names']), 3), f'pre has wrong shape: {pre.shape}'
 
     dtype = torch.promote_types(pre.dtype, gt.dtype)
     if dtype in (torch.float16, torch.bfloat16):
@@ -331,7 +323,7 @@ def get_pose_direction(pre: torch.Tensor, gt: torch.Tensor, type: str = 'coco') 
     directions = []
     valid = []
     for pose in (pre, gt):
-        torso = pose[..., [5, 6, 11, 12], :]
+        torso = pose[..., layout['shoulder_indices'] + layout['hip_indices'], :]
         finite = torch.isfinite(torso).all(dim=(-1, -2))
         torso = torch.where(torch.isfinite(torso), torso, 0.0)
         right = (torso[..., 1, :] - torso[..., 0, :]) + (
@@ -349,16 +341,15 @@ def get_pose_direction(pre: torch.Tensor, gt: torch.Tensor, type: str = 'coco') 
     return loss.masked_fill(~(valid[0] & valid[1]), float('nan'))
 
 def get_time_smoothness(pre: torch.Tensor, gt: torch.Tensor, type: str = 'coco') -> torch.Tensor:
-    """输入 [B,T,K,17,3]，返回 [B,T-1,K] 的平均关节位移平方。
+    """输入 [B,T,K,J,3]，返回 [B,T-1,K] 的平均关节位移平方。
 
     保留一阶时间差分定义；GT 仅用于检查输入形状。
     汇总时需要使用相邻两帧有效 mask 的交集。
     """
     assert pre.shape == gt.shape, 'pre and gt do not have same shape'
-    if type.lower() != 'coco':
-        raise ValueError(f'Unsupported pose type: {type}')
-    assert pre.ndim == 5 and pre.shape[-2:] == (17, 3), (
-        f'expected [B,T,K,17,3], got {tuple(pre.shape)}'
+    num_joints = len(get_pose_layout(type.lower())['names'])
+    assert pre.ndim == 5 and pre.shape[-2:] == (num_joints, 3), (
+        f'expected [B,T,K,{num_joints},3], got {tuple(pre.shape)}'
     )
     if pre.dtype in (torch.float16, torch.bfloat16):
         pre = pre.float()

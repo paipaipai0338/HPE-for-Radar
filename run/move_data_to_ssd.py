@@ -17,7 +17,7 @@ SENSOR_DIRS = {
     # "fftGen/PC": ".npy",
     # "dpct低位机/PC": ".npy",
     "camera results/smoothed 3D": ".pkl",
-    "camera results/action label": (".pkl", ".npz"),
+    # "camera results/action label": (".pkl", ".npz"),
 }
 INDEX_NAME = "frames_index.npz"
 CHUNK_SIZE = 16 * 1024 * 1024

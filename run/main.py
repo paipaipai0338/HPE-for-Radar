@@ -19,6 +19,8 @@ from run.utils.build_metric import Metric
 from run.utils.build_experiment import build_experiment, save_radar_config
 from run.utils.process_one_epoch import train_one_epoch, val_one_epoch, prepare_bin_input, get_autocast_dtype, prepare_person_pointcloud, validate_center_xy_in_low, validate_coordinate_frame, adapt_coordinate_frame
 from run.utils.process_one_epoch import predict_valid_person_frames
+from run.utils.process_one_epoch import prepare_pose_target
+from utils.skeleton import get_pose_layout
 from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint, load_init_checkpoint
 from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_warmup
 
@@ -52,6 +54,14 @@ def main():
     # 加载 cfg
     args = parse_args()
     cfg = load_config(args.config)
+    pose_format = cfg['task'].get('pose_format', 'coco')
+    pose_layout = get_pose_layout(pose_format)
+    cfg['task']['pose_format'] = pose_format
+    model_options = cfg['model'].setdefault('options', {})
+    num_joints = len(pose_layout['names'])
+    if model_options.get('num_joints', num_joints) != num_joints:
+        raise ValueError('model.options.num_joints 与 task.pose_format 不一致')
+    model_options['num_joints'] = num_joints
     validate_coordinate_frame(cfg['task'], cfg['data'])
     validate_center_xy_in_low(cfg['task'], cfg['data'])
     precision = str(cfg['task']['precision']).upper()
@@ -91,8 +101,8 @@ def main():
     if cfg['data'].get('pointcloud_source', 'files') == 'skyrelay':
         if cfg['task']['input'] != 'radar_high_pc' or cfg['task']['output'] != 'gt_for_high':
             raise ValueError('Sky 点云基线要求 task.input=radar_high_pc / output=gt_for_high')
-        if cfg['model']['name'] != 'P4Transformer':
-            raise ValueError('Sky 点云基线当前使用 P4Transformer')
+        if cfg['model']['name'] not in ('P4Transformer', 'PointNet', 'PCT', 'VoxelNeXt', 'SetTransformer'):
+            raise ValueError('Sky 点云基线当前支持 P4Transformer / PointNet / PCT / VoxelNeXt / SetTransformer')
 
     if cfg['data'].get('include_kxyz', False) and cfg['model']['name'] != 'ResNet3D':
         raise ValueError('include_kxyz 当前仅支持 ResNet3D')
@@ -124,14 +134,14 @@ def main():
 
         # 获取dataloader
         dataset = {
-            'train': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='train', base_source=cfg['data']['base_source'], split_method=cfg['data']['split_method'], ratio=cfg['data']['ratio'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), val_person_id=cfg['data'].get('val_person_id', '4'), window_stride=cfg['data'].get('window_stride'), train_groups=cfg['data'].get('train_groups')),
-            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], split_method=cfg['data']['split_method'], ratio=cfg['data']['ratio'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), val_person_id=cfg['data'].get('val_person_id', '4'), window_stride=cfg['data'].get('window_stride')),
+            'train': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='train', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), window_stride=cfg['data'].get('window_stride'), train_groups=cfg['data'].get('train_groups'), tracking_bbox_cache_dir=(cfg['data'].get('augmentation', {}).get('bbox_jitter', {}).get('tracking_cache_dir') if cfg['data'].get('augmentation', {}).get('bbox_jitter', {}).get('enabled_train', False) else None)),
+            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), window_stride=cfg['data'].get('window_stride')),
         }
         for split in ('train', 'val'):
             if len(dataset[split]) == 0:
                 raise ValueError(
                     f"{split} 数据集为空，无法训练或验证。请检查 data.root_path、"
-                    "data description.json、split_method 对应的人员/组划分，"
+                    "data description.json 中的 train/val 清单，"
                     "以及数据过滤后是否仍有有效样本。"
                 )
         collate_fn = partial(dataset_collate_fn, max_people=cfg['data']['max_people'])
@@ -166,6 +176,7 @@ def main():
                 cfg['task'].get('matching_for_hungarian', {}).get('bbox_iou_weight', 2.0),
                 pose_matching_by_hip=cfg['task'].get('matching_for_hungarian', {}).get('pose_matching_by_hip', False),
                 pose_confidence_weight=cfg['task'].get('matching_for_hungarian', {}).get('pose_confidence_weight', 0.0),
+                pose_format=pose_format,
             ),
             'val': Metric(
                 cfg['task']['val']['metrics'],
@@ -174,6 +185,7 @@ def main():
                 cfg['task'].get('matching_for_hungarian', {}).get('bbox_iou_weight', 2.0),
                 pose_matching_by_hip=cfg['task'].get('matching_for_hungarian', {}).get('pose_matching_by_hip', False),
                 pose_confidence_weight=cfg['task'].get('matching_for_hungarian', {}).get('pose_confidence_weight', 0.0),
+                pose_format=pose_format,
             ),
         }
         best_metric_name = cfg['task']['train']['best_metric'].lower()
@@ -246,8 +258,9 @@ def main():
 
         write_log(log_path, f"Experiment description: {cfg['experiment']['description']}")
         write_log(log_path, f"Precision: {precision}")
+        write_log(log_path, f"Pose format: {pose_format}, joints={num_joints}")
         if 'pc' in cfg['task']['input']:
-            write_log(log_path, 'Val policy: no ellipse restriction; '
+            write_log(log_path, 'Train/val policy: no ellipse restriction; '
                       'accumulated GT-crop points >= 10 before sampling; continuous valid frames only')
         write_log(log_path, f"Best metric: {best_metric_name}: {best_metric}")
         write_log(log_path, f"Batches per epoch: train={len(dataloader['train'])}, val={len(dataloader['val'])}")
@@ -338,7 +351,7 @@ def main():
 
         # 获取dataloader
         dataset = {
-            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], split_method=cfg['data']['split_method'], ratio=cfg['data']['ratio'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), val_person_id=cfg['data'].get('val_person_id', '4'), window_stride=cfg['data'].get('window_stride')),
+            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), window_stride=cfg['data'].get('window_stride')),
         }
         collate_fn = partial(dataset_collate_fn, max_people=cfg['data']['max_people'])
         dataloader = {
@@ -386,6 +399,8 @@ def main():
                     bin_for_save = model_input['input']
                     gt = {key: samples[cfg['task']['output']][key].to(device)
                           for key in ('padded', 'mask', 'bbox')}
+
+                gt = prepare_pose_target(gt, pose_format)
 
                 if cfg['model']['name'] == 'ResNet3D':
                     model_input.update(bbox=gt['bbox'], bbox_mask=gt['mask'])
@@ -495,6 +510,7 @@ def main():
         )
 
         results = {
+            'pose_format': pose_format,
             'input_key': cfg['task']['input'],
             'target_key': cfg['task']['output'],
             'pose_pre': pose_pre,

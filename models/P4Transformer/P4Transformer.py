@@ -252,8 +252,8 @@ class P4Transformer(nn.Module):
 
         if not isinstance(center_output_on_hip, bool):
             raise TypeError('center_output_on_hip must be bool')
-        if center_output_on_hip and num_joints != 17:
-            raise ValueError('Hip-centered output requires the 17 COCO joints')
+        if center_output_on_hip and num_joints not in (17, 21):
+            raise ValueError('Hip-centered output requires COCO-17 or MOCAP-21 joints')
         self.center_output_on_hip = center_output_on_hip
 
         self.tube_embedding = P4DConv(in_planes=feat_dim, mlp_planes=[dim], mlp_batch_norm=[False], mlp_activation=[False],
@@ -346,7 +346,8 @@ class P4Transformer(nn.Module):
         pose = self.mlp_head_pose(output).view(B, T, 1, self.num_joints, 3)
         if self.center_output_on_hip:
             pose = pose.float()
-            pose = pose - pose[..., [11, 12], :].mean(dim=-2, keepdim=True)
+            root_indices = [0] if self.num_joints == 21 else [11, 12]
+            pose = pose - pose[..., root_indices, :].mean(dim=-2, keepdim=True)
 
         pre = {
             'pose': pose,

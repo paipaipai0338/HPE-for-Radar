@@ -16,6 +16,7 @@ from metrics.pose import (
 from metrics.detection import get_hungarian_match, get_bbox_iou, get_bbox_l1, get_objectness
 from metrics.RPM2_loss import get_center_heatmap_loss, get_box_size_loss, get_center_offset_loss, get_pose_loss
 from metrics.HRRadarPose_loss import get_body_center_loss, get_keypoint_offset_loss
+from utils.skeleton import get_pose_layout
 
 def _masked_mean_over_people(metric, mask):
     # metric, mask: [B, T, K]
@@ -44,7 +45,10 @@ class Metric:
         matching_bbox_iou_weight,
         pose_matching_by_hip=False,
         pose_confidence_weight=0.0,
+        pose_format='coco',
     ):
+        self.pose_format = pose_format
+        self.pose_layout = get_pose_layout(pose_format)
         if not isinstance(pose_matching_by_hip, bool):
             raise TypeError("pose_matching_by_hip must be bool")
         self.group_labels = json.loads(
@@ -167,6 +171,7 @@ class Metric:
                 gt_mask,
                 confidence=confidence_pre,
                 confidence_weight=self.pose_confidence_weight,
+                hip_joint_indices=self.pose_layout['root_indices'],
                 pose_valid=pose_valid,
             )
             pose_pre_for_metric, confidence_target = apply_pose_matches(
@@ -198,14 +203,14 @@ class Metric:
                 # Full-GT evaluation retains missing predictions instead of dropping their targets.
                 metric = self.fun_call_dict[name](
                     pose_pre_for_metric.masked_fill(~evaluation_mask[..., None, None], 0),
-                    pose_gt.masked_fill(~evaluation_mask[..., None, None], 0), type='coco'
+                    pose_gt.masked_fill(~evaluation_mask[..., None, None], 0), type=self.pose_format
                 )
                 if group_ids is not None and (name == 'all_gt_mpjpe' or (
                         name == 'positive_mpjpe' and 'all_gt_mpjpe' not in self.cfg_metrics) or (
                         name == 'relative_pose_mpjpe'
                         and not {'all_gt_mpjpe', 'positive_mpjpe'} & self.cfg_metrics.keys())):
                     centered_errors = get_relative_pose_mpjpe(
-                        pose_pre_for_metric.detach(), pose_gt.detach(), type='coco')
+                        pose_pre_for_metric.detach(), pose_gt.detach(), type=self.pose_format)
                     self._record_group_mpjpe(
                         metric.detach(), evaluation_mask, group_ids, group_gt_low, centered_errors)
                 metric_value, metric_num = _masked_mean_over_people(
@@ -219,7 +224,7 @@ class Metric:
             elif name == 'pose_direction':
                 assert pose_pre is not None, 'pose_pre is None'
                 metric = self.fun_call_dict[name](
-                    pose_pre_for_metric, pose_gt, type='coco'
+                    pose_pre_for_metric, pose_gt, type=self.pose_format
                 )
                 metric_value, metric_num = _masked_mean_over_people(
                     metric, gt_mask.bool() & torch.isfinite(metric)
@@ -227,7 +232,7 @@ class Metric:
             elif name == 'time_smoothness':
                 assert pose_pre is not None, 'pose_pre is None'
                 metric = self.fun_call_dict[name](
-                    pose_pre_for_metric, pose_gt, type='coco'
+                    pose_pre_for_metric, pose_gt, type=self.pose_format
                 )
                 metric_value, metric_num = _masked_mean_over_people(
                     metric, gt_mask[:, 1:].bool() & gt_mask[:, :-1].bool()
@@ -238,7 +243,7 @@ class Metric:
                 metric = self.fun_call_dict[name](
                     pose_pre,
                     torch.zeros_like(pose_pre),
-                    type='coco',
+                    type=self.pose_format,
                 )
                 metric_value, metric_num = _masked_mean_over_people(
                     metric,

@@ -1,0 +1,15 @@
+# PointNet per-frame single-person pose regression.
+num_joints: 17
+feat_dim: 2
+# 逐点特征层；末层宽度决定特征 T-Net 矩阵大小（默认 64×64）。
+local_channels: [64, 64]
+# 特征变换后的逐点编码层；末层宽度为全局池化特征维度。
+encoder_channels: [64, 128, 512]
+# 姿态回归头隐藏层；最终输出维度自动取 num_joints * 3。
+head_channels: [256, 256]
+# 两个 T-Net 共用的内部宽度配置，权重各自独立。
+tnet_mlp_channels: [64, 128, 512]
+tnet_fc_channels: [512, 256]
+dropout: 0.1
+# Mean per-valid-frame 0.5 * ||T T^T - I||_F^2, added during training.
+transform_reg_weight: 0.001

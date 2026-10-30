@@ -1,0 +1,2 @@
+# Huawei training monitor; application files and output stay under supervise/.
+*/10 * * * * /usr/bin/python3 -B /home/pai/Huawei/supervise/refresh.py >> /home/pai/Huawei/supervise/monitor.log 2>&1

@@ -8,6 +8,7 @@ INFERENCE_TRAIN_CONFIG 可显式指定与权重配套的训练配置。
 INFERENCE_PACKED_DATA_ROOT 可覆盖 SSD 根目录。
 仅对连续 T 帧有效的人体窗口取末帧；缺帧后重新等待 T 帧。
 使用 last.pth；点数不足持续保留可信骨架，点数充足但突变时离线三帧确认/回填。
+骨架转到低位机重力坐标系后判决站立/行走、坐/蹲、躺卧、其他，分别标注 GT/Raw/Guarded 行为。
 默认只输出终端指标；--save-results / --save-raw-cache 显式启用结果保存。
 """
 
@@ -34,12 +35,13 @@ from tqdm import tqdm
 
 from run.utils.set_device import set_device
 from run.utils.load_config import load_config
+from preprocess.actionprocess import LABEL_NAMES, classify_actions
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT_PATH = Path("/mnt/huawei")
 PACKED_DATA_ROOT = Path(os.environ.get("INFERENCE_PACKED_DATA_ROOT", "/mnt/ssd/Huawei"))
-DATE = os.environ.get("INFERENCE_DATE", "20261016")
-GROUP = os.environ.get("INFERENCE_GROUP", "group_014")
+DATE = os.environ.get("INFERENCE_DATE", "20261023")
+GROUP = os.environ.get("INFERENCE_GROUP", "group_033")
 VISUALIZE = True   # False 自动跑完整组并输出 MPJPE； True WebAgg 逐帧交互。
 MODEL_POSE_PATH = PROJECT_ROOT / "experiments/P4Transformer/20261019_161657"
 TRAIN_CONFIG_PATH = Path(os.environ.get("INFERENCE_TRAIN_CONFIG", str(MODEL_POSE_PATH / "config" / "config.yaml")))
@@ -59,7 +61,7 @@ METRIC_REFERENCE_MM = 150.0
 ACCEPTANCE_CENTER_XY = np.array([2.0, 0.0], dtype=np.float32)
 ACCEPTANCE_RADII_XY = np.array([1.6, 2.4], dtype=np.float32)
 ACCEPTANCE_COLOR = "#FFF2CC"
-ACTION_LABELS = ("stand", "sit_squat", "lie", "other")
+ACTION_LABELS = LABEL_NAMES
 ACTION_COLORS = ("#4daf4a", "#377eb8", "#e41a1c", "#984ea3")
 
 
@@ -585,8 +587,18 @@ class SelectedGroupVisualizer:
                       gt_boxes=np.asarray(gt_boxes, dtype=np.float32).reshape(-1, 6),
                       gt_selected_mask=gt_selected_mask)
         if self.visualize and not self.defer_visual_guarding:
-            guard_pose_records(self.records, "gt_crop_")
+            self.postprocess_poses()
         return record, points, gt_selected_mask
+
+    def postprocess_poses(self):
+        """时序回填完成后统一判决，标签顺序分别对齐 raw/guarded 人员索引。"""
+        guard_pose_records(self.records, "gt_crop_")
+        for record in self.records:
+            for suffix in ("_raw", ""):
+                poses_low = transform_points(record[f"gt_crop_poses{suffix}"], *self.high_to_low)
+                result = classify_actions(poses_low)
+                record[f"gt_crop_actions{suffix}"] = result.labels
+                record[f"gt_crop_action_valid{suffix}"] = result.valid
 
     def load_gt(self, record):
         if "gt" not in record:
@@ -769,7 +781,7 @@ class SelectedGroupVisualizer:
         legacy_guard_pose_records(self.records, "gt_crop_")
         for record in self.records:
             record["gt_crop_poses_legacy"] = record["gt_crop_poses"].copy()
-        guard_pose_records(self.records, "gt_crop_")
+        self.postprocess_poses()
         self.visualization_mpjpe = None
         regions = {}
         stages = ("raw", "legacy", "raw_kept", "legacy_kept", "guarded")
@@ -1092,17 +1104,43 @@ class SelectedGroupVisualizer:
             (self.axes[0, 2], False, "Training pose: all people"),
         ):
             raw = record["gt_crop_poses_raw"]
+            raw_people = record["gt_crop_pose_indices"]
+            raw_actions = record["gt_crop_actions_raw"]
+            raw_action_valid = record["gt_crop_action_valid_raw"]
             guarded = record["gt_crop_poses"]
+            people = record["gt_crop_pose_track_ids"]
+            actions = record["gt_crop_actions"]
+            action_valid = record["gt_crop_action_valid"]
             target = gt
             if inside_only:
-                raw = raw[np.isin(record["gt_crop_pose_indices"], inside_ids)]
-                guarded = guarded[np.isin(record["gt_crop_pose_track_ids"], inside_ids)]
+                raw_selected = np.isin(raw_people, inside_ids)
+                raw, raw_people = raw[raw_selected], raw_people[raw_selected]
+                raw_actions, raw_action_valid = raw_actions[raw_selected], raw_action_valid[raw_selected]
+                selected = np.isin(people, inside_ids)
+                guarded, people = guarded[selected], people[selected]
+                actions, action_valid = actions[selected], action_valid[selected]
                 target = metric_gt
+            target_poses = target if has_gt else target[:0]
+            target_actions = classify_actions(transform_points(target_poses, rotation, translation))
             if has_gt:
                 draw_human_pose(ax, transform_points(target, rotation, translation), "green", "Camera GT")
             draw_human_pose(ax, transform_points(guarded, rotation, translation), "magenta", "Guarded")
             # Raw 后画为空心关节和虚线，重合时仍能看见两条支路。
             draw_human_pose(ax, transform_points(raw, rotation, translation), "orange", "Raw")
+            for source, poses, ids, labels, valid_mask, z_offset in (
+                ("GT", target_poses, inside_ids if inside_only else np.arange(len(gt)),
+                 target_actions.labels, target_actions.valid, .24),
+                ("Guarded", guarded, people, actions, action_valid, .08),
+                ("Raw", raw, raw_people, raw_actions, raw_action_valid, -.08),
+            ):
+                for pose, person, action, valid in zip(
+                    transform_points(poses, rotation, translation), ids, labels, valid_mask
+                ):
+                    if valid:
+                        class_index = int(action.argmax())
+                        position = pose[[11, 12]].mean(axis=0) + [0, 0, z_offset]
+                        ax.text(*position, f"P{person} {source}: {ACTION_LABELS[class_index]}",
+                                color=ACTION_COLORS[class_index], fontsize=9)
             metrics = self.get_visualization_mpjpe()[inside_only]
             averages = metrics["mpjpe"]
             formatted = ["N/A" if value is None else f"{value:.1f}" for value in averages]
@@ -1134,7 +1172,7 @@ class SelectedGroupVisualizer:
             self.defer_visual_guarding = False
         self.infer_gt_raw_as_training()
         print("推理完成，正在执行离线骨架时序判决……", flush=True)
-        guard_pose_records(self.records, "gt_crop_")
+        self.postprocess_poses()
         print("时序判决完成，正在准备 WebAgg……", flush=True)
 
     def on_slider(self, value):
@@ -1158,7 +1196,41 @@ class SelectedGroupVisualizer:
 
 
 def self_test():
-    """无需权重/GPU 的指标、时序处理和绘图自检。"""
+    """无需权重/GPU 的指标、时序处理、行为判决和绘图自检。"""
+    standing = np.zeros((17, 3), dtype=np.float32)
+    standing[:5, 2] = 1.7
+    standing[[5, 6], 2] = 1.4
+    standing[[7, 8], 2] = 1.15
+    standing[[9, 10, 11, 12], 2] = .9
+    standing[[13, 14], 2] = .45
+    standing[1::2, 1] = -.1
+    standing[2::2, 1] = .1
+    lying = standing[:, [2, 1, 0]]
+    action_app = SelectedGroupVisualizer.__new__(SelectedGroupVisualizer)
+    rotation = np.array([[0., 0., 1.], [0., 1., 0.], [-1., 0., 0.]])
+    translation = np.array([2., -1., .5])
+    action_app.high_to_low = (rotation, translation)
+    low_poses = np.stack((standing, lying, np.full_like(standing, np.nan)))
+    action_app.records = []
+    for i, low in enumerate((low_poses, lying[None], low_poses[:0])):
+        people = np.array(([4, 9, 12], [4], [])[i], dtype=int)
+        action_app.records.append(dict(
+            path=f"100_{i * 100000000:09d}.npy",
+            gt_crop_poses_raw=(low - translation) @ rotation,
+            gt_crop_pose_indices=people,
+            dynamic_point_counts={int(p): 100 if i == 0 else 0 for p in people},
+            total_point_counts={int(p): 100 for p in people},
+        ))
+    action_app.postprocess_poses()
+    first, held, empty = action_app.records
+    np.testing.assert_array_equal(first["gt_crop_actions_raw"].argmax(axis=-1), [0, 2, 3])
+    np.testing.assert_array_equal(first["gt_crop_action_valid_raw"], [True, True, False])
+    np.testing.assert_array_equal(first["gt_crop_pose_track_ids"], [4, 9])
+    np.testing.assert_array_equal(first["gt_crop_actions"].argmax(axis=-1), [0, 2])
+    assert held["gt_crop_actions_raw"][0].argmax() == 2
+    assert held["gt_crop_actions"][0].argmax() == 0
+    assert empty["gt_crop_actions"].shape == empty["gt_crop_actions_raw"].shape == (0, 4)
+    assert empty["gt_crop_action_valid"].shape == (0,)
     gt = np.zeros((1, 17, 3), dtype=np.float32)
     pred = gt.copy()
     pred[..., 1] = .1
@@ -1282,7 +1354,11 @@ def self_test():
                       gt_boxes=np.array([[0, -1, -1, 4, 1, 1]]),
                       gt_crop_poses_raw=empty_poses, gt_crop_poses=empty_poses,
                       gt_crop_pose_indices=np.empty(0, dtype=int),
-                      gt_crop_pose_track_ids=np.empty(0, dtype=int))
+                      gt_crop_pose_track_ids=np.empty(0, dtype=int),
+                      gt_crop_actions_raw=np.empty((0, len(ACTION_LABELS)), dtype=np.float32),
+                      gt_crop_action_valid_raw=np.empty(0, dtype=bool),
+                      gt_crop_actions=np.empty((0, len(ACTION_LABELS)), dtype=np.float32),
+                      gt_crop_action_valid=np.empty(0, dtype=bool))
         app.records = [record]
         app.get_visualization_mpjpe = lambda: {
             inside: {"mpjpe": [None, None], "centered": [None, None]}
@@ -1309,6 +1385,29 @@ def self_test():
                                       "Selected static (tag=2..7): 0"]
                 assert sum(len(c._offsets3d[0]) for c in ax.collections
                            if hasattr(c, "_offsets3d")) == expected_count
+            record["gt_crop_poses"] = np.stack((standing + [2, 0, 0], lying + [8, 0, 0]))
+            record["gt_crop_pose_track_ids"] = np.array([0, 7])
+            result = classify_actions(record["gt_crop_poses"])
+            record["gt_crop_actions"], record["gt_crop_action_valid"] = result.labels, result.valid
+            record["gt_crop_poses_raw"] = np.stack((standing + [8, 0, 0], lying + [2, 0, 0],
+                                                     np.full_like(standing, np.nan)))
+            record["gt_crop_pose_indices"] = np.array([7, 0, 9])
+            result = classify_actions(record["gt_crop_poses_raw"])
+            record["gt_crop_actions_raw"], record["gt_crop_action_valid_raw"] = result.labels, result.valid
+            record["gt"] = np.stack((lying + [2, 0, 0], standing + [8, 0, 0],
+                                     np.full_like(standing, np.nan)))
+            record["gt_boxes"] = np.repeat(record["gt_boxes"], 3, axis=0)
+            app.show_frame(0)
+            assert [text.get_text() for text in app.axes[0, 1].texts] == [
+                "P0 GT: lie", "P0 Guarded: stand", "P0 Raw: lie"]
+            assert [text.get_text() for text in app.axes[0, 2].texts] == [
+                "P0 GT: lie", "P1 GT: stand",
+                "P0 Guarded: stand", "P7 Guarded: lie", "P7 Raw: stand", "P0 Raw: lie"]
+            record.update(gt=empty_poses, has_gt=False, gt_boxes=np.empty((0, 6)))
+            app.show_frame(0)
+            assert not app.axes[0, 1].texts
+            assert [text.get_text() for text in app.axes[0, 2].texts] == [
+                "P0 Guarded: stand", "P7 Guarded: lie", "P7 Raw: stand", "P0 Raw: lie"]
         finally:
             plt.close(app.fig)
     print("self-test passed")
@@ -1346,13 +1445,17 @@ def main():
         for index in range(frame_count):
             app.infer_frame(index)
         app.infer_gt_raw_as_training()
-        guard_pose_records(app.records, "gt_crop_")
+        app.postprocess_poses()
         for index in range(frame_count):
             app.show_frame(index)
             record = app.records[index]
             assert np.isfinite(record["gt_crop_poses"]).all()
             assert app.axes.shape == (1, 3)
-            print(f"frame {index}: gt_poses={len(record['gt_crop_poses'])}")
+            actions = {int(person): ACTION_LABELS[int(action.argmax())]
+                       for person, action, valid in zip(record["gt_crop_pose_track_ids"],
+                                                       record["gt_crop_actions"],
+                                                       record["gt_crop_action_valid"]) if valid}
+            print(f"frame {index}: gt_poses={len(record['gt_crop_poses'])}, actions={actions}")
         app.fig.canvas.draw()
         # 回看不能推进历史状态或再次执行模型。
         record_count = len(app.records)

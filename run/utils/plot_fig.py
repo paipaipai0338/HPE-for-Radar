@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 
 from metrics.detection import paired_axis_aligned_iou_3d
-from utils.COCO import COCO_SKELETON
+from utils.skeleton import get_pose_layout
 
 
 BOX_EDGES = (
@@ -72,9 +72,15 @@ def _draw_pose(
     mpjpe=None,
     actions=None,
     action_labels=DEFAULT_ACTION_LABELS,
+    pose_format=None,
 ):
     if poses is None:
         return
+    if pose_format is None:
+        pose_format = 'mocap' if poses.shape[-2] == 21 else 'coco'
+    layout = get_pose_layout(pose_format)
+    if poses.shape[-2:] != (len(layout['names']), 3):
+        raise ValueError(f'pose shape does not match {pose_format}: {poses.shape}')
     if actions is not None and poses.shape[0] != actions.shape[0]:
         raise ValueError(
             f'{prefix} pose/action person dimensions differ: '
@@ -99,7 +105,7 @@ def _draw_pose(
             color=color,
             label=label,
         )
-        for joint_a, joint_b in COCO_SKELETON:
+        for joint_a, joint_b in layout['edges']:
             ax.plot(
                 [joints[joint_a, 0], joints[joint_b, 0]],
                 [joints[joint_a, 1], joints[joint_b, 1]],

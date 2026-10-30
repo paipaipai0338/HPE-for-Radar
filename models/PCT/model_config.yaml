@@ -1,0 +1,13 @@
+# PCT Point_Transformer2 backbone + per-frame pose regression.
+num_joints: 17
+feat_dim: 2
+stem_channels: 64
+local_channels: [128, 256]
+# 适配 200 点裁剪；参考仓库 1024 点输入使用 [512, 256]。
+# 少于目标数量时重复有效点，空帧直接输出零。
+npoints: [64, 16]
+nsample: 32
+attention_layers: 4
+fusion_channels: 512
+head_channels: [512, 256]
+dropout: 0.5

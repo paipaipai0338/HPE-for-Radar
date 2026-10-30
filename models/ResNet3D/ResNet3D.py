@@ -61,8 +61,8 @@ class ResNet3D(nn.Module):
         self.roi_shift_m = roi_shift_m
         if not math.isfinite(roi_mirror_probability) or not 0 <= roi_mirror_probability <= 1:
             raise ValueError('roi_mirror_probability must be finite and within [0,1]')
-        if roi_mirror_probability and num_joints != 17:
-            raise ValueError('ROI mirroring requires the COCO 17-joint ordering')
+        if roi_mirror_probability and num_joints not in (17, 21):
+            raise ValueError('ROI mirroring requires COCO-17 or MOCAP-21 joints')
         self.roi_mirror_probability = roi_mirror_probability
         if not isinstance(roi_power_gain, bool):
             raise TypeError('roi_power_gain must be a boolean')
@@ -183,6 +183,9 @@ class ResNet3D(nn.Module):
         if mirrored is not None:
             # Undo the local Y reflection and restore anatomical left/right labels.
             permutation = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+            if self.num_joints == 21:
+                permutation = [0, 1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 7, 8, 9, 10,
+                               18, 19, 20, 15, 16, 17]
             unmirrored = pose[..., permutation, :] * pose.new_tensor([1., -1., 1.])
             pose = torch.where(mirrored[:, None, None, None, None], unmirrored, pose)
         confidence = torch.sigmoid(self.confidence_head(pooled)).reshape(instances, frames, 1)

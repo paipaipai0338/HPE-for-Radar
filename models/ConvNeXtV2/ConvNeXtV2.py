@@ -144,121 +144,14 @@ class ConvNeXtV2(nn.Module):
         return {"pose": pose}
 
 if __name__ == "__main__":
-    from functools import partial
-    from pathlib import Path
-
-    import matplotlib
-    matplotlib.use("Agg")
-    from matplotlib import pyplot as plt
-
-    from data2datasets.dataset_for_all_task import HPE_Dataset, collate_fn
-    from preprocess.radarprocess import Radar_Config
+    from models.utils.profile_utils import profile_model
     from run.utils.build_model import build_model
-    from run.utils.load_config import load_config
-    from utils.COCO import COCO_SKELETON
+    from run.utils.set_device import set_device
 
-    project_root = Path(__file__).resolve().parents[2]
-    cfg = load_config(project_root / "run/config.yaml")
-    data_cfg = cfg["data"]
-    radar_config = Radar_Config()
-    for key, value in cfg["radar"].items():
-        setattr(radar_config, key, value)
-    radar_config.__post_init__()
-
-    dataset = HPE_Dataset(
-        root_path=data_cfg["root_path"],
-        sensor_config=data_cfg["sensor_config"],
-        mode="val",
-        base_source=data_cfg["base_source"],
-        split_method=data_cfg["split_method"],
-        ratio=data_cfg["ratio"],
-        T=data_cfg["T"],
-        preload_cache=False,
-        enable_action=False,
-        enable_rotation=False,
-        radar_config=radar_config,
-        packed_data_root=data_cfg.get("packed_data_root"),
-        max_groups=1,
-    )
-    num_examples = min(4, len(dataset))
-    samples = partial(
-        collate_fn,
-        max_points=data_cfg["max_points"],
-        max_people=data_cfg["max_people"],
-    )([dataset[index] for index in range(num_examples)])
-    model = build_model("ConvNeXtV2").eval()
-
-    points = samples["radar_high_pc"]["padded"][:, -1]
-    point_mask = samples["radar_high_pc"]["mask"][:, -1]
-    gt_pose = samples["gt_for_high"]["padded"][:, -1]
-    gt_mask = samples["gt_for_high"]["mask"][:, -1]
-    xyz_limits = model.xyz_limits.cpu().tolist()
-    planes = (
-        ("XY", 0, 1),
-        ("YZ", 1, 2),
-        ("XZ", 0, 2),
-    )
-
-    with torch.no_grad():
-        views = model.pc_to_3view_fixed(
-            points[:, :, :3], point_mask
-        ).cpu()
-
-    fig = plt.figure(figsize=(16, 4 * num_examples))
-    for sample_idx in range(num_examples):
-        for plane_idx, (name, horizontal_axis, vertical_axis) in enumerate(planes):
-            ax = fig.add_subplot(num_examples, 4, sample_idx * 4 + plane_idx + 1)
-            ax.imshow(
-                views[sample_idx, plane_idx].T,
-                extent=(
-                    *xyz_limits[horizontal_axis],
-                    *xyz_limits[vertical_axis],
-                ),
-                origin="lower",
-                aspect="auto",
-                cmap="gray_r",
-            )
-            for person_idx in gt_mask[sample_idx].nonzero(as_tuple=True)[0]:
-                joints = gt_pose[sample_idx, person_idx].cpu()
-                color = plt.get_cmap("tab10")(int(person_idx) % 10)
-                ax.scatter(
-                    joints[:, horizontal_axis], joints[:, vertical_axis],
-                    s=10, color=color,
-                )
-                for joint_a, joint_b in COCO_SKELETON:
-                    ax.plot(
-                        joints[[joint_a, joint_b], horizontal_axis],
-                        joints[[joint_a, joint_b], vertical_axis],
-                        color=color, linewidth=1,
-                    )
-            ax.set(
-                title=f"Sample {sample_idx} {name} projection + GT",
-                xlabel="XYZ"[horizontal_axis] + " (m)",
-                ylabel="XYZ"[vertical_axis] + " (m)",
-            )
-
-        ax = fig.add_subplot(num_examples, 4, sample_idx * 4 + 4, projection="3d")
-        for person_idx in gt_mask[sample_idx].nonzero(as_tuple=True)[0]:
-            joints = gt_pose[sample_idx, person_idx].cpu()
-            color = plt.get_cmap("tab10")(int(person_idx) % 10)
-            ax.scatter(joints[:, 0], joints[:, 1], joints[:, 2], s=10, color=color)
-            for joint_a, joint_b in COCO_SKELETON:
-                ax.plot(
-                    joints[[joint_a, joint_b], 0],
-                    joints[[joint_a, joint_b], 1],
-                    joints[[joint_a, joint_b], 2],
-                    color=color, linewidth=1,
-                )
-        ax.set(
-            title=f"Sample {sample_idx} GT for high",
-            xlabel="X (m)", ylabel="Y (m)", zlabel="Z (m)",
-        )
-        ax.set_xlim(xyz_limits[0])
-        ax.set_ylim(xyz_limits[1])
-        ax.set_zlim(xyz_limits[2])
-
-    output_path = Path(__file__).with_name("projection_gt_for_high.png")
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=160)
-    plt.close(fig)
-    print(f"Saved: {output_path}")
+    device = set_device(0)
+    model = build_model("ConvNeXtV2").to(device)
+    x = {
+        "input": torch.zeros((1, 16, 200, 5), device=device),
+        "mask": torch.ones((1, 16, 200), dtype=torch.bool, device=device),
+    }
+    profile_model("ConvNeXtV2", model, x)

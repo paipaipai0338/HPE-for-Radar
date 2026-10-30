@@ -12,16 +12,12 @@ data:
     pointcloud_source: files
     # 时钟基准
     base_source: radar_high_pc
-    # train / total
-    ratio: 0.7
     # consist time step
     T: 16
     # 窗口起点每次前进的帧数，训练和验证共用
     window_stride: 1
     # 每帧点云额外拼接同组前 acc_frame 帧，0 表示不积累
     acc_frame: 3
-    # 数据划分方式
-    split_method: person
     # 单人裁剪后固定点数；不足重复采样，空帧保持零和无效 mask
     person_max_points: 200
     # 每帧估计最大人数
@@ -31,6 +27,8 @@ data:
     preload_cache: true
     # 是否获取行为标签
     enable_action: false
+    # 是否保留俯卧：false 按 GT 骨架剔除含俯卧的完整窗口（含输入历史），train/val 均生效
+    include_prone: false
     augmentation:
         radar_rotation:
             enabled_train: true
@@ -47,6 +45,24 @@ data:
             enabled_val: false
             # 固定采样后，每帧每个点独立丢弃的概率
             probability: 0.1
+        bbox_jitter:
+            enabled_train: true
+            enabled_val: false
+            # 每人每帧独立选择和采样扰动
+            probability: 0.7
+            # 在选中的帧内，可用跟踪框直接作为扰动结果的概率
+            tracking_probability: 0.5
+            tracking_cache_dir: /home/pai/Huawei/finetune/expanded_20261025/full_cache
+            # 当前任务坐标系 XYZ 各轴的最大绝对平移，单位 m
+            translation_max_m: [0.10, 0.10, 0.10]
+            # 各轴完整边长独立缩放
+            scale_range: [0.90, 1.10]
+            # 绕框局部 XYZ 轴旋转的最大绝对角度
+            rotation_max_deg: [3.0, 3.0, 3.0]
+            # 固定采样和 dropout 前，每帧点集的交集 / 并集
+            min_point_iou: 0.70
+            # 每帧独立重试，耗尽后该帧保留原框
+            max_attempts: 4
     # 获取数据配置
     sensor_config:
         lidar: false
@@ -78,6 +94,8 @@ radar:
     angle_method: bartlett
 
 task:
+    # 骨架格式：coco（17 点）/ mocap（21 点）；自动设置模型输出点数
+    pose_format: mocap
     coordinate: high  # 最终训练坐标系 high / low；使用原始标定，保留增广
     stage: train
     input: radar_high_pc

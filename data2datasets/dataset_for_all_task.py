@@ -1,4 +1,3 @@
-import random
 from collections import OrderedDict
 import io
 import sys
@@ -30,6 +29,7 @@ from preprocess.radarprocess import (
 from preprocess.lidarprocess import get_lidar_data
 from preprocess.realsenseprocess import get_realsense_data
 from preprocess.gtprocess import get_gt_boxes, get_gt_data
+from preprocess.actionprocess import classify_actions, LIE
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,7 @@ def _collate_base(batch, max_points=None, max_people=4):
         'gt': (max_people, (17, 3), False),
         'gt_for_high': (max_people, (17, 3), False),
         'gt_for_low': (max_people, (17, 3), False),
+        'tracking_bbox': (max_people, (6,), False),
     }
     expected_keys = set(batch[0])
     for sample_idx, sample in enumerate(batch):
@@ -250,6 +251,18 @@ def collate_fn(
                 0.0,
             )
 
+    if 'tracking_bbox' in collated:
+        tracking = collated.pop('tracking_bbox')
+        cloud = collated['radar_high_pc']
+        boxes = tracking['padded'].permute(0, 2, 1, 3)
+        xyz = cloud['padded'][:, None, ..., :3]
+        valid = tracking['mask'] & collated['gt_for_high']['mask']
+        valid &= (tracking['padded'][..., 3:] > tracking['padded'][..., :3]).all(-1)
+        # 点顺序在场景变换中保持不变，预先框选可精确保留旋转后的跟踪框归属。
+        cloud['tracking_mask'] = ((xyz >= boxes[..., :3].unsqueeze(-2)) &
+                                 (xyz <= boxes[..., 3:].unsqueeze(-2))).all(-1)
+        cloud['tracking_mask'] &= cloud['mask'][:, None] & valid.permute(0, 2, 1)[..., None]
+
     if 'group_id' in batch[0]:
         collated['group_id'] = [sample['group_id'] for sample in batch]
     return collated
@@ -263,6 +276,7 @@ class HPE_Dataset(Dataset):
     DEFAULT_BAD_BIN_FRAMES_PATH = Path(__file__).with_name(
         'bad_bin_frames.json'
     )
+    DEFAULT_BAD_PC_FRAMES_PATH = Path(__file__).with_name('bad_pc_frames.json')
     
     def __init__(
         self,
@@ -270,8 +284,6 @@ class HPE_Dataset(Dataset):
         sensor_config=None,
         mode='train',
         base_source='radar_high_bin',
-        split_method='group',
-        ratio=0.7,
         T=8,
         acc_frame=0,
         preload_cache=True,
@@ -286,17 +298,20 @@ class HPE_Dataset(Dataset):
         include_kxyz: bool = False,
         window_stride: Optional[int] = None,
         train_groups: Optional[Dict[str, List[str]]] = None,
-        val_person_id: str = "4",
+        include_prone: bool = True,
+        tracking_bbox_cache_dir: Optional[Union[str, Path]] = None,
+        bad_pc_frames_path: Optional[Union[str, Path]] = DEFAULT_BAD_PC_FRAMES_PATH,
     ):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
-        split_method = split_method.lower()
-        assert split_method in ['person', 'group', 'sequence'], 'split_method has unmatched method'
         if not isinstance(enable_action, bool):
             raise TypeError(
                 "enable_action 必须为 bool，"
                 f"实际为 {type(enable_action).__name__}"
             )
+        if not isinstance(include_prone, bool):
+            raise TypeError('include_prone 必须为 bool')
+        self.include_prone = include_prone
         if isinstance(acc_frame, bool) or not isinstance(acc_frame, int) or acc_frame < 0:
             raise ValueError("acc_frame 必须为非负整数")
 
@@ -321,6 +336,13 @@ class HPE_Dataset(Dataset):
         if include_kxyz and (base_source != 'radar_high_bin' or not sensor_config or not sensor_config.get(base_source)):
             raise ValueError('KXYZ 当前要求启用 radar_high_bin 并作为 base_source')
         self.pointcloud_source = pointcloud_source
+        self.tracking_bbox_cache_dir = None if tracking_bbox_cache_dir is None else Path(tracking_bbox_cache_dir)
+        self.tracking_boxes = {}
+        if self.tracking_bbox_cache_dir is not None:
+            if not self.tracking_bbox_cache_dir.is_dir():
+                raise ValueError(f'跟踪框缓存目录不存在: {self.tracking_bbox_cache_dir}')
+            if mode != 'train' or base_source != 'radar_high_pc' or pointcloud_source != 'files':
+                raise ValueError('跟踪框增广仅支持训练时的 radar_high_pc files 输入')
         self.sky_history = 0
         if pointcloud_source == 'skyrelay':
             from preprocess.radarpreprocess_skyrelay import MAX_FRAME_NUM
@@ -336,14 +358,12 @@ class HPE_Dataset(Dataset):
         self.mode = mode
         self.enable_action = enable_action
         self.radar_config = radar_config
-        self.bad_bin_frames = self._load_bad_bin_frames(
-            bad_bin_frames_path
-        )
+        self.bad_bin_frames = self._load_bad_frames(bad_bin_frames_path, {'numeric', 'length'})
+        self.bad_pc_frames = self._load_bad_frames(bad_pc_frames_path, {'missing_arms'})
         self.packed_data_root = (
             None if packed_data_root is None else Path(packed_data_root)
         )
         self.base_source = base_source
-        self.ratio = ratio
         self.T = T
         self.acc_frame = acc_frame
         self.action_label = [
@@ -367,10 +387,9 @@ class HPE_Dataset(Dataset):
         self.decoded_bin_cache = OrderedDict()
         self.packed_bin_cache_pid = os.getpid()
 
-        # 数据范围由 JSON 配置及运行时覆盖项决定。
+        # mode 只选择 JSON 清单，不再执行划分。
         self.meta_info = get_meta_info(
-            split_method=split_method, mode=mode,
-            val_person_id=val_person_id, train_groups=train_groups,
+            mode=mode, train_groups=train_groups,
         )
         if max_groups is not None:
             if max_groups <= 0:
@@ -394,19 +413,6 @@ class HPE_Dataset(Dataset):
                 if person_data
             }
         
-        if split_method == 'group':
-            # 先分组再对齐，避免 train/val 各自处理全量数据。
-            rng = random.Random(42)
-            for person_data in self.meta_info.values():
-                for entry in person_data:
-                    valid_group = entry['valid_group'].copy()
-                    rng.shuffle(valid_group)
-                    split = int(ratio * len(valid_group))
-                    entry['valid_group'] = (
-                        valid_group[:split] if mode == 'train'
-                        else valid_group[split:]
-                    )
-
         # 定义传感器，是否选取该传感器
         self.sensor_config = {
             'lidar': False,
@@ -417,6 +423,9 @@ class HPE_Dataset(Dataset):
             'gt': True,
             'realsense': False,
         } if sensor_config is None else sensor_config
+
+        if not include_prone and not self.sensor_config.get('gt'):
+            raise ValueError('include_prone=False 需要启用 GT 骨架')
 
         assert self.sensor_config[base_source] is True, 'base_source in sensor_config is False'
         self.suffix_map = {
@@ -441,19 +450,10 @@ class HPE_Dataset(Dataset):
             if requested - aligned:
                 raise ValueError(f'train_groups 中存在缺失或无法对齐的组: {sorted(requested - aligned)}')
         
-        # 数据划分 TODO：sequence
-        self.meta_info_splited = (
-            {mode: self.meta_info, 'val' if mode == 'train' else 'train': {}}
-            if split_method in {'person', 'group'} else
-            {'train': copy.deepcopy(self.meta_info), 'val': copy.deepcopy(self.meta_info)}
-        )
-        if split_method == 'sequence':
-            # 按照序列来划分
-            pass
-        self._display_meta_info(self.meta_info_splited[mode])
+        self._display_meta_info(self.meta_info)
 
         # meta_info 展平为长度 T、步长 window_stride 的窗口
-        self.mode_meta_info = self.meta_info_splited[mode]
+        self.mode_meta_info = self.meta_info
         self.sample_groups = []
         self.sky_start_indices = []
         self.data_path_list = {k: [] for k in self.sensor_config if self.sensor_config[k]}
@@ -484,7 +484,11 @@ class HPE_Dataset(Dataset):
                             begin = start_idx-sky_extra if sky_extra and sensor_name == base_source else start_idx
                             window_by_sensor[sensor_name] = all_sensor_files[begin:end_idx]
 
-                        if not self._is_valid_window(window_by_sensor):
+                        history_by_sensor = {
+                            sensor: group_data_path[group][sensor][max(0, start_idx - acc_frame):start_idx]
+                            for sensor in self.acc_path_list
+                        }
+                        if not self._is_valid_window(window_by_sensor, history_by_sensor):
                             self.skip_bad_samples += 1
                             continue
 
@@ -494,9 +498,8 @@ class HPE_Dataset(Dataset):
                             # 将文件路径列表添加到 data_path_list 中
                             self.data_path_list[sensor_name].append(window_files)
                             if sensor_name in self.acc_path_list:
-                                all_files = group_data_path[group][sensor_name]
-                                history = all_files[max(0, start_idx - acc_frame):start_idx]
-                                # 历史坏帧不应使当前有效窗口失效。
+                                history = history_by_sensor[sensor_name]
+                                # 清单内坏帧已剔除整个窗口；其他不可读历史帧沿用原过滤方式。
                                 history = [p for p in history if self._is_valid_npy(sensor_name, p)]
                                 self.acc_path_list[sensor_name].append(history)
 
@@ -504,8 +507,86 @@ class HPE_Dataset(Dataset):
             print(f"跳过损坏样本窗口数: {self.skip_bad_samples}")
             print(f"损坏文件数: {len(self.bad_files)}")
 
+        self.filter_prone_windows(include_prone)
+
         if self.preload_cache:
             self.preload_data_cache()
+
+    @staticmethod
+    def _prone_people(poses_low: np.ndarray) -> np.ndarray:
+        """低位坐标 COCO-17：躯干前侧和面部同时朝下的躺姿。"""
+        poses = np.asarray(poses_low, dtype=np.float64)
+        if poses.ndim != 3 or poses.shape[1:] != (17, 3):
+            raise ValueError(f'俯卧筛查要求 GT 为 [N,17,3]，实际为 {poses.shape}')
+        result = np.zeros(len(poses), dtype=bool)
+        valid = np.flatnonzero(np.isfinite(poses).all(axis=(1, 2)))
+        g = poses[valid]
+        torso = g[:, [5, 6]].mean(axis=1) - g[:, [11, 12]].mean(axis=1)
+        front = np.cross(torso, g[:, 6] - g[:, 5])
+        face = g[:, 0] - g[:, [3, 4]].mean(axis=1)
+        front_norm = np.linalg.norm(front, axis=1)
+        face_norm = np.linalg.norm(face, axis=1)
+        candidates = ((front_norm > 1e-6) & (face_norm >= .03)
+                      & (front[:, 2] <= -np.sqrt(.5) * front_norm)
+                      & (face[:, 2] <= -.5 * face_norm)
+                      & ((front * face).sum(axis=1) >= .3 * front_norm * face_norm))
+        if candidates.any():
+            result[valid[candidates]] = classify_actions(g[candidates]).labels[:, LIE].astype(bool)
+        return result
+
+    def filter_prone_windows(self, include_prone: bool = True) -> None:
+        """保留原时间索引；含俯卧 GT（包括输入历史）的整个窗口剔除。也支持旧 Dataset 缓存。"""
+        if not isinstance(include_prone, bool):
+            raise TypeError('include_prone 必须为 bool')
+        if getattr(self, '_prone_filter_applied', False):
+            if include_prone:
+                raise ValueError('已筛掉的俯卧窗口无法恢复，请重新创建 Dataset 或使用未过滤缓存')
+            return
+        self.include_prone = include_prone
+        if include_prone:
+            return
+        if not self.sensor_config.get('gt'):
+            raise ValueError('include_prone=False 需要启用 GT 骨架')
+        groups = {f"{entry['date']}/{group}": paths['gt']
+                  for entries in self.mode_meta_info.values() for entry in entries
+                  for group, paths in entry['group_data_path'].items()}
+        history = self.sky_history + self.acc_frame if self.sky_history else self.spectra_history
+        frame_flags, keep, excluded_groups = {}, [], {}
+        total = len(self)
+        print(f'俯卧筛选 {self.mode}: 正在检查 {total} 个窗口的 GT 骨架...', flush=True)
+        for i, group in enumerate(self.sample_groups):
+            start = self.sky_start_indices[i]
+            begin = start if history else max(0, start - self.acc_frame)
+            refs = groups[group][begin:start + history + self.T]
+            if refs[-self.T:] != self.data_path_list['gt'][i]:
+                raise ValueError(f'{group}: 俯卧筛查的 GT 时间索引与窗口不一致，请重建 Dataset 缓存')
+            calib = self._load_calib_T(group.split('/')[0])['gt_to_low']
+            excluded = False
+            for ref in refs:
+                if ref not in frame_flags:
+                    gt = self._get_sensor_data_from_path('gt', [ref])[0]
+                    low = gt @ calib['R'].T + calib['t']
+                    frame_flags[ref] = bool(self._prone_people(low).any())
+                if frame_flags[ref]:
+                    excluded = True
+                    break
+            if excluded:
+                excluded_groups[group] = excluded_groups.get(group, 0) + 1
+            else:
+                keep.append(i)
+        for paths in (self.data_path_list, self.acc_path_list):
+            for sensor in paths:
+                paths[sensor] = [paths[sensor][i] for i in keep]
+        self.sample_groups = [self.sample_groups[i] for i in keep]
+        self.sky_start_indices = [self.sky_start_indices[i] for i in keep]
+        if hasattr(self, 'window_labels'):
+            self.window_labels = [self.window_labels[i] for i in keep]
+        self.prone_filter_stats = dict(windows_before=total, windows_removed=total-len(keep),
+                                       windows_kept=len(keep), examined_gt_frames=len(frame_flags),
+                                       matched_gt_frames=sum(frame_flags.values()), excluded_groups=excluded_groups)
+        self._prone_filter_applied = True
+        print(f'俯卧筛选 {self.mode}: 排除 {total-len(keep)}/{total} 个窗口，保留 {len(keep)}；'
+              f'涉及 {len(excluded_groups)} 个采集组（按 GT 骨架，包含输入历史）', flush=True)
 
     @staticmethod
     def _frame_timestamp_ns(path):
@@ -539,8 +620,9 @@ class HPE_Dataset(Dataset):
         return self._accumulate_pointcloud_sequence(points, self.acc_frame, self.acc_frame)
 
     @staticmethod
-    def _load_bad_bin_frames(
+    def _load_bad_frames(
         manifest_path: Optional[Union[str, Path]],
+        bad_types: Set[str],
     ) -> Dict[Tuple[str, str, str, str], Dict[str, Any]]:
         if manifest_path is None:
             return {}
@@ -548,18 +630,18 @@ class HPE_Dataset(Dataset):
         manifest_path = Path(manifest_path)
         if not manifest_path.is_file():
             raise FileNotFoundError(
-                f"坏 BIN 帧清单不存在: {manifest_path}"
+                f"坏帧清单不存在: {manifest_path}"
             )
         with manifest_path.open('r', encoding='utf-8') as file:
             manifest = json.load(file)
         if manifest.get('schema_version') != 1:
             raise ValueError(
-                "坏 BIN 帧清单 schema_version 必须为 1，"
+                "坏帧清单 schema_version 必须为 1，"
                 f"实际为 {manifest.get('schema_version')}"
             )
         records = manifest.get('bad_frames')
         if not isinstance(records, list):
-            raise ValueError("坏 BIN 帧清单缺少 bad_frames 列表")
+            raise ValueError("坏帧清单缺少 bad_frames 列表")
 
         lookup = {}
         required = {
@@ -571,7 +653,7 @@ class HPE_Dataset(Dataset):
                 raise ValueError(
                     f"bad_frames[{record_index}] 字段不完整"
                 )
-            if record['bad_type'] not in {'numeric', 'length'}:
+            if record['bad_type'] not in bad_types:
                 raise ValueError(
                     f"bad_frames[{record_index}].bad_type 无效: "
                     f"{record['bad_type']}"
@@ -588,13 +670,13 @@ class HPE_Dataset(Dataset):
             )
             if key in lookup:
                 raise ValueError(
-                    f"坏 BIN 帧清单存在重复记录: {key}"
+                    f"坏帧清单存在重复记录: {key}"
                 )
             lookup[key] = record
         return lookup
 
     @staticmethod
-    def _get_bin_frame_manifest_key(
+    def _get_frame_manifest_key(
         file_path: Union[str, Path, PackedFrame],
     ) -> Optional[Tuple[str, str, str, str]]:
         path = Path(
@@ -729,7 +811,7 @@ class HPE_Dataset(Dataset):
             * 4
         )
 
-        manifest_key = self._get_bin_frame_manifest_key(file_path)
+        manifest_key = self._get_frame_manifest_key(file_path)
         bad_record = self.bad_bin_frames.get(manifest_key)
         if bad_record is not None:
             valid = False
@@ -767,9 +849,16 @@ class HPE_Dataset(Dataset):
     def _is_valid_window(
         self,
         window_by_sensor: Dict[str, List[str]],
+        history_by_sensor: Optional[Dict[str, List]] = None,
     ) -> bool:
         low_point_frames = set()
         for sensor_name, window_files in window_by_sensor.items():
+            if sensor_name in {'radar_high_pc', 'radar_low_pc'}:
+                history = (history_by_sensor or {}).get(sensor_name, [])
+                for file_path in list(window_files) + list(history):
+                    if self._get_frame_manifest_key(file_path) in self.bad_pc_frames:
+                        self.bad_files.add(str(file_path))
+                        return False
             suffix = self.suffix_map[sensor_name]
             if suffix == '.npy':
                 for frame_idx, file_path in enumerate(window_files):
@@ -1960,6 +2049,38 @@ class HPE_Dataset(Dataset):
     def __len__(self) -> int:
         return len(self.data_path_list[self.base_source])
 
+    def _tracking_bbox_sequence(self, idx, gt_sequence, calib):
+        group = self.sample_groups[idx]
+        if group not in self.tracking_boxes:
+            path = self.tracking_bbox_cache_dir / (group.replace('/', '_') + '.npz')
+            lookup = {}
+            if path.exists():
+                with np.load(path, allow_pickle=False) as data:
+                    metadata = json.loads(str(data['metadata']))
+                    boxes, stems, gt_stems = data['boxes'], data['stems'], data['gt_stems']
+                if (metadata['group'] != group or boxes.shape != (len(stems), 6) or
+                        gt_stems.shape != stems.shape or len(set(stems)) != len(stems) or
+                        not np.isfinite(boxes).all() or not (boxes[:, 3:] > boxes[:, :3]).all()):
+                    raise ValueError(f'跟踪框缓存格式错误: {path}')
+                if (not np.allclose(metadata['rotation'], calib['R'], rtol=0, atol=1e-5) or
+                        not np.allclose(np.asarray(metadata['translation']).reshape(3),
+                                        np.asarray(calib['t']).reshape(3), rtol=0, atol=1e-5)):
+                    raise ValueError(f'跟踪框缓存外参与训练外参不一致: {path}')
+                lookup = {str(stem): (str(gt_stem), box) for stem, gt_stem, box in zip(stems, gt_stems, boxes)}
+            self.tracking_boxes[group] = lookup
+        lookup = self.tracking_boxes[group]
+        result = []
+        for radar, gt, pose in zip(self.data_path_list['radar_high_pc'][idx], self.data_path_list['gt'][idx], gt_sequence):
+            radar_stem = Path(radar.frame_name if isinstance(radar, PackedFrame) else radar).stem
+            gt_stem = Path(gt.frame_name if isinstance(gt, PackedFrame) else gt).stem
+            boxes = np.zeros((len(pose), 6), dtype=np.float32)
+            match = lookup.get(radar_stem)
+            # shortcut: 缓存只含单人匹配，多人训练接入前需提供逐人跟踪 ID 对应关系。
+            if len(pose) == 1 and match is not None and match[0] == gt_stem:
+                boxes[0] = match[1]
+            result.append(boxes)
+        return result
+
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         samples = {'group_id': self.sample_groups[idx]}
         # 获取数据
@@ -2012,6 +2133,9 @@ class HPE_Dataset(Dataset):
         t_low = calib['gt_to_low']['t']
         R_high_to_low = calib['high_to_low']['R']
         t_high_to_low = calib['high_to_low']['t']
+
+        if getattr(self, 'tracking_bbox_cache_dir', None) is not None:
+            samples['tracking_bbox'] = self._tracking_bbox_sequence(idx, raw_gt, calib['gt_to_high'])
 
         samples['gt_for_high'] = (
             self._transform_gt_sequence(
