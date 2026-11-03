@@ -7,6 +7,7 @@ from preprocess.radarprocess_RPM2 import range_cube_to_rpm2_maps
 from preprocess.radarpreprocess_HRRadarPose import range_cube_to_range_doppler_azi_ele, range_doppler_azi_ele_to_doppler_xyz
 from utils.MOCAP21 import coco_to_mocap
 from utils.skeleton import get_pose_layout
+from run.utils.group_guard import GroupGuard
 
 
 def prepare_pose_target(gt, pose_format='coco'):
@@ -455,16 +456,24 @@ def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_mod
     model.eval()
     autocast_dtype = get_autocast_dtype(cfg_task.get('precision', 'FP32'))
     evaluated_batches = 0
+    group_guard = None
     with torch.no_grad():
         for samples in tqdm(dataloader, total=len(dataloader)):
             samples = adapt_coordinate_frame(samples, cfg_task, cfg_data, 'val')
             input_key = cfg_task['input']
             target_key = cfg_task['output']
+            if 'guard_metadata' in samples and group_guard is None:
+                group_guard = GroupGuard(cfg_task.get('pose_format', 'coco'), cfg_data.get('window_stride', 1))
+            if 'pc' in input_key and samples.get('group_id') and 'guard_metadata' not in samples:
+                raise ValueError('Guard group metrics require current-frame guard_metadata from the validation dataset')
             model_input = {}
+            pointcloud_center = None
             if 'pc' in input_key:
                 model_input, gt, valid_instance_mask, cropped_points, cropped_mask, pointcloud_center = prepare_person_pointcloud(
                     samples, cfg_task, cfg_data, device, 'val')
                 if not valid_instance_mask.any():
+                    if group_guard is not None:
+                        group_guard.add_batch(samples, None, None, cfg_task)
                     continue
                 B, T, K = gt['mask'].shape
             else:
@@ -516,6 +525,8 @@ def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_mod
 
             loss, _ = metric.calculate_batch(pre, gt, group_ids=samples.get('group_id'),
                                             group_gt_low=samples['gt_for_low']['padded'])
+            if group_guard is not None:
+                group_guard.add_batch(samples, pre, gt['mask'], cfg_task, pointcloud_center)
             evaluated_batches += 1
 
             if not torch.isfinite(loss):
@@ -526,4 +537,15 @@ def val_one_epoch(model, dataloader, metric, device, cfg_data, cfg_task, cfg_mod
         if not evaluated_batches:
             raise ValueError('验证集没有满足区域及点数条件的样本')
         epoch_metric = metric.epoch_end()
+        if group_guard is not None:
+            raw, guarded = group_guard.epoch_end()
+            epoch_metric['mpjpe_by_group'] = raw
+            epoch_metric['guard_mpjpe_by_group'] = guarded
+            labels = {}
+            for row in raw.values():
+                if row['count']:
+                    total, count = labels.setdefault(row['label'], [0., 0])
+                    labels[row['label']] = [total + row['mpjpe'] * row['count'], count + row['count']]
+            epoch_metric['mpjpe_by_label'] = {
+                label: {'mpjpe': total / count, 'count': count} for label, (total, count) in labels.items()}
     return epoch_metric, metric

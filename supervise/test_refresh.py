@@ -30,6 +30,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(refresh.task_status({'status': 'paused', 'pid': 20}, task, procs), ('已暂停', 20))
         self.assertEqual(refresh.task_status({'status': 'complete', 'pid': 20}, task, procs), ('已完成', None))
         self.assertEqual(refresh.task_status({'status': 'failed'}, task, procs), ('已失败', None))
+        self.assertEqual(refresh.task_status({'status': 'cancelled'}, task, procs), ('已中断', None))
         procs[20]['args'] = 'python unrelated.py'
         self.assertIn('待核实', refresh.task_status({'status': 'running', 'pid': 20}, task, procs)[0])
 
@@ -71,18 +72,23 @@ class MonitorTests(unittest.TestCase):
                 self.assertNotIn('13.000 cm', document)
                 self.assertEqual(warnings, [])
                 self.assertEqual(errors, [])
+                state['gpu'] = '0/1（空闲优先）'
+                (root / 'state.json').write_text(json.dumps(state))
+                document = refresh.render([task], procs, [], [], [], [], time.time())
+                self.assertIn('| 密集滑窗续训 | 排队中 | 0/1（空闲优先） |', document)
+                state['gpu'] = 1
                 procs.update(refresh.processes('pai 21 20 60 python queue.py --worker PCT'))
                 state.update(status='paused', pid=21, pause_reason='优先微调完成后自动恢复')
                 (root / 'state.json').write_text(json.dumps(state))
                 document = refresh.render([task], procs, [], [], [], [], time.time() + 3600)
-                self.assertIn('| 密集滑窗续训 | 已暂停 | 0 | 优先微调完成后自动恢复 |', document)
+                self.assertIn('| 密集滑窗续训 | 已暂停 | 1 | 优先微调完成后自动恢复 |', document)
                 state.update(status='running', pid=21, stage='training')
                 (root / 'state.json').write_text(json.dumps(state))
                 procs.update(refresh.processes('pai 21 20 60 python queue.py --worker PCT'))
                 log.write_text(old + '[2026-10-28 21:00:00] PHASE dense\n'
                                "[2026-10-28 23:30:00] Epoch 51/150 | train={'positive_mpjpe': 0.1} | val={'positive_mpjpe': 0.14, 'loss': 0.14}\n")
                 document = refresh.render([task], procs, [], [], [], [], time.time())
-                self.assertIn('| 密集滑窗续训 | 运行中 | 0 | 51/150 | 14.000 cm |', document)
+                self.assertIn('| 密集滑窗续训 | 运行中 | 1 | 51/150 | 14.000 cm |', document)
                 self.assertIn('最佳验证 MPJPE：14.000 cm', document)
                 task.pop('log_after')
                 task['log_before'] = 'PHASE dense'

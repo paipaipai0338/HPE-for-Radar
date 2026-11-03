@@ -21,6 +21,7 @@ from run.utils.process_one_epoch import train_one_epoch, val_one_epoch, prepare_
 from run.utils.process_one_epoch import predict_valid_person_frames
 from run.utils.process_one_epoch import prepare_pose_target
 from utils.skeleton import get_pose_layout
+from run.utils.group_metric_format import format_group_metrics
 from run.utils.checkpoint import save_checkpoint, load_training_checkpoint, load_model_checkpoint, load_init_checkpoint
 from run.utils.get_cosine_schedule_with_warmup import get_cosine_schedule_with_warmup
 
@@ -165,7 +166,7 @@ def main():
 
         dataloader = {
             'train': build_train_loader(0),
-            'val': DataLoader(dataset['val'], batch_size=cfg['task']['batch_size'], collate_fn=collate_fn, shuffle=cfg['task']['val']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
+            'val': DataLoader(dataset['val'], batch_size=cfg['task']['val'].get('batch_size', cfg['task']['batch_size']), collate_fn=collate_fn, shuffle=cfg['task']['val']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
         }
         # 指标构建
         metric = {
@@ -305,6 +306,7 @@ def main():
             val_labels = val_metrics.pop('mpjpe_by_label', {})
             train_metrics.pop('mpjpe_by_group', None)
             val_groups = val_metrics.pop('mpjpe_by_group', {})
+            guard_groups = val_metrics.pop('guard_mpjpe_by_group', {})
             val_metrics['loss'] = sum(
                 weight * val_metrics.get(name, 0.0)
                 for name, weight in metric['val'].cfg_metrics.items()
@@ -321,13 +323,14 @@ def main():
             print(message)
 
             write_log(group_log_path, f"Epoch {epoch + 1}/{cfg['task']['train']['epoch']}")
+            write_log(group_log_path, 'Metric order: all / inside ellipse; unit=m; ' +
+                      ('Raw/Guard score complete-window last frames; loss retains original window outputs'
+                       if guard_groups else 'Raw retains original outputs; Guard needs current-frame point metadata'))
             write_log(group_log_path, f"MPJPE by label (m) | train={train_labels} | val={val_labels}")
             for group, values in val_groups.items():
-                inside_mpjpe = 'N/A' if values['mpjpe_inside'] is None else f"{values['mpjpe_inside']:.6f}"
-                inside_centered = 'N/A' if values['centered_mpjpe_inside'] is None else f"{values['centered_mpjpe_inside']:.6f}"
-                write_log(group_log_path, f"Val group {group} | label={values['label']} | "
-                          f"MPJPE={values['mpjpe']:.6f} m / {inside_mpjpe} m | "
-                          f"centered MPJPE={values['centered_mpjpe']:.6f} m / {inside_centered} m | count={values['count']}")
+                for line in format_group_metrics(group, values['label'], raw=values,
+                                                 guard=guard_groups.get(group), timestamp=''):
+                    write_log(group_log_path, line)
 
             current = val_metrics[best_metric_name]
             if current < best_metric:
@@ -355,7 +358,7 @@ def main():
         }
         collate_fn = partial(dataset_collate_fn, max_people=cfg['data']['max_people'])
         dataloader = {
-            'val': DataLoader(dataset['val'], batch_size=cfg['task']['batch_size'], collate_fn=collate_fn, shuffle=cfg['task']['val']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
+            'val': DataLoader(dataset['val'], batch_size=cfg['task']['val'].get('batch_size', cfg['task']['batch_size']), collate_fn=collate_fn, shuffle=cfg['task']['val']['shuffle'], num_workers=cfg['data']['num_workers'], pin_memory=True, persistent_workers=True, prefetch_factor=2)
         }
 
         # best/last checkpoint 加载 

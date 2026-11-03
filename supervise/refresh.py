@@ -57,6 +57,8 @@ def epoch_rows(text):
 
 def task_status(state, task, procs, queue=None):
     status = state.get('status')
+    if status == 'cancelled':
+        return '已中断', None
     if status in ('complete', 'completed', 'failed'):
         return ('已失败' if status == 'failed' else '已完成'), None
     if status == 'queued' and queue is not None:
@@ -140,12 +142,13 @@ def render(tasks, procs, gpu_rows, gpu_apps, warnings, errors, now):
                     estimate_basis = '单条 epoch 日志与进程启动时间之差，包含初始化'
             if status == '运行中' and stage in ('training', 'validation') and intervals and completed < total:
                 estimate = latest['time'] + statistics.median(intervals) * (total - completed)
-            summary = f"| {cell(task['name'])} | {status} | {task['gpu']} | {completed}/{total} | {cm(val)} |"
+            gpu = state.get('gpu', task['gpu'])
+            summary = f"| {cell(task['name'])} | {status} | {gpu} | {completed}/{total} | {cm(val)} |"
             if status == '运行中':
                 running.append(summary + f" {stamp(estimate) if estimate is not None else '暂无法估算'} |")
             elif status in ('排队中', '已暂停'):
                 condition = state.get('pause_reason') or task.get('condition', state.get('idle_rule', '见状态文件'))
-                queued.append(f"| {cell(task['name'])} | {status} | {task['gpu']} | {cell(condition)} |")
+                queued.append(f"| {cell(task['name'])} | {status} | {gpu} | {cell(condition)} |")
             else:
                 finished.append(summary)
             if status.startswith('状态待核实'):

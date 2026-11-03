@@ -38,6 +38,8 @@ tail -n 10 /home/pai/Huawei/supervise/monitor.log
 
 串行队列中的模型分别登记自己的状态文件；`queue_state` 和 `queue_match` 指向父队列状态与进程，用于确认 `queued` 模型仍在排队。父队列失败时，未启动模型显示“队列已停止”。续训追加同一份日志时，可用 `log_after` 指定本阶段标记，`log_before` 保留历史阶段；目标轮数优先读取状态中的 `target_epochs`，避免把旧指标和轮数算进新阶段。
 
+2026-11-02 起，当前待启动的 SetTransformer、VoxelNeXt、ConvNeXtV2、P4Transformer xyzv 由独立的 `dispatch.py` 按此顺序分配到 GPU0 / GPU1，任一卡空闲即可启动下一项；每张卡最多一个本队列任务。启动前取得原共享锁，并每隔 30 秒检查整卡无计算进程、显存 <512 MiB、利用率 <5%，连续三次通过后启动。正在运行的 PointNet 和 FFTGen 继续原训练。队列状态与日志为 `dispatch.status.json` / `dispatch.log`；失败任务不自动重试。监控读取任务状态中的实际 GPU，排队时显示两卡候选。
+
 运行检查：
 
 ```bash

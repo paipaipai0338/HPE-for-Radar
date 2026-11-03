@@ -20,6 +20,7 @@ from torch.utils.data.dataloader import default_collate
 
 from data2datasets.load_json import get_meta_info
 from data2datasets.alignment_cache import load_or_build_alignment, reuse_bin_alignment
+from run.utils.group_guard import guard_frame_metadata
 from preprocess.radarprocess import (
     Radar_Config,
     bin_buffer_to_cube_range_fft,
@@ -201,7 +202,7 @@ def collate_fn(
         {
             key: value
             for key, value in sample.items()
-            if key not in {'action', 'group_id'}
+            if key not in {'action', 'group_id', 'guard_metadata'}
         }
         for sample in batch
     ]
@@ -265,6 +266,8 @@ def collate_fn(
 
     if 'group_id' in batch[0]:
         collated['group_id'] = [sample['group_id'] for sample in batch]
+    if 'guard_metadata' in batch[0]:
+        collated['guard_metadata'] = [sample['guard_metadata'] for sample in batch]
     return collated
 
 
@@ -2083,6 +2086,7 @@ class HPE_Dataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         samples = {'group_id': self.sample_groups[idx]}
+        guard_points = None
         # 获取数据
         for sensor_name, flag in self.sensor_config.items():
             if not flag:
@@ -2117,7 +2121,10 @@ class HPE_Dataset(Dataset):
                     samples['bin_frame_index'] = list(range(begin, begin+len(data)))
                 if self.sky_history and sensor_name == self.base_source:
                     samples['radar_high_pc'] = self._sky_pointcloud_sequence(data, self.sky_start_indices[idx])
+                    guard_points = samples['radar_high_pc'][-1]
                     continue
+                if sensor_name == 'radar_high_pc':
+                    guard_points = data[-1]
                 if sensor_name in self.acc_path_list and self.acc_frame:
                     history_paths = self.acc_path_list[sensor_name][idx]
                     history = self._get_sensor_data_from_path(sensor_name, history_paths)
@@ -2161,6 +2168,11 @@ class HPE_Dataset(Dataset):
             t_high_to_low.copy()
             for _ in range(self.T)
         ]
+        if self.mode == 'val' and guard_points is not None:
+            ref = self.data_path_list[self.base_source][idx][-1]
+            name = ref.frame_name if isinstance(ref, PackedFrame) else Path(ref).name
+            samples['guard_metadata'] = guard_frame_metadata(
+                guard_points, samples['gt_for_high'][-1], name, self.sky_start_indices[idx] + self.T - 1)
               
         return samples
 

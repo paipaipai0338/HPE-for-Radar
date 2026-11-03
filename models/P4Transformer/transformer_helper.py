@@ -69,13 +69,8 @@ class Attention(nn.Module):
         kqv = self.to_k(k), self.to_q(q), self.to_v(v)
         k, q, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), kqv)
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
-
-        attn = dots.softmax(dim=-1)
-
-
-
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        # Fused attention avoids materializing the quadratic space-time matrix on CUDA.
+        out = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0)
         out = rearrange(out, 'b h n d -> b n (h d)')
         out =  self.to_out(out)
         return out

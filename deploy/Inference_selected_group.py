@@ -2,7 +2,9 @@
 
 运行：python deploy/Inference_selected_group.py（VISUALIZE=False 时自动评估整组）
 VISUALIZE=True 或 --visualize：空格/右箭头下一帧，左箭头缓存回看；组末输出整组指标。
-三图分别显示训练输入点云、椭圆内姿态和全部人体姿态。
+三图分别显示当前单帧 GT 框裁剪点云（积累和重采样前）、椭圆内姿态和全部人体姿态。
+下方单图按窗口末帧显示 Raw、Guard+躺姿锁、Keeper+躺姿锁的 MPJPE。
+实线为椭圆内人体，虚线为椭圆外人体。
 INFERENCE_TRAIN_CONFIG 可显式指定与权重配套的训练配置。
 优先读取 /mnt/ssd/Huawei 打包数据，缺失时回退 /mnt/huawei；
 INFERENCE_PACKED_DATA_ROOT 可覆盖 SSD 根目录。
@@ -15,6 +17,8 @@ INFERENCE_PACKED_DATA_ROOT 可覆盖 SSD 根目录。
 import argparse
 import importlib.util
 import io
+import json
+import re
 from functools import lru_cache
 import os
 import pickle
@@ -29,19 +33,24 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.widgets import Slider
 import numpy as np
-from scipy.optimize import linear_sum_assignment
 import torch
 from tqdm import tqdm
 
 from run.utils.set_device import set_device
 from run.utils.load_config import load_config
 from preprocess.actionprocess import LABEL_NAMES, classify_actions
+from utils.skeleton import get_pose_layout
+from run.utils.temporal_guard import (TEMPORAL_GUARD_PARAMS, guard_metric_protocol,
+                                      guard_pose_records, pose_change, pose_change_within,
+                                      match_poses, frame_mpjpe)
+from run.utils.group_metric_format import format_group_metrics
+from run.utils.direction_keeper import DirectionKeeper
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT_PATH = Path("/mnt/huawei")
 PACKED_DATA_ROOT = Path(os.environ.get("INFERENCE_PACKED_DATA_ROOT", "/mnt/ssd/Huawei"))
-DATE = os.environ.get("INFERENCE_DATE", "20261023")
-GROUP = os.environ.get("INFERENCE_GROUP", "group_033")
+DATE = os.environ.get("INFERENCE_DATE", "20261022")
+GROUP = os.environ.get("INFERENCE_GROUP", "group_015")
 VISUALIZE = True   # False 自动跑完整组并输出 MPJPE； True WebAgg 逐帧交互。
 MODEL_POSE_PATH = PROJECT_ROOT / "experiments/P4Transformer/20261019_161657"
 TRAIN_CONFIG_PATH = Path(os.environ.get("INFERENCE_TRAIN_CONFIG", str(MODEL_POSE_PATH / "config" / "config.yaml")))
@@ -66,11 +75,6 @@ ACTION_COLORS = ("#4daf4a", "#377eb8", "#e41a1c", "#984ea3")
 
 
 DYNAMIC_POINT_TAG = 1.0
-
-# 动点不足或头脚纵轴反转超过 90° 时，沿用上一帧可信骨架。
-ORIENTATION_DYNAMIC_MICRO_RATIO_THRESHOLD = 0.2
-ORIENTATION_DYNAMIC_POINT_COUNT_THRESHOLD = 10
-
 
 DIRECTED_BONES = [
     (11, 12), (11, 5), (12, 6), (11, 13), (13, 15), (12, 14),
@@ -208,30 +212,6 @@ def draw_human_pose(ax, poses, color, label):
                     linestyle="--" if is_raw else "-")
 
 
-def match_poses(poses, gt):
-    """过滤非有限人体，按髋中心距离匈牙利匹配，保留匹配前人数。"""
-    pred = poses[np.isfinite(poses).all(axis=(1, 2))]
-    target = gt[np.isfinite(gt).all(axis=(1, 2))]
-    counts = len(pred), len(target)
-    pred_root = pred[:, [11, 12]].mean(axis=1)
-    gt_root = target[:, [11, 12]].mean(axis=1)
-    rows, cols = linear_sum_assignment(
-        np.linalg.norm(pred_root[:, None] - gt_root[None], axis=-1)
-    )
-    return pred[rows], target[cols], counts
-
-
-def frame_mpjpe(poses, gt, centered=False):
-    """17 关节 MPJPE（mm）；centered 时仅去掉髋中心平移。"""
-    pred, target, counts = match_poses(poses, gt)
-    if not len(pred):
-        return None, 0, *counts
-    if centered:
-        pred = pred - pred[:, [11, 12]].mean(axis=1, keepdims=True)
-        target = target - target[:, [11, 12]].mean(axis=1, keepdims=True)
-    error_mm = np.linalg.norm(pred - target, axis=-1).mean() * 1000
-    return float(error_mm), len(pred), *counts
-
 
 def frame_pa_mpjpe(poses, gt):
     """髋中心匹配后逐人做刚性旋转、平移和尺度对齐，计算 PA-MPJPE（mm）。"""
@@ -261,143 +241,86 @@ def frame_centered_mpjpe(poses, gt):
     return frame_mpjpe(poses, gt, centered=True)
 
 
-def legacy_guard_pose_records(records, prefix=""):
-    """动点不足或头脚方向反转时保留上一帧可信骨架，不插值、不平滑。"""
-    history = {}
-    for frame_index, record in enumerate(records):
-        poses, people, held = [], [], []
-        ratios = record.get("dynamic_micro_ratios", {})
-        dynamic_counts = record.get("dynamic_point_counts", {})
-        for raw, person in zip(record[f"{prefix}poses_raw"], record[f"{prefix}pose_indices"]):
-            person = int(person)
-            previous = history.get(person)
-            intervene = False
-            if previous is not None and previous[0] == frame_index - 1:
-                _, previous_pose = previous
-                axis = raw[0] - raw[[15, 16]].mean(axis=0)
-                previous_axis = previous_pose[0] - previous_pose[[15, 16]].mean(axis=0)
-                intervene = (
-                    ratios.get(person, np.inf) < ORIENTATION_DYNAMIC_MICRO_RATIO_THRESHOLD
-                    or dynamic_counts.get(person, np.inf) < ORIENTATION_DYNAMIC_POINT_COUNT_THRESHOLD
-                    # 点积为负等价于夹角超过 90°；零长度纵轴不参与方向判断。
-                    or np.dot(axis, previous_axis) < 0
-                )
-            pose = previous_pose.copy() if intervene else raw.copy()
-            history[person] = (frame_index, pose)
-            poses.append(pose)
-            people.append(person)
-            held.append(intervene)
-        record[f"{prefix}poses"] = np.asarray(poses, dtype=np.float32).reshape(-1, 17, 3)
-        record[f"{prefix}pose_track_ids"] = np.asarray(people, dtype=int)
-        record[f"{prefix}orientation_held"] = np.asarray(held, dtype=bool)
+def deployment_pose_reversal(raw, keeper, dt):
+    """部署方向判据：肩髋同时反转，或头脚轴反转；退化轴不作证据。"""
+    threshold = max(100.0, 360.0 * dt)
+
+    def reversed_axis(a, b, minimum):
+        lengths = np.linalg.norm(a), np.linalg.norm(b)
+        if min(lengths) < minimum:
+            return False
+        angle = np.degrees(np.arccos(np.clip(np.dot(a, b) / np.prod(lengths), -1, 1)))
+        return angle > threshold
+
+    return (reversed_axis(raw[6] - raw[5], keeper[6] - keeper[5], .1)
+            and reversed_axis(raw[12] - raw[11], keeper[12] - keeper[11], .1)
+            or reversed_axis(raw[:5].mean(0) - raw[[15, 16]].mean(0),
+                             keeper[:5].mean(0) - keeper[[15, 16]].mean(0), .4))
 
 
-# 固定阈值仅使用点数和预测变化，GT 误差不参与判决。
-TEMPORAL_GUARD_PARAMS = {
-    "min_dynamic": 20, "min_total": 30,
-    "root_speed_m_s": 2.0, "shape_speed_m_s": 1.25, "axis_jump_deg": 60.0,
-    "stable_root_speed_m_s": 1.0, "stable_shape_speed_m_s": 2 / 3,
-    "stable_axis_deg": 30.0, "confirm_frames": 3, "hold_frames": 2,
-}
+def deployment_pose_records(records, direction_factory=None):
+    """因果 keeper 对照：点数门控、反转确认、持续保持，不回填历史。
 
-
-def pose_change(a, b):
-    root_a = a[[11, 12]].mean(0)
-    root_b = b[[11, 12]].mean(0)
-    root = float(np.linalg.norm(root_a - root_b))
-    shape = float(np.linalg.norm((a - root_a) - (b - root_b), axis=1).mean())
-    axis_a = a[0] - a[[15, 16]].mean(0)
-    axis_b = b[0] - b[[15, 16]].mean(0)
-    norm = np.linalg.norm(axis_a) * np.linalg.norm(axis_b)
-    angle = (float(np.degrees(np.arccos(np.clip(np.dot(axis_a, axis_b) / norm, -1, 1))))
-             if norm > 1e-10 else 180.0)
-    return root, shape, angle
-
-
-def pose_change_within(a, b, dt, stable=False):
-    root, shape, angle = pose_change(a, b)
-    p = TEMPORAL_GUARD_PARAMS
-    return (root <= p["stable_root_speed_m_s" if stable else "root_speed_m_s"] * dt
-            and shape <= p["stable_shape_speed_m_s" if stable else "shape_speed_m_s"] * dt
-            and angle <= p["stable_axis_deg" if stable else "axis_jump_deg"])
-
-
-def guard_pose_records(records, prefix=""):
-    """低点数持续保持；点数充足的突变确认后回填三帧。
-
-    shortcut: 人员沿用 GT 索引；接入检测轨迹时需改用稳定 track ID。
+    复用全量 raw 以便公平对照，但低点数 raw 不进入此分支的状态更新。
+    direction_factory 注入附加保持判据；选组默认仅启用躺姿头脚锁。
     """
-    outputs = [{} for _ in records]
     states = {}
     params = TEMPORAL_GUARD_PARAMS
-    for i, record in enumerate(records):
+    for index, record in enumerate(records):
+        if direction_factory is not None:
+            record["gt_crop_deployment_direction_state"] = {}
         stamp = Path(record["path"]).stem.split("_")
         timestamp = int(stamp[0]) + int(stamp[1]) * 1e-9
-        raw_by_person = dict(zip(record[f"{prefix}pose_indices"], record[f"{prefix}poses_raw"]))
-        # 裁剪不足时可能没有 raw，但当前 GT 轨迹仍需要保持上一帧。
-        people = record.get(f"{prefix}track_ids", record[f"{prefix}pose_indices"])
+        raw_by_person = dict(zip(record["gt_crop_pose_indices"], record["gt_crop_poses_raw"]))
+        people = record.get("gt_crop_track_ids", record["gt_crop_pose_indices"])
+        poses, output_ids, statuses = [], [], {}
         for person in people:
             person = int(person)
-            raw = raw_by_person.get(person)
             state = states.get(person)
-            if state is None or state["last"] != i - 1:
-                state = {"last": i - 1, "time": timestamp - .12, "ref": None,
-                         "pending": [], "candidate": []}
+            if state is None or state["last"] != index - 1:
+                # shortcut: 使用连续 GT 人员索引；接入跟踪数据时换为带 generation 的 ID。
+                state = {"keeper": None, "candidate": None, "count": 0,
+                         "time": timestamp - .12, "last": index - 1,
+                         "direction": direction_factory() if direction_factory is not None else None}
                 states[person] = state
             dt = timestamp - state["time"]
             if dt <= 0:
                 raise ValueError("Non-increasing point-cloud timestamp")
-            weak = (record["dynamic_point_counts"].get(person, 0) < params["min_dynamic"]
-                    or record["total_point_counts"].get(person, 0) < params["min_total"])
-            if weak or raw is None or not np.isfinite(raw).all():
-                if state["ref"] is not None:
-                    outputs[i][person] = (state["ref"].copy(), "held")
-                state["pending"] = []
-                state["candidate"] = []
-                state["last"] = i
-                state["time"] = timestamp
-                continue
-            normal = (state["ref"] is None
-                      or pose_change_within(raw, state["ref"], dt))
-            if normal:
-                outputs[i][person] = (raw.copy(), "accepted")
-                state["ref"] = raw.copy()
-                state["pending"] = []
-                state["candidate"] = []
+            raw = raw_by_person.get(person)
+            eligible = (record["dynamic_point_counts"].get(person, 0) >= params["min_dynamic"]
+                        and record["total_point_counts"].get(person, 0) >= params["min_total"])
+            status = "kept" if state["keeper"] is not None else "excluded"
+            direction = state["direction"]
+            permit = direction.check(raw, record["dynamic_point_counts"].get(person, 0),
+                                     record["total_point_counts"].get(person, 0), dt) if direction else True
+            if not eligible or raw is None or not np.isfinite(raw).all():
+                state["candidate"], state["count"] = None, 0
+            elif permit and (state["keeper"] is None or not deployment_pose_reversal(raw, state["keeper"], dt)):
+                state["keeper"] = raw.copy()
+                state["candidate"], state["count"] = None, 0
+                status = "accepted"
             else:
-                state["pending"].append(i)
-                candidates = state["candidate"]
-                if (candidates and candidates[-1][0] == i - 1
-                        and pose_change_within(raw, candidates[-1][1], dt, stable=True)):
-                    candidates.append((i, raw.copy()))
-                else:
-                    candidates[:] = [(i, raw.copy())]
-                if len(candidates) >= params["confirm_frames"]:
-                    for j, pose in candidates[-params["confirm_frames"]:]:
-                        outputs[j][person] = (pose.copy(), "confirmed")
-                    state["ref"] = raw.copy()
-                    state["pending"] = []
-                    state["candidate"] = []
-                else:
-                    if state["ref"] is not None and len(state["pending"]) <= params["hold_frames"]:
-                        outputs[i][person] = (state["ref"].copy(), "held")
-                    if len(state["pending"]) > params["hold_frames"]:
-                        # 离线评估撤销整个未确认区间，避免旧骨架被算作新观测。
-                        for j in state["pending"]:
-                            outputs[j].pop(person, None)
-            state["last"] = i
-            state["time"] = timestamp
-    for record, output in zip(records, outputs):
-        people = list(output)
-        record[f"{prefix}poses"] = np.asarray(
-            [output[p][0] for p in people], dtype=np.float32).reshape(-1, 17, 3)
-        record[f"{prefix}pose_track_ids"] = np.asarray(people, dtype=int)
-        record[f"{prefix}orientation_held"] = np.asarray(
-            [output[p][1] == "held" for p in people], dtype=bool)
-        record[f"{prefix}pose_status"] = {
-            int(p): output[int(p)][1] if int(p) in output else "excluded"
-            for p in record.get(f"{prefix}track_ids", record[f"{prefix}pose_indices"])
-        }
+                stable = (state["candidate"] is not None
+                          and pose_change_within(raw, state["candidate"], dt, stable=True))
+                state["count"] = state["count"] + 1 if stable else 1
+                state["candidate"] = raw.copy()
+                if state["count"] >= params["confirm_frames"] and permit:
+                    state["keeper"] = raw.copy()
+                    state["candidate"], state["count"] = None, 0
+                    status = "confirmed"
+            if direction:
+                if status in ("accepted", "confirmed"):
+                    direction.commit()
+                record["gt_crop_deployment_direction_state"][person] = direction.snapshot()
+            state["last"], state["time"] = index, timestamp
+            statuses[person] = status
+            if state["keeper"] is not None:
+                output_ids.append(person)
+                poses.append(state["keeper"].copy())
+        record["gt_crop_deployment_poses"] = np.asarray(poses, dtype=np.float32).reshape(-1, 17, 3)
+        record["gt_crop_deployment_pose_indices"] = np.asarray(output_ids, dtype=int)
+        record["gt_crop_deployment_status"] = statuses
+
 
 
 def aggregate_mpjpe(frame_stats):
@@ -408,6 +331,40 @@ def aggregate_mpjpe(frame_stats):
             "pred_people": sum(stats[2] for stats in frame_stats),
             "gt_people": sum(stats[3] for stats in frame_stats),
             "matched_frames": sum(stats[1] > 0 for stats in frame_stats)}
+
+
+def last_frame_errors(records, rotation, translation):
+    """按末帧分别统计椭圆内外 MPJPE；相同时间戳、人员槽位只保留首次样本。"""
+    stages = {
+        "raw": ("poses_raw", "pose_indices"),
+        "guarded": ("poses", "pose_track_ids"),
+        "held": ("poses", "pose_track_ids"),
+        "deployment": ("deployment_poses", "deployment_pose_indices"),
+    }
+    stats = {region: {stage: {"error_mm": np.full(len(records), np.nan),
+                            "count": np.zeros(len(records), dtype=int)}
+                      for stage in stages} for region in ("inside", "outside")}
+    seen = set()
+    for index, record in enumerate(records):
+        stamp = Path(record["path"]).stem
+        inside = acceptance_mask(record["gt"], rotation, translation)
+        fresh = [p for p in range(len(inside)) if (stamp, p) not in seen]
+        seen.update((stamp, p) for p in fresh)
+        for stage, (suffix, ids_suffix) in stages.items():
+            people, rows = np.unique(record["gt_crop_" + ids_suffix], return_index=True)
+            selected = np.isin(people, fresh)
+            if stage == "held":
+                selected &= np.array([record["gt_crop_pose_status"][int(p)] == "held"
+                                      for p in people], dtype=bool)
+            poses = record["gt_crop_" + suffix][rows[selected]]
+            truth = record["gt"][people[selected]]
+            for region, mask in (("inside", inside[people[selected]]),
+                                 ("outside", ~inside[people[selected]])):
+                value, count, *_ = frame_mpjpe(poses[mask], truth[mask])
+                if count:
+                    stats[region][stage]["error_mm"][index] = value
+                    stats[region][stage]["count"][index] = count
+    return stats
 
 
 def transform_points(points, rotation, translation):
@@ -446,50 +403,61 @@ def acceptance_mask(poses, rotation, translation):
                      ACCEPTANCE_RADII_XY).sum(axis=1) <= 1.0
 
 
-def append_group_metrics_markdown(metrics, path):
-    """写入结果并重建表格，避免旧表头或空行破坏 Markdown 渲染。"""
-    metric_names = (
-        ("MPJPE", "mpjpe_mm"),
-        ("centered-MPJPE", "centered_mpjpe_mm"),
-        ("PA-MPJPE", "pa_mpjpe_mm"),
-    )
-    headers = ["date", "group", "MODEL_POSE_PATH"]
-    values = [str(metrics["date"]), str(metrics["group"]), str(MODEL_POSE_PATH)]
-    for metric_label, metric_key in metric_names:
-        for section in ("current_frame",):
-            for stage in ("raw", "guarded"):
-                headers.append(f"{section}-{stage} {metric_label} [inside/all]")
-                pair = []
-                for region in ("inside", "all"):
-                    metric = metrics["regions"][region][section][stage][metric_key]
-                    pair.append(f"{metric:.3f}" if metric is not None else "N/A")
-                values.append("/".join(pair))
+def group_metric_log_lines(metrics):
+    rows = {}
+    for stage in ("raw", "guarded"):
+        all_metrics, inside = [metrics["regions"][region]["current_frame"][stage]
+                               for region in ("all", "inside")]
+        metres = lambda value: value / 1000 if value is not None else None
+        rows[stage] = dict(mpjpe=metres(all_metrics["mpjpe_mm"]), mpjpe_inside=metres(inside["mpjpe_mm"]),
+            centered_mpjpe=metres(all_metrics["centered_mpjpe_mm"]),
+            centered_mpjpe_inside=metres(inside["centered_mpjpe_mm"]),
+            count=all_metrics.get("matched_people"), count_inside=inside.get("matched_people"))
+    return format_group_metrics(f"{metrics['date']}/{metrics['group']}", metrics.get("label", "unlabelled"),
+                                rows["raw"], rows["guarded"], model=str(MODEL_POSE_PATH))
 
+
+def append_group_metrics_markdown(metrics, path):
+    """保存 Raw/Guard 两行日志；旧 Markdown 行转换单位、顺序后保留。"""
     path = Path(path)
     rows = []
+    legacy_rows = False
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        previous = path.read_text(encoding="utf-8")
+        for line in previous.splitlines():
+            if "Val group " in line:
+                rows.append(line)
+                continue
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
             if len(cells) == 15:
                 cells = cells[:3] + cells[3:5] + cells[7:9] + cells[11:13]
-            if (line.startswith("|") and len(cells) == len(headers)
-                    and cells[0] not in {"date", "group", "---"}):
-                # 兼容旧的 group/date 列顺序。
-                if cells[0].startswith("group_"):
-                    cells[0], cells[1] = cells[1], cells[0]
-                for index in range(3, len(cells)):
-                    if "/" not in cells[index]:
-                        cells[index] += "/N/A"
-                rows.append(cells)
-    rows = [row for row in rows if row[:2] != values[:2]]
-    rows.append(values)
-    lines = [
-        "> 指标单位：mm；每项格式为“椭圆内/全部”，均按整组匹配人次加权。",
-        "",
-        "| " + " | ".join(headers) + " |",
-        "| " + " | ".join(["---"] * 3 + ["---:"] * (len(headers) - 3)) + " |",
-        *("| " + " | ".join(row) + " |" for row in rows),
-    ]
+            if not line.startswith("|") or len(cells) != 9:
+                continue
+            if cells[0].startswith("group_"):
+                cells[0], cells[1] = cells[1], cells[0]
+            if not cells[0].isdigit():
+                continue
+            legacy_rows = True
+            stages = []
+            for offset in (0, 1):
+                values = {}
+                for key, index in (("mpjpe", 3 + offset), ("centered_mpjpe", 5 + offset)):
+                    pair = re.findall(r"N/A|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", cells[index])
+                    inside, total = (pair + ["N/A", "N/A"])[:2]
+                    values[key] = None if total == "N/A" else float(total) / 1000
+                    values[key + "_inside"] = None if inside == "N/A" else float(inside) / 1000
+                stages.append(values)
+            rows.extend(format_group_metrics(f"{cells[0]}/{cells[1]}", "unlabelled", *stages, model=cells[2]))
+        if legacy_rows:
+            backup = path.with_name(path.stem + ".before_raw_guard_lines" + path.suffix)
+            if not backup.exists():
+                backup.write_text(previous, encoding="utf-8")
+    key = f"Val group {metrics['date']}/{metrics['group']} |"
+    rows = [row for row in rows if key not in row]
+    rows.extend(group_metric_log_lines(metrics))
+    lines = ["# Group metrics: all / inside ellipse; unit=m; unavailable results=N/A.",
+             "# Guard: " + guard_metric_protocol()["description"],
+             "# Raw/Guard样本可能不同；Guard拒绝的人从GT匹配集合移除，需结合共同子集和覆盖率比较。", "", *rows]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -532,12 +500,16 @@ class SelectedGroupVisualizer:
         self.fig = None
         self.frame_slider = None
         self.defer_visual_guarding = False
+        self.last_frame_metrics = None
+        self.error_axes = None
         if not visualize:
             return
-        self.fig = plt.figure(figsize=(20, 6), dpi=80)
-        self.axes = np.asarray([self.fig.add_subplot(1, 3, idx + 1, projection="3d")
+        self.fig = plt.figure(figsize=(20, 10), dpi=80)
+        grid = self.fig.add_gridspec(2, 3, height_ratios=[3, 2])
+        self.axes = np.asarray([self.fig.add_subplot(grid[0, idx], projection="3d")
                                 for idx in range(3)]).reshape(1, 3)
-        self.fig.subplots_adjust(bottom=.12, hspace=.12, wspace=.05)
+        self.error_axes = np.array([self.fig.add_subplot(grid[1, :])])
+        self.fig.subplots_adjust(bottom=.11, top=.89, hspace=.30, wspace=.08)
         slider_ax = self.fig.add_axes([.15, .035, .70, .025])
         self.frame_slider = Slider(slider_ax, "Frame", 1, len(self.paths),
                                    valinit=1, valstep=1, valfmt="%d")
@@ -592,7 +564,14 @@ class SelectedGroupVisualizer:
 
     def postprocess_poses(self):
         """时序回填完成后统一判决，标签顺序分别对齐 raw/guarded 人员索引。"""
-        guard_pose_records(self.records, "gt_crop_")
+        direction_factory = lambda: DirectionKeeper(*self.high_to_low, direction_check=False)
+        for record in self.records:
+            for key in list(record):
+                if key.startswith(("gt_crop_keeper_base_", "gt_crop_motion_guard_")) or key == "gt_crop_poses_legacy":
+                    del record[key]
+        guard_pose_records(self.records, "gt_crop_", direction_factory=direction_factory)
+        deployment_pose_records(self.records, direction_factory)
+        self.last_frame_metrics = None
         for record in self.records:
             for suffix in ("_raw", ""):
                 poses_low = transform_points(record[f"gt_crop_poses{suffix}"], *self.high_to_low)
@@ -642,6 +621,7 @@ class SelectedGroupVisualizer:
             record["gt_crop_input_points"] = {}
             record["gt_crop_quality"] = {}
             record["gt_training_window"] = False
+        self.last_frame_metrics = None
 
         point_sequences = []
         gt_sequences = []
@@ -752,17 +732,18 @@ class SelectedGroupVisualizer:
         prefix = "gt_crop_"
         suffix, ids_suffix = {
             "raw": ("poses_raw", "pose_indices"),
-            "legacy": ("poses_legacy", "pose_indices"),
             "raw_kept": ("poses_raw", "pose_indices"),
-            "legacy_kept": ("poses_legacy", "pose_indices"),
             "guarded": ("poses", "pose_track_ids"),
+            "deployment": ("deployment_poses", "deployment_pose_indices"),
         }[stage]
         gt = record["gt"]
         ids = np.arange(len(gt))
         if inside_only:
             ids = ids[acceptance_mask(gt, *self.high_to_low)]
-        if stage in ("raw_kept", "legacy_kept", "guarded"):
+        if stage in ("raw_kept", "guarded"):
             ids = ids[np.isin(ids, record[prefix + "pose_track_ids"])]
+        if stage == "deployment":
+            ids = ids[np.isin(ids, record[prefix + "deployment_pose_indices"])]
         poses = record[prefix + suffix]
         poses = poses[np.isin(record[prefix + ids_suffix], ids)]
         if not record.get("gt_training_window", True):
@@ -772,19 +753,16 @@ class SelectedGroupVisualizer:
         return poses, gt
 
     def evaluate_group(self):
-        """整组离线判决；同时报告全量基线、共同子集和输出覆盖率。"""
+        """整组统计 Raw、Guard+躺姿锁、Keeper+躺姿锁及输出覆盖率。"""
         if len(self.records) != len(self.paths):
             raise ValueError("整组尚未推理完成，不能报告整组 MPJPE")
         if self.group_metrics is not None:
             return self.group_metrics
         self.infer_gt_raw_as_training()
-        legacy_guard_pose_records(self.records, "gt_crop_")
-        for record in self.records:
-            record["gt_crop_poses_legacy"] = record["gt_crop_poses"].copy()
         self.postprocess_poses()
         self.visualization_mpjpe = None
         regions = {}
-        stages = ("raw", "legacy", "raw_kept", "legacy_kept", "guarded")
+        stages = ("raw", "raw_kept", "guarded", "deployment")
         for region, inside_only in (("inside", True), ("all", False)):
             result = {}
             for stage in stages:
@@ -800,32 +778,43 @@ class SelectedGroupVisualizer:
                     if name == "mpjpe_mm":
                         values["matched_people"] = stats["matched_people"]
                 result[stage] = values
-            eligible = result["raw"]["matched_people"]
+            eligible = sum(len(self.metric_inputs(record, "raw", inside_only)[1]) for record in self.records)
             kept = result["guarded"]["matched_people"]
-            assert kept == result["raw_kept"]["matched_people"] == result["legacy_kept"]["matched_people"]
             result["coverage"] = {
                 "eligible_people": eligible, "kept_people": kept,
                 "excluded_people": eligible - kept,
                 "retained_pct": 100 * kept / eligible if eligible else None,
             }
+            keeper_count = result["deployment"]["matched_people"]
+            result["keeper_coverage"] = {
+                "eligible_people": eligible, "kept_people": keeper_count,
+                "excluded_people": eligible - keeper_count,
+                "retained_pct": 100 * keeper_count / eligible if eligible else None,
+            }
             regions[region] = {"current_frame": result}
         self.group_metrics = {
             "date": DATE, "group": GROUP, "frames": len(self.records),
             "gt_frames": sum(record["has_gt"] for record in self.records),
+            "guard": {**guard_metric_protocol(), "lying_head_lock": True, "direction_check": False},
+            "keeper": {"lying_head_lock": True, "direction_check": False, "offline_backfill": False},
+            "label": json.loads((PROJECT_ROOT / "data2datasets/group_labels.json").read_text())["groups"].get(
+                f"{DATE}/{GROUP}", {}).get("label", "unlabelled"),
             "regions": regions,
         }
+        print("Guard protocol: " + self.group_metrics["guard"]["description"])
+        print("Guard / Keeper 均启用躺姿头脚锁；新增双方向及 80% 动点确认关闭。")
+        print("Scoring: Raw/Guard/Keeper may have different output sets; "
+              "compare matched counts and coverage. raw_kept restricts Raw to Guard output IDs.")
         fmt = lambda value: "N/A" if value is None else f"{value:.3f}"
         print(f"{DATE}/{GROUP}: checkpoint=last.pth；离线三帧确认/回填")
-        print("| 区域 | 方法 | 人帧数 | MPJPE mm | Centered mm | PA mm |")
-        print("|---|---|---:|---:|---:|---:|")
-        labels = ("原始全量", "旧处理全量", "原始保留子集", "旧处理保留子集", "新时序处理")
+        for line in group_metric_log_lines(self.group_metrics):
+            print(line)
         for region, label in (("inside", "椭圆内"), ("all", "全部")):
-            result = regions[region]["current_frame"]
-            for stage, stage_label in zip(stages, labels):
-                v = result[stage]
-                print(f"| {label} | {stage_label} | {v['matched_people']} | "
-                      f"{fmt(v['mpjpe_mm'])} | {fmt(v['centered_mpjpe_mm'])} | {fmt(v['pa_mpjpe_mm'])} |")
-            c = result["coverage"]
+            keeper_metrics = regions[region]["current_frame"]["deployment"]
+            keeper_coverage = regions[region]["current_frame"]["keeper_coverage"]
+            print(f"{label} Keeper+躺姿锁 MPJPE：{fmt(keeper_metrics['mpjpe_mm'])} mm；"
+                  f"保留率：{fmt(keeper_coverage['retained_pct'])}%")
+            c = regions[region]["current_frame"]["coverage"]
             print(f"{label}保留率：{fmt(c['retained_pct'])}% "
                   f"({c['kept_people']}/{c['eligible_people']})；不输出 {c['excluded_people']} 人帧")
         return self.group_metrics
@@ -934,6 +923,12 @@ class SelectedGroupVisualizer:
             fig.savefig(output_path, dpi=150)
             plt.close(fig)
             output_paths.append(output_path)
+        fig, ax = plt.subplots(figsize=(12, 5), constrained_layout=True)
+        self.plot_last_frame_errors([ax])
+        output_path = output_dir / "deployment_comparison.png"
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+        output_paths.append(output_path)
         print(f"逐帧指标图已分别保存到 {output_dir}")
         return output_paths
 
@@ -1023,6 +1018,28 @@ class SelectedGroupVisualizer:
                 self.visualization_mpjpe[inside_only] = averages
         return self.visualization_mpjpe
 
+    def plot_last_frame_errors(self, axes=None):
+        if self.last_frame_metrics is None:
+            self.last_frame_metrics = last_frame_errors(self.records, *self.high_to_low)
+        frames = np.arange(1, len(self.records) + 1)
+        for ax in self.error_axes if axes is None else axes:
+            ax.clear()
+            for stage, label, color in (("raw", "Raw", "tab:blue"),
+                                       ("guarded", "Guard + lie lock", "tab:orange"),
+                                       ("deployment", "Keeper + lie lock", "tab:brown")):
+                if stage not in self.last_frame_metrics["inside"]:
+                    continue
+                for region, style in (("inside", "-"), ("outside", "--")):
+                    ax.plot(frames, self.last_frame_metrics[region][stage]["error_mm"],
+                            linestyle=style, color=color, label=f"{label} ({region})", linewidth=1.1)
+            ax.axhline(METRIC_REFERENCE_MM, color="gray", linestyle="--", linewidth=1)
+            ax.set(title="Last-frame MPJPE: Raw / Guard+lie lock / Keeper+lie lock", ylabel="MPJPE (mm)",
+                   xlabel="Frame idx (window last frame); solid: inside ellipse; dashed: outside ellipse",
+                   xticks=decimal_frame_ticks(len(self.records)), xlim=(0, max(1, len(self.records))))
+            ax.set_ylim(bottom=0)
+            ax.grid(alpha=.25)
+            ax.legend(ncol=2, fontsize=8)
+
     def show_frame(self, index, note=None):
         if index == len(self.records):
             record, points, _ = self.infer_frame(index)
@@ -1036,7 +1053,7 @@ class SelectedGroupVisualizer:
         inside_ids = np.flatnonzero(inside_gt)
         metric_gt = gt[inside_gt]
         plot_gt = transform_points(metric_gt, rotation, translation)
-        visible_boxes = record["gt_boxes"][inside_gt]
+        visible_boxes = record["gt_boxes"]
         visible_point_mask = np.zeros(len(points), dtype=bool)
         for box in visible_boxes:
             visible_point_mask |= ((points[:, :3] >= box[:3]) &
@@ -1055,18 +1072,14 @@ class SelectedGroupVisualizer:
             ax.plot_surface(acceptance_x, acceptance_y, acceptance_z,
                             color=ACCEPTANCE_COLOR, alpha=.35, shade=False)
 
-        def draw_points(ax, cloud, selected=None):
-            selected = np.ones(len(cloud), dtype=bool) if selected is None else selected
-            dynamic = selected & np.isclose(cloud[:, -1], DYNAMIC_POINT_TAG)
-            static = selected & ~dynamic
-            outside = ~selected
-            ax.scatter(*cloud[outside, :3].T, c="gray", s=2, alpha=.12)
+        def draw_points(ax, cloud):
+            dynamic = np.isclose(cloud[:, -1], DYNAMIC_POINT_TAG)
+            static = ~dynamic
             ax.scatter(*cloud[dynamic, :3].T, c="red", s=5)
             ax.scatter(*cloud[static, :3].T, c="blue", s=5)
             ax.legend(handles=[
                 Line2D([], [], color="red", marker=".", linestyle="None", label=f"Selected dynamic (tag=1): {int(dynamic.sum())}"),
                 Line2D([], [], color="blue", marker=".", linestyle="None", label=f"Selected static (tag=2..7): {int(static.sum())}"),
-                Line2D([], [], color="gray", marker=".", linestyle="None", label="Outside GT boxes"),
             ], fontsize=7.5, loc="upper left")
 
         def draw_boxes(ax):
@@ -1079,17 +1092,10 @@ class SelectedGroupVisualizer:
                 for start, end in edges:
                     ax.plot(*corners[[start, end]].T, color="green", linewidth=1.5)
 
-        training_clouds = [cloud for person, cloud in record.get("gt_crop_input_points", {}).items()
-                           if person in inside_ids]
-        training_cloud = np.concatenate(training_clouds) if training_clouds else points[:0]
-        if len(training_cloud):
-            draw_points(self.axes[0, 0], transform_cloud(training_cloud, rotation, translation))
-            point_title = f"Training crop points: before {TRAIN_MAX_POINTS}-point resampling"
-        else:
-            draw_points(self.axes[0, 0], plot_points, visible_point_mask)
-            point_title = "Current frame points: no training crop available"
+        draw_points(self.axes[0, 0], plot_points[visible_point_mask])
         draw_boxes(self.axes[0, 0])
-        self.axes[0, 0].set_title(point_title)
+        self.axes[0, 0].set_title(
+            f"Current frame GT crop: before accumulation / {TRAIN_MAX_POINTS}-point resampling")
         def metric_label(name, poses, target, average):
             values = (frame_mpjpe(poses, target)[0],
                       frame_centered_mpjpe(poses, target)[0],
@@ -1173,6 +1179,7 @@ class SelectedGroupVisualizer:
         self.infer_gt_raw_as_training()
         print("推理完成，正在执行离线骨架时序判决……", flush=True)
         self.postprocess_poses()
+        self.plot_last_frame_errors()
         print("时序判决完成，正在准备 WebAgg……", flush=True)
 
     def on_slider(self, value):
@@ -1250,48 +1257,10 @@ def self_test():
     for averages in metric_app.get_visualization_mpjpe().values():
         np.testing.assert_allclose(averages["mpjpe"], [100, 100], atol=1e-4)
         np.testing.assert_allclose(averages["centered"], [0, 0], atol=1e-4)
-    # 任一条件低于阈值就保持；两项均达到阈值才采用 raw。
     pose = np.zeros((17, 3), dtype=np.float32)
-    test_records = []
-    for raw, ratio, count in ((pose, 0, 0), (pose + 0.1, 0.199, 9),
-                              (pose + 0.2, 0, 0), (pose + 0.3, 0.2, 9),
-                              (pose + 0.4, 1, 1), (pose + 0.5, 0.1, 10),
-                              (pose + 0.6, 0.2, 10), (pose + 0.7, 1, 11)):
-        test_records.append(dict(poses_raw=raw[None].copy(), pose_indices=np.array([0]),
-                                 dynamic_micro_ratios={0: ratio}, dynamic_point_counts={0: count}))
-    legacy_guard_pose_records(test_records)
-    for index in (1, 2, 3, 4, 5):
-        np.testing.assert_array_equal(test_records[index]["poses"][0], pose)
-        assert test_records[index]["orientation_held"][0]
-    for index in (6, 7):
-        np.testing.assert_array_equal(test_records[index]["poses"], test_records[index]["poses_raw"])
-        assert not test_records[index]["orientation_held"][0]
-    test_records[1]["poses_raw"] = np.empty((0, 17, 3), dtype=np.float32)
-    test_records[1]["pose_indices"] = np.empty(0, dtype=int)
-    legacy_guard_pose_records(test_records)
-    assert len(test_records[1]["poses"]) == 0
-    np.testing.assert_array_equal(test_records[2]["poses"], test_records[2]["poses_raw"])
-    test_records[1]["poses_raw"] = (pose + 0.1)[None]
-    test_records[1]["pose_indices"] = np.array([1])
-    legacy_guard_pose_records(test_records)
-    np.testing.assert_array_equal(test_records[2]["poses"], test_records[2]["poses_raw"])
-    # 动点充足也拒绝连续反转；恢复可信方向和恰好 90° 的变化可通过。
     axis_pose = np.zeros((17, 3), dtype=np.float32)
     axis_pose[0, 2] = 1.
     axis_pose[[15, 16], 2] = -1.
-    direction_records = [
-        dict(poses_raw=raw[None].copy(), pose_indices=np.array([0]),
-             dynamic_micro_ratios={0: 1.}, dynamic_point_counts={0: 100})
-        for raw in (axis_pose, -axis_pose + .1, -axis_pose + .2,
-                    axis_pose + .3, axis_pose[:, [2, 1, 0]] + .4)
-    ]
-    legacy_guard_pose_records(direction_records)
-    for index in (1, 2):
-        assert direction_records[index]["orientation_held"][0]
-        np.testing.assert_array_equal(direction_records[index]["poses"][0], axis_pose)
-    for index in (0, 3, 4):
-        assert not direction_records[index]["orientation_held"][0]
-        np.testing.assert_array_equal(direction_records[index]["poses"], direction_records[index]["poses_raw"])
     # 低点数不能用稳定预测解锁；无 raw 也持续保持，恢复后才确认新姿态。
     params = TEMPORAL_GUARD_PARAMS
     enough_dynamic, enough_total = params["min_dynamic"], params["min_total"]
@@ -1340,18 +1309,23 @@ def self_test():
 
     with TemporaryDirectory() as directory:
         path = Path(directory) / "points.npy"
-        sparse_dynamic = np.zeros((2, 6), dtype=np.float32)
+        sparse_dynamic = np.zeros((202, 6), dtype=np.float32)
+        sparse_dynamic[:, 0] = 2
+        sparse_dynamic[-1, 0] = 5
         sparse_dynamic[:, -1] = DYNAMIC_POINT_TAG
-        np.save(path, sparse_dynamic)
+        static_point = np.array([[5, 0, 0, 0, 0, 2]], dtype=np.float32)
+        outside_point = np.array([[2, 2, 0, 0, 0, DYNAMIC_POINT_TAG]], dtype=np.float32)
+        np.save(path, np.concatenate((sparse_dynamic, static_point, outside_point)))
         app = SelectedGroupVisualizer.__new__(SelectedGroupVisualizer)
         app.visualize = True
         app.paths = [path]
         app.high_to_low = (np.eye(3), np.zeros(3))
-        gt = np.zeros((1, 17, 3), dtype=np.float32)
+        gt = np.zeros((2, 17, 3), dtype=np.float32)
         gt[..., :2] = ACCEPTANCE_CENTER_XY
+        gt[1, :, 0] = 5  # 椭圆外人体的点云与框也必须显示。
         empty_poses = np.empty((0, 17, 3), dtype=np.float32)
         record = dict(path=path, gt=gt, has_gt=True,
-                      gt_boxes=np.array([[0, -1, -1, 4, 1, 1]]),
+                      gt_boxes=np.array([[0, -1, -1, 4, 1, 1], [4, -1, -1, 6, 1, 1]]),
                       gt_crop_poses_raw=empty_poses, gt_crop_poses=empty_poses,
                       gt_crop_pose_indices=np.empty(0, dtype=int),
                       gt_crop_pose_track_ids=np.empty(0, dtype=int),
@@ -1368,23 +1342,25 @@ def self_test():
         app.axes = np.array([app.fig.add_subplot(1, 3, i + 1, projection="3d")
                              for i in range(3)]).reshape(1, 3)
         try:
-            for clouds, expected_count, title in (
-                ({}, 2, "Current frame"),
-                ({0: sparse_dynamic[:0]}, 2, "Current frame"),
-                ({1: sparse_dynamic[:1]}, 2, "Current frame"),
-                ({0: sparse_dynamic[:1]}, 1, "Training crop"),
+            for clouds in (
+                {},
+                {0: sparse_dynamic[:0]},
+                {0: np.tile(sparse_dynamic, (4, 1))},
             ):
                 record["gt_crop_input_points"] = clouds
                 app.show_frame(0)
                 for pose_ax in app.axes[0, 1:]:
                     assert "Group mean Centered MPJPE: Raw=N/A, Guarded=N/A mm" in pose_ax.get_title()
                 ax = app.axes[0, 0]
-                assert ax.get_title().startswith(title)
+                assert ax.get_title().startswith("Current frame GT crop: before accumulation")
                 labels = [text.get_text() for text in ax.get_legend().get_texts()]
-                assert labels[:2] == [f"Selected dynamic (tag=1): {expected_count}",
-                                      "Selected static (tag=2..7): 0"]
+                assert labels == ["Selected dynamic (tag=1): 202",
+                                  "Selected static (tag=2..7): 1"]
                 assert sum(len(c._offsets3d[0]) for c in ax.collections
-                           if hasattr(c, "_offsets3d")) == expected_count
+                           if hasattr(c, "_offsets3d")) == 203
+                assert len(ax.lines) == 24  # 两个人体框各 12 条边。
+                np.testing.assert_allclose(np.array(ax.collections[1]._offsets3d).T, sparse_dynamic[:, :3])
+                np.testing.assert_allclose(np.array(ax.collections[2]._offsets3d).T, static_point[:, :3])
             record["gt_crop_poses"] = np.stack((standing + [2, 0, 0], lying + [8, 0, 0]))
             record["gt_crop_pose_track_ids"] = np.array([0, 7])
             result = classify_actions(record["gt_crop_poses"])
@@ -1396,7 +1372,7 @@ def self_test():
             record["gt_crop_actions_raw"], record["gt_crop_action_valid_raw"] = result.labels, result.valid
             record["gt"] = np.stack((lying + [2, 0, 0], standing + [8, 0, 0],
                                      np.full_like(standing, np.nan)))
-            record["gt_boxes"] = np.repeat(record["gt_boxes"], 3, axis=0)
+            record["gt_boxes"] = np.repeat(record["gt_boxes"][:1], 3, axis=0)
             app.show_frame(0)
             assert [text.get_text() for text in app.axes[0, 1].texts] == [
                 "P0 GT: lie", "P0 Guarded: stand", "P0 Raw: lie"]
@@ -1405,6 +1381,8 @@ def self_test():
                 "P0 Guarded: stand", "P7 Guarded: lie", "P7 Raw: stand", "P0 Raw: lie"]
             record.update(gt=empty_poses, has_gt=False, gt_boxes=np.empty((0, 6)))
             app.show_frame(0)
+            assert sum(len(c._offsets3d[0]) for c in app.axes[0, 0].collections
+                       if hasattr(c, "_offsets3d")) == 0
             assert not app.axes[0, 1].texts
             assert [text.get_text() for text in app.axes[0, 2].texts] == [
                 "P0 Guarded: stand", "P7 Guarded: lie", "P7 Raw: stand", "P0 Raw: lie"]
@@ -1446,6 +1424,7 @@ def main():
             app.infer_frame(index)
         app.infer_gt_raw_as_training()
         app.postprocess_poses()
+        app.plot_last_frame_errors()
         for index in range(frame_count):
             app.show_frame(index)
             record = app.records[index]

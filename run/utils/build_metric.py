@@ -37,6 +37,8 @@ def _masked_mean_over_people(metric, mask):
 
 
 class Metric:
+    """统计传入预测的误差；不执行时序 Guard，后处理与口径标注由调用方负责。"""
+
     def __init__(
         self,
         cfg_metrics,

@@ -62,6 +62,7 @@ class ExportModel(torch.nn.Module):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('experiment', type=Path)
+    parser.add_argument('--checkpoint', choices=('last', 'best'), default='last')
     args = parser.parse_args()
     config_dir = args.experiment / 'config'
     config = yaml.safe_load((config_dir / 'config.yaml').read_text())
@@ -70,7 +71,7 @@ def main():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     model = module.P4Transformer(**model_config)
-    checkpoint = torch.load(args.experiment / 'checkpoint/last.pth', map_location='cpu', weights_only=True)
+    checkpoint = torch.load(args.experiment / f'checkpoint/{args.checkpoint}.pth', map_location='cpu', weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'], strict=True)
     del checkpoint
     model = ExportModel(model).eval()
@@ -82,7 +83,7 @@ def main():
     mask = torch.rand(*shape) > 0.2
     mask[:, 0] = False
     points[~mask] = 0
-    output = args.experiment / 'checkpoint/last_dynamic_batch.onnx'
+    output = args.experiment / f'checkpoint/{args.checkpoint}_dynamic_batch.onnx'
     assert not output.exists(), f'Refusing to overwrite {output}'
     with patch.multiple(pointnet2_utils, furthest_point_sample=fps,
                         gather_operation=gather, grouping_operation=gather,

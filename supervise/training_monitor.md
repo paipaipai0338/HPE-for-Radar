@@ -1,8 +1,8 @@
 # 训练监控
 
-最后刷新：2026-10-30 15:40:01 +08:00；刷新间隔：10 分钟；采集状态：成功。任务 / 采集提示：1 项，见下文。
+最后刷新：2026-11-03 22:00:01 +08:00；刷新间隔：10 分钟；采集状态：成功。任务 / 采集提示：1 项，见下文。
 
-下次计划刷新：2026-10-30 15:50:00 +08:00。超过 20 分钟未更新请检查 [health.json](</home/pai/Huawei/supervise/health.json>) 和 [monitor.log](</home/pai/Huawei/supervise/monitor.log>)。
+下次计划刷新：2026-11-03 22:10:00 +08:00。超过 20 分钟未更新请检查 [health.json](</home/pai/Huawei/supervise/health.json>) 和 [monitor.log](</home/pai/Huawei/supervise/monitor.log>)。
 
 范围：tasks.json 登记的项目任务；GPU 表列出全机计算占用。MPJPE 统一为 cm；不同骨架与数据划分的指标不宜直接横比。
 
@@ -10,8 +10,8 @@
 
 | 任务 | 状态 | GPU | 已完成 epoch | 最近验证 MPJPE | 预计结束时间 |
 | --- | --- | --- | --- | --- | --- |
-| P4Transformer bbox扰动，GPU0最高优先级微调50轮 | 运行中 | 0 | 342/350 | 14.850 cm | 2026-10-30 20:32:30 +08:00 |
-| P4Transformer MOCAP-21，步长1微调50轮 | 运行中 | 1 | 326/350 | 13.302 cm | 2026-10-31 07:12:38 +08:00 |
+| SetTransformer xyz 多模型对比，微调 51–100 epoch | 运行中 | 0 | 90/100 | 16.339 cm | 2026-11-04 03:15:13 +08:00 |
+| FFTGen P4Transformer xyz，MOCAP-21，500点，100轮 | 运行中 | 1 | 87/100 | 14.800 cm | 2026-11-04 05:56:36 +08:00 |
 
 预计结束时间为北京时间的训练结束估计，不含后续评估；最多取最近 11 条完整 epoch 日志，有多少用多少。只有一条时按进程启动至该轮完成的耗时估算（含初始化）；无有效耗时数据或正在评估时显示“暂无法估算”。
 
@@ -19,14 +19,9 @@
 
 | 任务 | 状态 | GPU | 启动条件 / 内容 |
 | --- | --- | --- | --- |
-| ResNet3D 最佳版续训25–48轮，GPU0排队首位 | 排队中 | 0 | 当前GPU0 bbox微调保持运行；其结束且锁释放后优先执行，先于多模型队列；GPU0三次空闲检查后开始。 |
-| P4Transformer xyz，步长1微调50轮 | 排队中 | 1 | 等待GPU1当前MOCAP微调退出，再取得GPU1共享锁；保留原50轮微调与--start-now策略。 |
-| P4Transformer xyzv，步长1微调50轮 | 排队中 | 1 | 等待前序xyz 50轮微调退出，再取得GPU1共享锁；按用户要求跳过整卡空闲检查，微调260–309轮。 |
-| P4Transformer xyz 多模型对比，微调 51–100 epoch | 排队中 | 0 | 第1/5项：等待当前bbox微调及最高优先级ResNet3D第25–48轮结束、旧暂停控制进程释放锁，再通过GPU0三次空闲检查。 |
-| PointNet xyz 多模型对比，微调 51–100 epoch | 排队中 | 0 | 同一 GPU0 串行队列第 2/5 项；等待 P4Transformer 本阶段训练完成。 |
-| SetTransformer xyz 多模型对比，微调 51–100 epoch | 排队中 | 0 | 同一 GPU0 串行队列第 3/5 项；等待 PointNet 本阶段训练完成。 |
-| VoxelNeXt xyz 多模型对比，微调 51–100 epoch | 排队中 | 0 | 同一 GPU0 串行队列第 4/5 项；等待 SetTransformer 本阶段训练完成。 |
-| ConvNeXtV2 xyz 多模型对比，从头训练 100 epoch | 排队中 | 0 | 同一 GPU0 串行队列第 5/5 项；等待 VoxelNeXt 本阶段训练完成。 |
+| P4Transformer xyzv，空闲GPU续训295–309轮 | 排队中 | 0/1（空闲优先） | 双卡共享队列第 4/4 项；GPU0 / GPU1 任一卡取得共享锁且连续三次空闲检查通过即可启动，无需等待另一张卡；保持原训练参数。 |
+| VoxelNeXt xyz 多模型对比，微调 51–100 epoch | 排队中 | 0/1（空闲优先） | 双卡共享队列第 2/4 项；GPU0 / GPU1 任一卡取得共享锁且连续三次空闲检查通过即可启动，无需等待另一张卡；保持原训练参数。 |
+| ConvNeXtV2 xyz 多模型对比，从头训练 100 epoch | 排队中 | 0/1（空闲优先） | 双卡共享队列第 3/4 项；GPU0 / GPU1 任一卡取得共享锁且连续三次空闲检查通过即可启动，无需等待另一张卡；保持原训练参数。 |
 
 顺序来自现有任务和启动条件；本监控不负责启动、重试或调整训练。
 
@@ -34,13 +29,14 @@
 
 | GPU | 型号 | 利用率 | 显存 MiB（已用 / 总计） |
 | --- | --- | --- | --- |
-| 0 | NVIDIA GeForce RTX 5090 | 49% | 10827 / 32607 |
-| 1 | NVIDIA GeForce RTX 5090 | 17% | 16049 / 32607 |
+| 0 | NVIDIA GeForce RTX 5090 | 49% | 12309 / 32607 |
+| 1 | NVIDIA GeForce RTX 5090 | 56% | 3417 / 32607 |
 
 | GPU | PID | 用户 | 归属 | 命令 |
 | --- | --- | --- | --- | --- |
-| 0 | 252243 | pai | 已登记任务 | /home/pai/miniconda3/envs/pytorch/bin/python -B -u /home/pai/Huawei/experiments/P4Transformer/priority_bbox_stride1_50_20261029_103145/launch.py --worker |
-| 1 | 246250 | pai | 已登记任务 | /home/pai/miniconda3/envs/pytorch/bin/python -B -u /home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/launch.py --worker |
+| 0 | 2447746 | pai | 已登记任务 | /home/pai/miniconda3/envs/pytorch/bin/python -B -u /home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/continue_modelcompare.py --run-dir /home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125 --worker SetTransformer |
+| 1 | 2193899 | pai | 已登记任务 | /home/pai/miniconda3/envs/pytorch/bin/python -B -u /home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828/recovery_20261102_oom/launch.py worker |
+| 1 | 2799571 | pai | 未登记占用（不推断实验配置） | /home/pai/miniconda3/envs/pytorch/bin/python /home/pai/Huawei/deploy/Inference_selected_group.py |
 
 ## 异常与待处理
 
@@ -50,11 +46,17 @@
 
 | 任务 | 状态 | GPU | 已完成 epoch | 最近验证 MPJPE |
 | --- | --- | --- | --- | --- |
+| ResNet3D 最佳版续训25–48轮，GPU0排队首位 | 已完成 | 0 | 48/48 | 14.486 cm |
+| P4Transformer bbox扰动，GPU0最高优先级微调50轮 | 已完成 | 0 | 350/350 | 14.836 cm |
 | P4Transformer MOCAP-21，300 epoch | 已完成 | 0 | 300/300 | 14.209 cm |
 | P4Transformer T=3 时间窗口消融 | 已完成 | 1 | 300/300 | 14.618 cm |
 | P4Transformer bbox 扰动对比 | 已完成 | 0 | 300/300 | 15.531 cm |
+| P4Transformer MOCAP-21，步长1微调50轮 | 已完成 | 1 | 350/350 | 13.113 cm |
+| P4Transformer xyz，步长1微调50轮 | 已完成 | 1 | 350/350 | 14.730 cm |
 | P4Transformer T=1 时间窗口消融 | 已完成 | 1 | 300/300 | 15.136 cm |
 | ConvNeXtV2 xyz-only，50 epoch | 已失败 | 0 | 0/50 | 未记录 |
+| P4Transformer xyz 多模型对比，微调 51–100 epoch | 已完成 | 0 | 100/100 | 14.225 cm |
+| PointNet xyz 多模型对比，微调 51–100 epoch | 已中断 | 0 | 70/100 | 786.257 cm |
 
 ## 任务详情与证据
 
@@ -62,29 +64,29 @@
 
 从20261023_065632第24轮last恢复权重、AdamW及指标历史，在当前数据清单（请求训练504组/验证221组，含俯卧）继续到48轮；COCO-17、DXYZ+KXYZ、GT ROI、T=1、步长1、batch16、BF16、每轮8000批；平移±10cm、镜像50%、功率增强、骨长约束0.2；lr=0.00004、余弦24轮、无预热。新验证清单独立统计best，历史实验保留。
 
-- 状态：排队中；阶段：waiting_predecessor；已完成 24/48 epoch。
+- 状态：已完成；阶段：complete；已完成 48/48 epoch。
 - 配置：[config.yaml](</home/pai/Huawei/experiments/ResNet3D/20261030_100710/config/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/ResNet3D/20261030_100710/continuation/status.json>)。
-- PID：1007656；用户：pai；进程开始：2026-10-30 10:08:31 +08:00。
-- 控制台：尚未生成。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/ResNet3D/20261030_100710/continuation/queue.log>)。
-- 最近证据更新时间：2026-10-30 10:08:31 +08:00。
+- 最近完整 epoch：48（2026-10-31 19:48:03 +08:00）；训练 MPJPE：9.808 cm；验证 MPJPE：14.486 cm；验证 loss：0.1448594970605182。
+- 训练日志：[log.txt](</home/pai/Huawei/experiments/ResNet3D/20261030_100710/log/log.txt>)。
+- 控制台：[console.log](</home/pai/Huawei/experiments/ResNet3D/20261030_100710/continuation/console.log>)。
+- 最近证据更新时间：2026-10-31 19:48:05 +08:00。
 - 实验目录：[20261030_100710](</home/pai/Huawei/experiments/ResNet3D/20261030_100710>)。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/ResNet3D/20261030_100710/checkpoint/last.pth>)（更新于 2026-10-31 19:48:03 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/ResNet3D/20261030_100710/checkpoint/best.pth>)（更新于 2026-10-31 10:19:57 +08:00）。
 
 ### P4Transformer bbox扰动，GPU0最高优先级微调50轮
 
 从20261028_161946第300轮last恢复，T=16、训练/验证步长1，微调301–350轮；lr=0.0003、无预热、余弦50轮、batch=64、BF16，保留每帧bbox扰动和跟踪框增强。日志、权重和配置续写原实验目录；300轮结果备份于backup_before_stride1_50。原GPU0多模型队列整体内存暂停，本任务退出后自动原地恢复。
 
-- 状态：运行中；阶段：training；已完成 342/350 epoch。
+- 状态：已完成；阶段：complete；已完成 350/350 epoch。
 - 配置：[resume_stride1_350.yaml](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/config/resume_stride1_350.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/finetune_stride1_50/status.json>)。
-- PID：252243；用户：pai；进程开始：2026-10-29 10:35:02 +08:00。
-- 最近完整 epoch：342（2026-10-30 15:18:18 +08:00）；训练 MPJPE：6.679 cm；验证 MPJPE：14.850 cm；验证 loss：0.1484955962329979。
+- 最近完整 epoch：350（2026-10-30 20:17:13 +08:00）；训练 MPJPE：6.600 cm；验证 MPJPE：14.836 cm；验证 loss：0.14836068025475488。
 - 已记录的最佳验证 MPJPE：14.813 cm（epoch 335）。
-- 预计训练结束：2026-10-30 20:32:30 +08:00（最近完整 epoch 耗时中位数，仅供参考，不含后续评估）。
 - 训练日志：[log.txt](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/log/log.txt>)。
 - 控制台：[finetune_console.log](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/log/finetune_console.log>)。
-- 最近证据更新时间：2026-10-30 15:40:01 +08:00。
+- 最近证据更新时间：2026-10-30 20:17:16 +08:00。
 - 实验目录：[20261028_161946](</home/pai/Huawei/experiments/P4Transformer/20261028_161946>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/checkpoint/last.pth>)（更新于 2026-10-30 15:18:18 +08:00）。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/checkpoint/last.pth>)（更新于 2026-10-30 20:17:13 +08:00）。
 - best.pth：[best.pth](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/checkpoint/best.pth>)（更新于 2026-10-30 10:47:34 +08:00）。
 
 ### P4Transformer MOCAP-21，300 epoch
@@ -92,10 +94,15 @@
 保持原训练条件，将 COCO-17 改为 MOCAP-21，训练后比较骨架插值精度。
 
 - 状态：已完成；阶段：complete；已完成 300/300 epoch。
-- 配置：[config.yaml](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_20261027/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_20261027/status.json>)。
-- 控制台：[console.log](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_20261027/console.log>)。
-- 最近证据更新时间：2026-10-28 16:18:37 +08:00。
-- 实验目录：[20261028_042133](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133>)。
+- 配置：[config.yaml](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/initial_300/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/initial_300/status.json>)。
+- 最近完整 epoch：300（2026-10-28 16:17:57 +08:00）；训练 MPJPE：6.959 cm；验证 MPJPE：14.209 cm；验证 loss：0.14209393539928178。
+- 已记录的最佳验证 MPJPE：14.203 cm（epoch 292）。
+- 训练日志：[log.txt](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/initial_300/20261028_042133/log/log.txt>)。
+- 控制台：[console.log](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/initial_300/console.log>)。
+- 最近证据更新时间：2026-11-03 10:00:33 +08:00。
+- 实验目录：[20261028_042133](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/initial_300/20261028_042133>)。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/initial_300/20261028_042133/checkpoint/last.pth>)（更新于 2026-10-28 16:17:57 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/initial_300/20261028_042133/checkpoint/best.pth>)（更新于 2026-10-28 15:59:21 +08:00）。
 
 ### P4Transformer T=3 时间窗口消融
 
@@ -122,53 +129,56 @@
 - 已记录的最佳验证 MPJPE：15.515 cm（epoch 272）。
 - 训练日志：[log.txt](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/log/log.txt>)。
 - 控制台：[train_console.log](</home/pai/Huawei/codex/p4_bbox_jitter_compare/train_console.log>)。
-- 最近证据更新时间：2026-10-30 15:18:18 +08:00。
+- 最近证据更新时间：2026-10-30 20:17:13 +08:00。
 - 实验目录：[20261028_161946](</home/pai/Huawei/experiments/P4Transformer/20261028_161946>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/checkpoint/last.pth>)（更新于 2026-10-30 15:18:18 +08:00）。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/checkpoint/last.pth>)（更新于 2026-10-30 20:17:13 +08:00）。
 - best.pth：[best.pth](</home/pai/Huawei/experiments/P4Transformer/20261028_161946/checkpoint/best.pth>)（更新于 2026-10-30 10:47:34 +08:00）。
 
 ### P4Transformer MOCAP-21，步长1微调50轮
 
 从 MOCAP 第300轮 last 恢复，使用16帧窗口、步长1微调50轮（301–350）；lr=0.0003、无预热、余弦50轮、batch=64、BF16。保留原实验，续训结果另存。
 
-- 状态：运行中；阶段：training；已完成 326/350 epoch。
-- 配置：[config.yaml](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/status.json>)。
-- PID：246250；用户：pai；进程开始：2026-10-29 10:24:38 +08:00。
-- 最近完整 epoch：326（2026-10-30 15:22:38 +08:00）；训练 MPJPE：6.240 cm；验证 MPJPE：13.302 cm；验证 loss：0.1330160681453875。
-- 已记录的最佳验证 MPJPE：13.208 cm（epoch 322）。
-- 预计训练结束：2026-10-31 07:12:38 +08:00（最近完整 epoch 耗时中位数，仅供参考，不含后续评估）。
-- 训练日志：[log.txt](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/experiment/log/log.txt>)。
-- 控制台：[console.log](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/console.log>)。
-- 最近证据更新时间：2026-10-30 15:40:01 +08:00。
-- 实验目录：[experiment](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/experiment>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/experiment/checkpoint/last.pth>)（更新于 2026-10-30 15:22:38 +08:00）。
-- best.pth：[best.pth](</home/pai/Huawei/experiments/P4Transformer_mocap_300/queue_stride1_100_20261028_213911/experiment/checkpoint/best.pth>)（更新于 2026-10-30 12:44:31 +08:00）。
+- 状态：已完成；阶段：complete；已完成 350/350 epoch。
+- 配置：[config.yaml](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/finetune_stride1_50/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/finetune_stride1_50/status.json>)。
+- 最近完整 epoch：350（2026-10-31 08:30:02 +08:00）；训练 MPJPE：5.704 cm；验证 MPJPE：13.113 cm；验证 loss：0.13112522576043695。
+- 已记录的最佳验证 MPJPE：13.101 cm（epoch 346）。
+- 训练日志：[log.txt](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/log/log.txt>)。
+- 控制台：[console.log](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/finetune_stride1_50/console.log>)。
+- 最近证据更新时间：2026-10-31 08:30:09 +08:00。
+- 实验目录：[20261028_042133](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133>)。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/checkpoint/last.pth>)（更新于 2026-10-31 08:30:02 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/P4Transformer_mocap_300/20261028_042133/checkpoint/best.pth>)（更新于 2026-10-31 05:29:24 +08:00）。
 
 ### P4Transformer xyz，步长1微调50轮
 
 保留 xyz-only 输入和 COCO-17 输出，从第300轮 last 恢复，使用16帧窗口、步长1微调50轮（301–350）；lr=0.0003、无预热、余弦50轮、batch=64、BF16。
 
-- 状态：排队中；阶段：waiting_predecessor；已完成 300/350 epoch。
+- 状态：已完成；阶段：complete；已完成 350/350 epoch。
 - 配置：[config.yaml](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/status.json>)。
-- PID：999006；用户：pai；进程开始：2026-10-30 09:52:09 +08:00。
-- 控制台：尚未生成。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/queue.log>)。
-- 最近证据更新时间：2026-10-30 09:52:09 +08:00。
+- 最近完整 epoch：350（2026-11-01 17:03:26 +08:00）；训练 MPJPE：5.997 cm；验证 MPJPE：14.730 cm；验证 loss：0.14730390071198196。
+- 已记录的最佳验证 MPJPE：14.621 cm（epoch 331）。
+- 训练日志：[log.txt](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/experiment/log/log.txt>)。
+- 控制台：[console.log](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/console.log>)。
+- 最近证据更新时间：2026-11-03 10:00:33 +08:00。
 - 实验目录：[experiment](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/experiment>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/experiment/checkpoint/last.pth>)（更新于 2026-10-27 04:00:09 +08:00）。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/experiment/checkpoint/last.pth>)（更新于 2026-11-01 17:03:26 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/P4Transformer_xyz_300/queue_stride1_100_20261028_214542/experiment/checkpoint/best.pth>)（更新于 2026-11-01 05:18:15 +08:00）。
 
-### P4Transformer xyzv，步长1微调50轮
+### P4Transformer xyzv，空闲GPU续训295–309轮
 
-保留 xyzv 输入和 COCO-17 输出，从当前第259轮 last 恢复，使用16帧窗口、步长1微调50轮（260–309）；lr=0.0003、无预热、余弦50轮、batch=64、BF16。
+将原GPU1的原始PC xyzv、COCO-17、200点微调安排至GPU0 / GPU1中先空闲的卡；从第294轮完整检查点继续295–309轮，恢复模型、AdamW、指标历史与best，保持原50轮余弦调度位置，续跑lr=0.00006183221215612905，不重新预热或重置学习率。原P4模型及训练实现保持，逐组Raw/Guard报告接入共享Guard；第295轮未保存部分重跑。
 
-- 状态：排队中；阶段：waiting_predecessor；已完成 259/309 epoch。
-- 配置：[config.yaml](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/status.json>)。
-- PID：246249；用户：pai；进程开始：2026-10-29 10:24:38 +08:00。
+- 状态：排队中；阶段：waiting_any_gpu；已完成 294/309 epoch。
+- 配置：[config.yaml](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/move_gpu0_20261102_135444/config.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/move_gpu0_20261102_135444/status.json>)。
+- 队列等待进程 PID：2413271；用户：pai；进程开始：2026-11-02 19:39:18 +08:00。
+- 所属队列：[dispatch.status.json](</home/pai/Huawei/supervise/dispatch.status.json>)；启动条件：双卡共享队列第 4/4 项；GPU0 / GPU1 任一卡取得共享锁且连续三次空闲检查通过即可启动，无需等待另一张卡；保持原训练参数。
+- 训练日志：[log.txt](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/experiment/log/log.txt>)。
 - 控制台：尚未生成。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/queue.log>)。
-- 最近证据更新时间：2026-10-29 10:24:37 +08:00。
+- 等待日志：[dispatch.log](</home/pai/Huawei/supervise/dispatch.log>)。
+- 最近证据更新时间：2026-11-03 21:59:39 +08:00。
 - 实验目录：[experiment](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/experiment>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/experiment/checkpoint/last.pth>)（更新于 2026-10-27 16:29:58 +08:00）。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/experiment/checkpoint/last.pth>)（更新于 2026-11-02 13:35:55 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/P4Transformer_xyzv_300/queue_stride1_100_20261028_214542/experiment/checkpoint/best.pth>)（更新于 2026-11-02 12:25:53 +08:00）。
 
 ### P4Transformer T=1 时间窗口消融
 
@@ -200,79 +210,93 @@
 
 恢复第 50 轮模型、AdamW 状态与指标历史，额外训练 50 轮。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.003 开始、50 轮直接余弦衰减，无 warmup。日志追加到原实验，本阶段独立统计 best，旧检查点已备份。已完成7轮微调，从第57轮完整检查点补剩余43轮；历史前7轮保留，后续使用50轮余弦对应位置。
 
-- 状态：排队中；阶段：waiting_priority_bbox；已完成 57/100 epoch。
+- 状态：已完成；阶段：complete；已完成 100/100 epoch。
 - 配置：[P4Transformer.yaml](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/P4Transformer.yaml>)；状态依据：[P4Transformer.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/P4Transformer.status.json>)。
-- 队列等待进程 PID：1007657；用户：pai；进程开始：2026-10-30 10:08:31 +08:00。
-- 所属队列：[queue.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.status.json>)；启动条件：第1/5项：等待当前bbox微调及最高优先级ResNet3D第25–48轮结束、旧暂停控制进程释放锁，再通过GPU0三次空闲检查。
-- 最近完整 epoch：57（2026-10-29 10:14:03 +08:00）；训练 MPJPE：9.124 cm；验证 MPJPE：15.701 cm；验证 loss：0.15700530126514897。
-- 已记录的最佳验证 MPJPE：15.693 cm（epoch 55）。
+- 最近完整 epoch：100（2026-11-02 01:37:59 +08:00）；训练 MPJPE：5.661 cm；验证 MPJPE：14.225 cm；验证 loss：0.14224674663160075。
+- 已记录的最佳验证 MPJPE：14.200 cm（epoch 99）。
 - 训练日志：[log.txt](</home/pai/Huawei/experiments/modelcompare/P4Transformer_xyz_50/20261027_163517/log/log.txt>)。
 - 控制台：[console.log](</home/pai/Huawei/experiments/modelcompare/P4Transformer_xyz_50/20261027_163517/log/console.log>)。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.log>)。
-- 最近证据更新时间：2026-10-30 15:39:49 +08:00。
+- 最近证据更新时间：2026-11-02 01:38:00 +08:00。
 - 实验目录：[20261027_163517](</home/pai/Huawei/experiments/modelcompare/P4Transformer_xyz_50/20261027_163517>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/modelcompare/P4Transformer_xyz_50/20261027_163517/checkpoint/last.pth>)（更新于 2026-10-29 10:14:03 +08:00）。
-- best.pth：[best.pth](</home/pai/Huawei/experiments/modelcompare/P4Transformer_xyz_50/20261027_163517/checkpoint/best.pth>)（更新于 2026-10-29 08:36:31 +08:00）。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/modelcompare/P4Transformer_xyz_50/20261027_163517/checkpoint/last.pth>)（更新于 2026-11-02 01:37:59 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/modelcompare/P4Transformer_xyz_50/20261027_163517/checkpoint/best.pth>)（更新于 2026-11-02 00:47:23 +08:00）。
 
 ### PointNet xyz 多模型对比，微调 51–100 epoch
 
-恢复第 50 轮模型、AdamW 状态与指标历史，额外训练 50 轮。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.003 开始、50 轮直接余弦衰减，无 warmup。日志追加到原实验，本阶段独立统计 best，旧检查点已备份。
+PointNet 高学习率阶段已中断并完整备份，回退至恶化前的第 50 轮检查点。恢复第 50 轮模型、AdamW 状态与指标历史，额外训练 50 轮至 epoch 100。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.0003 开始，50 轮余弦衰减，无 warmup。本次调整后的阶段独立统计 best，监督指标从新阶段标记开始。异常阶段备份：/home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445/backup_before_lr0p0003_20261102_110222。 用户已主动中断本次训练，最后完整 epoch 为 70；不再续训。
 
-- 状态：排队中；阶段：waiting_priority_bbox；已完成 50/100 epoch。
+- 状态：已中断；阶段：stopped_by_user；已完成 70/100 epoch。
 - 配置：[PointNet.yaml](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/PointNet.yaml>)；状态依据：[PointNet.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/PointNet.status.json>)。
-- 队列等待进程 PID：1007657；用户：pai；进程开始：2026-10-30 10:08:31 +08:00。
-- 所属队列：[queue.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.status.json>)；启动条件：同一 GPU0 串行队列第 2/5 项；等待 P4Transformer 本阶段训练完成。
+- 最近完整 epoch：70（2026-11-02 21:20:13 +08:00）；训练 MPJPE：19.006 cm；验证 MPJPE：786.257 cm；验证 loss：7.862565276555359。
+- 已记录的最佳验证 MPJPE：115.716 cm（epoch 57）。
 - 训练日志：[log.txt](</home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445/log/log.txt>)。
 - 控制台：[console.log](</home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445/log/console.log>)。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.log>)。
-- 最近证据更新时间：2026-10-30 15:39:49 +08:00。
+- 最近证据更新时间：2026-11-02 21:35:28 +08:00。
 - 实验目录：[20261027_190445](</home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445/checkpoint/last.pth>)（更新于 2026-10-27 20:37:38 +08:00）。
-- best.pth：[best.pth](</home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445/checkpoint/best.pth>)（更新于 2026-10-27 20:24:50 +08:00）。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445/checkpoint/last.pth>)（更新于 2026-11-02 21:20:13 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/modelcompare/PointNet_xyz_50/20261027_190445/checkpoint/best.pth>)（更新于 2026-11-02 14:33:30 +08:00）。
 
 ### SetTransformer xyz 多模型对比，微调 51–100 epoch
 
-恢复第 50 轮模型、AdamW 状态与指标历史，额外训练 50 轮。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.003 开始、50 轮直接余弦衰减，无 warmup。日志追加到原实验，本阶段独立统计 best，旧检查点已备份。
+恢复第 50 轮模型、AdamW 状态与指标历史，额外训练 50 轮至 epoch 100。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.0003 开始，50 轮余弦衰减，无 warmup。本次调整后的阶段独立统计 best，监督指标从新阶段标记开始。 逐组报告接入真实时序Guard：Raw/Guard均按完整窗口末帧计分，分别记录全部/椭圆内误差和人帧数；loss与best选择保持原始Raw口径。
 
-- 状态：排队中；阶段：waiting_priority_bbox；已完成 50/100 epoch。
+- 状态：运行中；阶段：validation；已完成 90/100 epoch。
 - 配置：[SetTransformer.yaml](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/SetTransformer.yaml>)；状态依据：[SetTransformer.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/SetTransformer.status.json>)。
-- 队列等待进程 PID：1007657；用户：pai；进程开始：2026-10-30 10:08:31 +08:00。
-- 所属队列：[queue.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.status.json>)；启动条件：同一 GPU0 串行队列第 3/5 项；等待 PointNet 本阶段训练完成。
+- PID：2447746；用户：pai；进程开始：2026-11-02 21:36:55 +08:00。
+- 最近完整 epoch：90（2026-11-03 21:27:58 +08:00）；训练 MPJPE：7.773 cm；验证 MPJPE：16.339 cm；验证 loss：0.16339277272985672。
+- 已记录的最佳验证 MPJPE：16.114 cm（epoch 88）。
+- 预计训练结束：2026-11-04 03:15:13 +08:00（最近完整 epoch 耗时中位数，仅供参考，不含后续评估）。
 - 训练日志：[log.txt](</home/pai/Huawei/experiments/modelcompare/SetTransformer_xyz_50/20261028_004422/log/log.txt>)。
 - 控制台：[console.log](</home/pai/Huawei/experiments/modelcompare/SetTransformer_xyz_50/20261028_004422/log/console.log>)。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.log>)。
-- 最近证据更新时间：2026-10-30 15:39:49 +08:00。
+- 最近证据更新时间：2026-11-03 22:00:01 +08:00。
 - 实验目录：[20261028_004422](</home/pai/Huawei/experiments/modelcompare/SetTransformer_xyz_50/20261028_004422>)。
-- last.pth：[last.pth](</home/pai/Huawei/experiments/modelcompare/SetTransformer_xyz_50/20261028_004422/checkpoint/last.pth>)（更新于 2026-10-28 02:39:21 +08:00）。
-- best.pth：[best.pth](</home/pai/Huawei/experiments/modelcompare/SetTransformer_xyz_50/20261028_004422/checkpoint/best.pth>)（更新于 2026-10-28 02:39:21 +08:00）。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/modelcompare/SetTransformer_xyz_50/20261028_004422/checkpoint/last.pth>)（更新于 2026-11-03 21:27:58 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/modelcompare/SetTransformer_xyz_50/20261028_004422/checkpoint/best.pth>)（更新于 2026-11-03 20:18:53 +08:00）。
 
 ### VoxelNeXt xyz 多模型对比，微调 51–100 epoch
 
-恢复第 50 轮模型、AdamW 状态与指标历史，额外训练 50 轮。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.003 开始、50 轮直接余弦衰减，无 warmup。日志追加到原实验，本阶段独立统计 best，旧检查点已备份。
+恢复第 50 轮模型、AdamW 状态与指标历史，额外训练 50 轮至 epoch 100。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.0003 开始，50 轮余弦衰减，无 warmup。本次调整后的阶段独立统计 best，监督指标从新阶段标记开始。 逐组报告接入真实时序Guard：Raw/Guard均按完整窗口末帧计分，分别记录全部/椭圆内误差和人帧数；loss与best选择保持原始Raw口径。
 
-- 状态：排队中；阶段：waiting_priority_bbox；已完成 50/100 epoch。
+- 状态：排队中；阶段：waiting_any_gpu；已完成 50/100 epoch。
 - 配置：[VoxelNeXt.yaml](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/VoxelNeXt.yaml>)；状态依据：[VoxelNeXt.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/VoxelNeXt.status.json>)。
-- 队列等待进程 PID：1007657；用户：pai；进程开始：2026-10-30 10:08:31 +08:00。
-- 所属队列：[queue.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.status.json>)；启动条件：同一 GPU0 串行队列第 4/5 项；等待 SetTransformer 本阶段训练完成。
+- 队列等待进程 PID：2413271；用户：pai；进程开始：2026-11-02 19:39:18 +08:00。
+- 所属队列：[dispatch.status.json](</home/pai/Huawei/supervise/dispatch.status.json>)；启动条件：双卡共享队列第 2/4 项；GPU0 / GPU1 任一卡取得共享锁且连续三次空闲检查通过即可启动，无需等待另一张卡；保持原训练参数。
 - 训练日志：[log.txt](</home/pai/Huawei/experiments/modelcompare/VoxelNeXt_xyz_50/20261028_023946/log/log.txt>)。
 - 控制台：[console.log](</home/pai/Huawei/experiments/modelcompare/VoxelNeXt_xyz_50/20261028_023946/log/console.log>)。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.log>)。
-- 最近证据更新时间：2026-10-30 15:39:49 +08:00。
+- 等待日志：[dispatch.log](</home/pai/Huawei/supervise/dispatch.log>)。
+- 最近证据更新时间：2026-11-03 21:59:39 +08:00。
 - 实验目录：[20261028_023946](</home/pai/Huawei/experiments/modelcompare/VoxelNeXt_xyz_50/20261028_023946>)。
 - last.pth：[last.pth](</home/pai/Huawei/experiments/modelcompare/VoxelNeXt_xyz_50/20261028_023946/checkpoint/last.pth>)（更新于 2026-10-28 04:19:04 +08:00）。
 - best.pth：[best.pth](</home/pai/Huawei/experiments/modelcompare/VoxelNeXt_xyz_50/20261028_023946/checkpoint/best.pth>)（更新于 2026-10-28 04:19:04 +08:00）。
 
 ### ConvNeXtV2 xyz 多模型对比，从头训练 100 epoch
 
-随机初始化训练 100 轮，无初始化检查点；ConvNeXtV2 使用每块 32 帧与梯度检查点降低显存占用。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.003 开始、100 轮直接余弦衰减，无 warmup。日志追加到原实验，本阶段独立统计 best，旧检查点已备份。
+随机初始化训练 100 轮，无初始化检查点；ConvNeXtV2 使用每块 32 帧与梯度检查点降低显存占用。训练与验证均为 T=16、步长 1，累积 3 帧，batch=64；学习率从 0.003 开始、100 轮直接余弦衰减，无 warmup。日志追加到原实验，本阶段独立统计 best，旧检查点已备份。 逐组报告接入真实时序Guard：Raw/Guard均按完整窗口末帧计分，分别记录全部/椭圆内误差和人帧数；loss与best选择保持原始Raw口径。
 
-- 状态：排队中；阶段：priority_resnet3d；已完成 0/100 epoch。
+- 状态：排队中；阶段：waiting_any_gpu；已完成 0/100 epoch。
 - 配置：[ConvNeXtV2.yaml](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/ConvNeXtV2.yaml>)；状态依据：[ConvNeXtV2.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/ConvNeXtV2.status.json>)。
-- 队列等待进程 PID：1007657；用户：pai；进程开始：2026-10-30 10:08:31 +08:00。
-- 所属队列：[queue.status.json](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.status.json>)；启动条件：同一 GPU0 串行队列第 5/5 项；等待 VoxelNeXt 本阶段训练完成。
+- 队列等待进程 PID：2413271；用户：pai；进程开始：2026-11-02 19:39:18 +08:00。
+- 所属队列：[dispatch.status.json](</home/pai/Huawei/supervise/dispatch.status.json>)；启动条件：双卡共享队列第 3/4 项；GPU0 / GPU1 任一卡取得共享锁且连续三次空闲检查通过即可启动，无需等待另一张卡；保持原训练参数。
 - 训练日志：[log.txt](</home/pai/Huawei/experiments/modelcompare/ConvNeXtV2_xyz_50/20261028_041911/log/log.txt>)。
 - 控制台：[console.log](</home/pai/Huawei/experiments/modelcompare/ConvNeXtV2_xyz_50/20261028_041911/log/console.log>)。
-- 等待日志：[queue.log](</home/pai/Huawei/experiments/modelcompare/queues/resume_stride1_20261028_2125/queue.log>)。
-- 最近证据更新时间：2026-10-30 15:39:49 +08:00。
+- 等待日志：[dispatch.log](</home/pai/Huawei/supervise/dispatch.log>)。
+- 最近证据更新时间：2026-11-03 21:59:39 +08:00。
 - 实验目录：[20261028_041911](</home/pai/Huawei/experiments/modelcompare/ConvNeXtV2_xyz_50/20261028_041911>)。
+
+### FFTGen P4Transformer xyz，MOCAP-21，500点，100轮
+
+参考原始PC xyz-100配置，从头训练，改用FFTGen点云、xyz前三列、每人500点；MOCAP-21（GT按已有映射转换，模型直接输出21关节）、绝对高位雷达坐标、Positive_MPJPE；T=16、acc_frame=3、训练batch32、验证batch16、BF16、seed42。1–50轮训练/验证步长16，lr=0.001、warmup10轮后余弦；51–100轮训练/验证步长1，恢复模型/AdamW/指标历史，lr=0.003、无warmup、余弦50轮，本阶段重置best。归档训练/验证划分，FFTGen有效训练328组、验证173组；与历史PC有效窗口不同。 逐组报告接入真实时序Guard：Raw/Guard均按完整窗口末帧计分，分别记录全部/椭圆内误差和人帧数；loss与best选择保持原始Raw口径。 第1轮原batch64验证OOM后，按用户要求缩小batch并从seed42重跑；失败实验保留。 再次OOM后保留训练batch32/验证16；注意力换用PyTorch SDPA减少二次方矩阵显存，从第1轮检查点恢复模型、AdamW、调度和指标历史。原队列目录缺失，控制目录恢复到实验内部 recovery_20261102_oom。
+
+- 状态：运行中；阶段：training；已完成 87/100 epoch。
+- 配置：[phase1.yaml](</home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828/recovery_20261102_oom/phase1.yaml>)；状态依据：[status.json](</home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828/recovery_20261102_oom/status.json>)。
+- PID：2193899；用户：pai；进程开始：2026-11-02 14:46:30 +08:00。
+- 最近完整 epoch：87（2026-11-03 21:31:40 +08:00）；训练 MPJPE：7.635 cm；验证 MPJPE：14.800 cm；验证 loss：0.1479961110156113。
+- 已记录的最佳验证 MPJPE：13.545 cm（epoch 77）。
+- 预计训练结束：2026-11-04 05:56:36 +08:00（最近完整 epoch 耗时中位数，仅供参考，不含后续评估）。
+- 训练日志：[log.txt](</home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828/log/log.txt>)。
+- 控制台：[console.log](</home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828/recovery_20261102_oom/console.log>)。
+- 最近证据更新时间：2026-11-03 22:00:01 +08:00。
+- 实验目录：[20261102_140828](</home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828>)。
+- last.pth：[last.pth](</home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828/checkpoint/last.pth>)（更新于 2026-11-03 21:31:40 +08:00）。
+- best.pth：[best.pth](</home/pai/Huawei/experiments/FFTGen/P4Transformer_xyz_mocap_100/P4Transformer/20261102_140828/checkpoint/best.pth>)（更新于 2026-11-03 14:55:57 +08:00）。
 
