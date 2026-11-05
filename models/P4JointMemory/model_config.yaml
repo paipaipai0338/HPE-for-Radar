@@ -1,0 +1,6 @@
+feature_dim: 128
+hidden_dim: 64
+num_joints: 17
+heads: 4
+head_dim: 256
+reliability_gating: true

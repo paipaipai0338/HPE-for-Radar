@@ -968,6 +968,17 @@
   "person_split": {
     "subjects_before": "20261001",
     "excluded_groups": {
+      "20260708": [
+        "group_023"
+      ],
+      "20260722": [
+        "group_015",
+        "group_030",
+        "group_040"
+      ],
+      "20260912": [
+        "group_049"
+      ],
       "20260913": [
         "group_011",
         "group_012",

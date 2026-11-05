@@ -1,0 +1,25 @@
+baseline_experiment: experiments/P4Transformer/20261022_232202
+checkpoint: best.pth
+cache_dir: outputs/p4_joint_memory/cache
+output_dir: experiments/P4JointMemory
+device: cuda:1
+extraction_batch_size: 64
+num_workers: 8
+batch_size: 16
+chunk_length: 128
+epochs: 40
+learning_rate: 0.0003
+head_learning_rate: 0.00001
+weight_decay: 0.0001
+early_stopping_patience: 10
+warmup_frames: 32
+# Decoder-only occlusion augmentation; validation is never perturbed.
+point_token_dropout: 0.2
+missing_block_probability: 0.3
+missing_block_max_frames: 64
+direction_loss_weight: 0.02
+horizontal_pose_weight: 2.0
+max_frame_gap_seconds: 0.25
+track_max_center_distance: 0.5
+track_max_joint_distance: 0.4
+seed: 42
