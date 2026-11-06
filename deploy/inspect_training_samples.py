@@ -2,6 +2,7 @@
 
 python -B deploy/inspect_training_samples.py --experiment experiments/P4Transformer/20261019_161657
 可用 --dataset-cache 指定已有 train.pkl，避免重建索引；--self-test 无需 GPU。
+data.filter_unstable_windows 控制人员连续性筛选；GT结构合理性检查始终启用，旧缓存同样补筛。
 左图缩放后点击选样本，左右键逐个查看，右图拖动旋转；Sample 输入框可直接跳转。
 一个样本是一个窗口内的有效人帧；重叠窗口中的同一物理帧会分别评分。
 右侧只画该时刻的单帧点云；模型预测仍使用训练配置中的累积点云。
@@ -98,6 +99,8 @@ def load_training_dataset(experiment, cfg, cache=None):
             raise ValueError('train.pkl 的训练模式、T、累积帧数或数据源与模型配置不一致')
         if data.get('window_stride') is not None and dataset.window_stride != data['window_stride']:
             raise ValueError('train.pkl 的 window_stride 与实验配置不一致')
+        dataset.filter_unstable_windows(data.get('filter_unstable_windows', True))
+        dataset.filter_invalid_gt_windows()
         dataset.filter_prone_windows(data.get('include_prone', True))
     else:
         radar = Radar_Config()
@@ -107,7 +110,7 @@ def load_training_dataset(experiment, cfg, cache=None):
             setattr(radar, key, value)
         radar.__post_init__()
         keys = ('root_path', 'packed_data_root', 'sensor_config', 'base_source', 'T', 'acc_frame',
-                'pointcloud_source', 'include_prone', 'window_stride')
+                'pointcloud_source', 'include_prone', 'window_stride', 'filter_unstable_windows')
         with patch.object(dataset_module, 'get_meta_info', partial(get_meta_info, manifest)), \
              patch.object(dataset_module, 'load_or_build_alignment', readonly_alignment):
             dataset = dataset_module.HPE_Dataset(
@@ -178,7 +181,7 @@ def evaluate(model, dataset, indices, cfg, device, batch_size=32, workers=2):
             predictions.append(absolute_pose.cpu().numpy())
         offset += size
     if offset != len(indices) or not records:
-        raise ValueError('未完成训练集遍历或没有满足 GT 裁剪点数 >=10 的人帧')
+        raise ValueError('未完成训练集遍历或没有每帧当前 GT 裁剪点数均 >=10 的完整人窗口')
     records, predictions = np.concatenate(records), np.concatenate(predictions)
     print(f'有效人帧：{len(records):,}；MPJPE={records["mpjpe"].mean():.2f} cm；'
           f'P95={np.quantile(records["mpjpe"], .95):.2f} cm；最大={records["mpjpe"].max():.2f} cm')
@@ -367,18 +370,19 @@ def self_test():
 
     class Dataset:
         base_source, T = 'radar_high_pc', 4
-        sample_groups = ['test/group_001']
-        data_path_list = {'radar_high_pc': [[Path(f'{t}.npy') for t in range(4)]]}
+        sample_groups = ['test/group_001', 'test/group_001']
+        data_path_list = {'radar_high_pc': [[Path(f'{t}.npy') for t in range(4)]] * 2}
 
         def __len__(self):
-            return 1
+            return 2
 
         def _get_sensor_data_from_path(self, sensor, refs):
             assert sensor == 'radar_high_pc'
             return [np.array([[2., 0., 0., 0., 0., 0.]] * 2 + [[6., 0., 0., 0., 0., 0.]], 'f4') for _ in refs]
 
         def __getitem__(self, index):
-            points = [np.tile([2., 0., 0., 0., 0., 0.], (n, 1)).astype('f4') for n in (0, 9, 10, 12)]
+            counts = (0, 9, 10, 12) if index == 0 else (10, 10, 10, 12)
+            points = [np.tile([2., 0., 0., 0., 0., 0.], (n, 1)).astype('f4') for n in counts]
             points = [np.concatenate((p, np.array([[6., 0., 0., 0., 0., 0.]], 'f4'))) for p in points]
             pose = np.tile([2., 0., 0.], (1, 17, 1)).astype('f4')
             return dict(group_id=self.sample_groups[index], radar_high_pc=points, gt_for_high=[pose.copy() for _ in points],
@@ -403,8 +407,9 @@ def self_test():
                         from utils.MOCAP21 import coco_to_mocap
                         out['pose'] = coco_to_mocap(out['pose'])
                     return out
-            records, predictions = evaluate(FormatModel(), dataset, [0], cfg, torch.device('cpu'), workers=0)
-            assert records['frame'].tolist() == [2, 3]
+            records, predictions = evaluate(FormatModel(), dataset, [0, 1], cfg, torch.device('cpu'), workers=0)
+            assert records['window'].tolist() == [1] * 4
+            assert records['frame'].tolist() == [0, 1, 2, 3]
             np.testing.assert_allclose(records['mpjpe'], np.sqrt(3) * 10, atol=1e-4)
             view = Viewer(dataset, cfg, records, predictions, 'Self-test')
             view.select(1)

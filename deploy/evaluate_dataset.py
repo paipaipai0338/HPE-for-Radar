@@ -5,14 +5,13 @@ python evaluate_dataset.py --root /mnt/huawei --date 20261023 --group 033 \
 
 --checkpoint 接受 .pth 或 .onnx，自动选择 PyTorch 或 ONNX Runtime。
 --bundle evaluator.zip 打包脚本、配置和模型；ONNX 无需 PyTorch 模型源码。
-保存 predictions.npz（mocap21、米、高位机坐标，包含 raw、keeper 和状态）。
+评估仅打印结果，不创建结果目录或保存文件。
 stdout：日期\t组号\t全身误差_mm\t躯干误差_mm\t四肢误差_mm。
 """
 import argparse
 from collections import deque
 import importlib.util
 import io
-import json
 from pathlib import Path
 import pickle
 import sys
@@ -22,11 +21,6 @@ import numpy as np
 import torch
 import yaml
 
-NAMES = ('pelvis spine1 spine2 spine3 thorax neck head left_clavicle left_shoulder '
-         'left_elbow left_wrist right_clavicle right_shoulder right_elbow right_wrist '
-         'left_hip left_knee left_ankle right_hip right_knee right_ankle').split()
-EDGES = [(0,1),(1,2),(2,3),(3,4),(4,5),(5,6),(4,7),(7,8),(8,9),(9,10),
-         (4,11),(11,12),(12,13),(13,14),(0,15),(15,16),(16,17),(0,18),(18,19),(19,20)]
 PARTS = {'all': list(range(21)), 'torso': list(range(6)),
          'limbs': [8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20]}
 
@@ -51,6 +45,43 @@ def mocap(pose):
 def timestamp_ns(name):
     sec, ns = Path(name).stem.split('_')
     return int(sec)*10**9 + int(ns)
+
+
+def gt_window_reason(gt, time, gt_time, previous, max_gap_ms):
+    """MOCAP21、米；沿用训练的宽松几何门限，返回整窗重置原因。"""
+    if gt_time is None or not len(gt):
+        return 'missing_gt'
+    if np.isinf(gt).any():
+        return 'invalid_numeric'
+    valid = np.isfinite(gt).all((1, 2))
+    if not valid.any():
+        return 'missing_gt'
+    bodies = gt[valid]
+    edges = np.array([(8, 9), (9, 10), (12, 13), (13, 14),
+                      (15, 16), (16, 17), (18, 19), (19, 20),
+                      (8, 12), (15, 18), (8, 15), (12, 18)])
+    lengths = np.linalg.norm(bodies[:, edges[:, 0]] - bodies[:, edges[:, 1]], axis=-1)
+    if (lengths > np.array([.85]*8 + [.8, .7, 1., 1.])).any():
+        return 'long_bone'
+    if ((lengths[:, :8] < .05).sum(1) >= 4).any():
+        return 'collapsed_bones'
+    if previous is None:
+        return ''
+    old, old_time, old_gt_time = previous
+    dt = (gt_time - old_gt_time) * 1e-9
+    if time <= old_time or dt <= 0:
+        return 'invalid_time'
+    if max(time - old_time, gt_time - old_gt_time) > max_gap_ms * 1e6:
+        return 'time_gap'
+    n = min(len(old), len(gt))
+    common = valid[:n] & np.isfinite(old[:n]).all((1, 2))
+    root_step = np.linalg.norm(gt[:n, 0] - old[:n, 0], axis=-1)
+    joints = [8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    body_step = np.median(np.linalg.norm(gt[:n, joints] - old[:n, joints], axis=-1), axis=-1)
+    # shortcut: 几何门限不能识别缓慢串人，需要可靠身份时升级为 track ID 关联。
+    if (common & (root_step > max(.35, 4*dt)) & (body_step > max(.4, 4*dt))).any():
+        return 'pose_jump'
+    return ''
 
 
 class Frames:
@@ -129,17 +160,6 @@ KEEPER_PARAMS = {"min_dynamic": 20, "min_total": 30, "confirm_frames": 3,
                  "reversal_speed_deg_s": 360.0, "lying_reversal_deg": 90.0}
 
 
-def keeper_metric_protocol():
-    return dict(enabled=True, name='keeper_with_lying_head_lock', params=KEEPER_PARAMS.copy(),
-                offline_backfill=False, direction_check=False, lying_head_lock=True,
-                point_counts='unaccumulated current-frame GT crop; dynamic = TLV tag 1',
-                person_ids='GT array slots; not detector track IDs',
-                pose_format='mocap21; pelvis=0, head=6, shoulders=8/12, hips=15/18, ankles=17/20',
-                description='点数不足或缺 raw 持续保持；方向反转三帧稳定确认，不回填；'
-                            '首次接受躺姿锁定头脚轴，躺姿反向>90度拒绝；'
-                            '连续三帧站/坐蹲且相邻头脚轴≤30度，经采纳后解锁。')
-
-
 def vector_angle(a, b):
     norm = np.linalg.norm(a) * np.linalg.norm(b)
     return float(np.degrees(np.arccos(np.clip(np.dot(a, b) / norm, -1, 1)))) if norm > 1e-10 else 180.
@@ -215,6 +235,8 @@ def keeper_pose_records(records, rotation, translation):
         raise ValueError('Keeper 需要有效的高位到低位标定 R(3,3)、t(3,)')
     states = {}
     for index, record in enumerate(records):
+        if record.get('window_reset'):
+            states.clear()
         time = timestamp_ns(record['path'])
         raws = dict(zip(record['pose_indices'], record['poses_raw']))
         output, statuses, snapshots = {}, {}, {}
@@ -525,43 +547,8 @@ def summarize(records, rotation, translation):
                for key, value in zip(PARTS, sums)}, 'evaluated_person_frames': count}
 
 
-def save_results(output, records, metrics, metadata, max_people):
-    shape = (len(records), max_people)
-    poses = {key: np.full((*shape, 21, 3), np.nan, np.float32) for key in ('raw', 'keeper', 'gt')}
-    status = np.full(shape, 'absent', dtype='<U10')
-    eligible = np.zeros(shape, bool)
-    dynamic, total = np.zeros(shape, int), np.zeros(shape, int)
-    for f, record in enumerate(records):
-        poses['gt'][f, :len(record['gt'])] = record['gt']
-        for ids, key, source in ((record['pose_indices'], 'raw', 'poses_raw'),
-                                  (record['pose_track_ids'], 'keeper', 'poses')):
-            poses[key][f, ids] = record[source]
-        for person, value in record['pose_status'].items():
-            status[f, person] = value
-            dynamic[f, person] = record['dynamic_point_counts'][person]
-            total[f, person] = record['total_point_counts'][person]
-        eligible[f, record['pose_track_ids']] = record['metric_valid']
-    offsets = np.cumsum([0]+[len(r['points']) for r in records])
-    metadata.update(joint_names=NAMES, edges=EDGES, parts=PARTS, unit='m', coordinate='radar_high',
-                    metric='error', prediction_stage='keeper_last',
-                    person_ids='GT array slots; not detector track IDs', keeper=keeper_metric_protocol())
-    np.savez_compressed(output/'predictions.npz', **poses, status=status, metric_valid=eligible,
-                        dynamic_counts=dynamic, total_counts=total, points_offsets=offsets,
-                        points=np.concatenate([r['points'] for r in records]),
-                        frame_names=np.array([Path(r['path']).name for r in records]),
-                        gt_names=np.array([r['gt_name'] for r in records]),
-                        frame_reason=np.array([r['reason'] for r in records]),
-                        high_to_low_R=metadata['rotation'], high_to_low_t=metadata['translation'],
-                        metadata=json.dumps(metadata, ensure_ascii=False))
-    values = ['N/A' if metrics[k+'_mm'] is None else f"{metrics[k+'_mm']:.3f}" for k in PARTS]
-    return '\t'.join([metadata['date'], metadata['group'], *values])
-
-
 @torch.inference_mode()
 def evaluate(args):
-    output = args.output or Path('results')/f'{args.date}_{args.group}'
-    if output.exists():
-        raise FileExistsError(f'结果目录已存在：{output}')
     config = yaml.safe_load(args.config.read_text())
     data, task = config['data'], config['task']
     precision = task.get('precision', 'FP32')
@@ -610,6 +597,7 @@ def evaluate(args):
         spectra = Spectra(radar, data, args.device)
     window, history = deque(maxlen=T), deque(maxlen=data.get('acc_frame', 0)+1)
     records = []
+    previous_gt = None
     for index, name in enumerate(frames.names[:args.max_frames or None]):
         time = timestamp_ns(name)
         record = dict(path=name, gt_name='', reason='', points=np.empty((0, 6), np.float32),
@@ -635,6 +623,21 @@ def evaluate(args):
         valid_gt = np.isfinite(gt).all((1, 2))
         people = np.flatnonzero(valid_gt)
         record.update(gt=mocap(gt), track_ids=people)
+        gt_time = timestamp_ns(record['gt_name']) if record['gt_name'] else None
+        check_reason = gt_window_reason(record['gt'], time, gt_time, previous_gt, args.max_gap_ms)
+        record['gt_check_reason'] = check_reason
+        record['window_reset'] = bool(check_reason)
+        if check_reason:
+            window.clear()
+            history.clear()
+            if spectra is not None:
+                spectra.history.clear()
+            record['reason'] = check_reason
+        if check_reason in ('missing_gt', 'invalid_numeric', 'long_bone', 'collapsed_bones'):
+            record['track_ids'] = np.empty(0, int)
+            previous_gt = None
+            continue
+        previous_gt = (record['gt'], time, gt_time)
         points = record['points']
         model_points, model_gt = points.copy(), gt.copy()
         if coordinate == 'low':
@@ -642,7 +645,7 @@ def evaluate(args):
             model_gt = gt @ rotation.T + translation
         history.append(model_points)
         accumulated = np.concatenate(history)
-        inputs, masks, centers, boxes = [], [], [], []
+        inputs, masks, centers, boxes, current_valid_people = [], [], [], [], []
         for person in range(len(gt)):
             box = np.r_[model_gt[person].min(0)-.3, model_gt[person].max(0)+.3]
             boxes.append(box)
@@ -650,13 +653,18 @@ def evaluate(args):
             selected = points[((points[:, :3] >= high_box[:3]) & (points[:, :3] <= high_box[3:])).all(1)]
             record['dynamic_point_counts'][person] = int(np.isclose(selected[:, -1], 1).sum())
             record['total_point_counts'][person] = len(selected)
+            current_crop = model_points[((model_points[:, :3] >= box[:3]) &
+                                         (model_points[:, :3] <= box[3:])).all(1)]
+            if valid_gt[person] and len(current_crop) >= 10:
+                current_valid_people.append(person)
             cropped = accumulated[((accumulated[:, :3] >= box[:3]) & (accumulated[:, :3] <= box[3:])).all(1)]
             sample, mask, center = sample_points(cropped, data.get('person_max_points', 200),
                                                   task.get('center_on_pointcloud', False), task.get('center_xy_in_low', False))
             inputs.append(sample)
             masks.append(mask)
             centers.append(center)
-        frame = dict(people=people, inputs=inputs, masks=masks, centers=centers, boxes=boxes, spectra=None)
+        frame = dict(people=current_valid_people if mode == 'pc' else people,
+                     inputs=inputs, masks=masks, centers=centers, boxes=boxes, spectra=None)
         if mode == 'bin':
             cube = decode_bin(frames.read(name), radar)
             frame['spectra'] = spectra(cube)
@@ -664,7 +672,7 @@ def evaluate(args):
         common = sorted(set.intersection(*(set(f['people']) for f in window)))
         ready = len(window) == T and (mode == 'pc' or all(f['spectra'] is not None for f in window))
         if not ready or not common:
-            record['reason'] = 'warmup' if not ready else 'no_continuous_gt'
+            record['reason'] = record['reason'] or ('warmup' if not ready else 'no_continuous_gt')
             continue
         ids = np.asarray([p for p in common
                           if record['dynamic_point_counts'][p] >= KEEPER_PARAMS['min_dynamic']
@@ -700,13 +708,8 @@ def evaluate(args):
             print(f'{index+1}/{len(frames.names)}', file=sys.stderr)
     keeper_pose_records(records, rotation, translation)
     metrics = summarize(records, rotation, translation)
-    output.mkdir(parents=True, exist_ok=False)
-    row = save_results(output, records, metrics,
-                       dict(date=args.date, group=args.group, input_format=mode,
-                            config=config, checkpoint=str(args.checkpoint), max_sync_ms=args.max_sync_ms,
-                            inference_precision=precision if is_pth else 'ONNX graph',
-                            rotation=rotation.tolist(), translation=translation.tolist()), max_people)
-    print(row)
+    values = ['N/A' if metrics[k+'_mm'] is None else f"{metrics[k+'_mm']:.3f}" for k in PARTS]
+    print('\t'.join([args.date, args.group, *values]))
 
 
 def main():
@@ -721,8 +724,8 @@ def main():
     parser.add_argument('--pc-directory', help='组目录内的点云子目录；BIN 模式用它判断质量')
     parser.add_argument('--device', default='cuda:0' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--max-sync-ms', type=float, default=100., help='GT/质量点云与输入帧最大同步偏差')
+    parser.add_argument('--max-gap-ms', type=float, default=500., help='输入帧或 GT 相邻时间间隔上限；超限重置窗口')
     parser.add_argument('--max-frames', type=int, default=0, help='只跑前 N 帧用于检查；0 为整组')
-    parser.add_argument('--output', type=Path, help='新建结果目录，已存在则拒绝覆盖')
     parser.add_argument('--bundle', type=Path, help='只打包可传递 ZIP，无需数据集')
     args = parser.parse_args()
     if not args.checkpoint or not args.config:
@@ -742,8 +745,8 @@ def main():
     args.group = f'group_{int(number):03d}'
     if args.max_sync_ms <= 0 or not np.isfinite(args.max_sync_ms) or args.max_frames < 0:
         parser.error('--max-sync-ms 必须为有限正数，--max-frames 不能为负数')
-    if args.output and args.output.exists():
-        parser.error(f'结果目录已存在：{args.output}')
+    if args.max_gap_ms <= 0 or not np.isfinite(args.max_gap_ms):
+        parser.error('--max-gap-ms 必须为有限正数')
     torch.set_num_threads(4)
     evaluate(args)
 

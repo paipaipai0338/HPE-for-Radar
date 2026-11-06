@@ -31,6 +31,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(refresh.task_status({'status': 'complete', 'pid': 20}, task, procs), ('已完成', None))
         self.assertEqual(refresh.task_status({'status': 'failed'}, task, procs), ('已失败', None))
         self.assertEqual(refresh.task_status({'status': 'cancelled'}, task, procs), ('已中断', None))
+        self.assertEqual(refresh.task_status({'status': 'superseded'}, task, procs), ('已由后续任务接替', None))
         procs[20]['args'] = 'python unrelated.py'
         self.assertIn('待核实', refresh.task_status({'status': 'running', 'pid': 20}, task, procs)[0])
 

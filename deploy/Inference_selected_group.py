@@ -49,8 +49,8 @@ from run.utils.direction_keeper import DirectionKeeper
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT_PATH = Path("/mnt/huawei")
 PACKED_DATA_ROOT = Path(os.environ.get("INFERENCE_PACKED_DATA_ROOT", "/mnt/ssd/Huawei"))
-DATE = os.environ.get("INFERENCE_DATE", "20261022")
-GROUP = os.environ.get("INFERENCE_GROUP", "group_015")
+DATE = os.environ.get("INFERENCE_DATE", "20261023")
+GROUP = os.environ.get("INFERENCE_GROUP", "group_030")
 VISUALIZE = True   # False 自动跑完整组并输出 MPJPE； True WebAgg 逐帧交互。
 MODEL_POSE_PATH = PROJECT_ROOT / "experiments/P4Transformer/20261019_161657"
 TRAIN_CONFIG_PATH = Path(os.environ.get("INFERENCE_TRAIN_CONFIG", str(MODEL_POSE_PATH / "config" / "config.yaml")))
@@ -629,6 +629,7 @@ class SelectedGroupVisualizer:
             points, _ = load_point_cloud(record["path"])
             point_sequences.append(points)
             gt_sequences.append(self.load_gt(record)[0])
+        current_counts = [len(points) for points in point_sequences]
         point_sequences = HPE_Dataset._accumulate_pointcloud_sequence(
             point_sequences, 0, training_data.get("acc_frame", 0)
         )
@@ -638,6 +639,7 @@ class SelectedGroupVisualizer:
             window = self.records[start:start + T]
             samples = collate_fn(
                 [{"radar_high_pc": point_sequences[start:start + T],
+                  "radar_high_pc_current_count": current_counts[start:start + T],
                   "gt_for_high": gt_sequences[start:start + T]}],
                 max_people=training_data["max_people"],
             )
@@ -647,7 +649,7 @@ class SelectedGroupVisualizer:
             samples = adapt_coordinate_frame(samples, training_task, training_data, 'val')
             model_input, gt_data, valid_instances, cropped_points, cropped_mask, pointcloud_center = prepare_person_pointcloud(
                 samples, training_task, training_data, self.device, 'val')
-            # 缺 GT 或裁剪不足 10 点均打断窗口，不能拆成短片段推理。
+            # 缺 GT 或当前人帧裁剪不足 10 点均打断窗口，不能靠历史点补足。
             complete = model_input["mask"].any(dim=-1).all(dim=-1)
             valid_people = valid_instances[0].clone()
             valid_people[valid_instances[0]] = complete

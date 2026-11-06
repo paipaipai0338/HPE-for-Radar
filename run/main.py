@@ -135,8 +135,8 @@ def main():
 
         # 获取dataloader
         dataset = {
-            'train': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='train', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), window_stride=cfg['data'].get('window_stride'), train_groups=cfg['data'].get('train_groups'), tracking_bbox_cache_dir=(cfg['data'].get('augmentation', {}).get('bbox_jitter', {}).get('tracking_cache_dir') if cfg['data'].get('augmentation', {}).get('bbox_jitter', {}).get('enabled_train', False) else None)),
-            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), window_stride=cfg['data'].get('window_stride')),
+            'train': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='train', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), filter_unstable_windows=cfg['data'].get('filter_unstable_windows', True), window_stride=cfg['data'].get('window_stride'), train_groups=cfg['data'].get('train_groups'), tracking_bbox_cache_dir=(cfg['data'].get('augmentation', {}).get('bbox_jitter', {}).get('tracking_cache_dir') if cfg['data'].get('augmentation', {}).get('bbox_jitter', {}).get('enabled_train', False) else None)),
+            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), filter_unstable_windows=cfg['data'].get('filter_unstable_windows', True), window_stride=cfg['data'].get('window_stride')),
         }
         for split in ('train', 'val'):
             if len(dataset[split]) == 0:
@@ -262,9 +262,21 @@ def main():
         write_log(log_path, f"Pose format: {pose_format}, joints={num_joints}")
         if 'pc' in cfg['task']['input']:
             write_log(log_path, 'Train/val policy: no ellipse restriction; '
-                      'accumulated GT-crop points >= 10 before sampling; continuous valid frames only')
+                      'current-frame person-crop points >= 10 before sampling; accumulated input; drop entire person window if any frame is invalid')
         write_log(log_path, f"Best metric: {best_metric_name}: {best_metric}")
         write_log(log_path, f"Batches per epoch: train={len(dataloader['train'])}, val={len(dataloader['val'])}")
+        write_log(log_path, f"GT continuity filter: {cfg['data'].get('filter_unstable_windows', True)}")
+        write_log(log_path, 'GT quality filter: enabled for train/val; limb >0.85m, shoulders >0.8m, '
+                  'hips >0.7m, torso >1m, >=4 limb bones <0.05m, or Inf; drop whole sample window')
+        for split, samples in dataset.items():
+            quality = getattr(samples, 'gt_quality_window_stats', None)
+            if quality is not None:
+                write_log(log_path, f"GT quality {split}: removed={quality['windows_removed']}/"
+                          f"{quality['windows_before']}, kept={quality['windows_kept']}, reasons={quality['reasons']}")
+            stats = getattr(samples, 'unstable_window_stats', None)
+            if stats is not None:
+                write_log(log_path, f"GT continuity {split}: removed={stats['windows_removed']}/"
+                          f"{stats['windows_before']}, kept={stats['windows_kept']}, reasons={stats['reasons']}")
         if dense_window_start_epoch is not None:
             write_log(log_path, f'Train window stride: {max(1, dataset["train"].T // 2)} before epoch '
                       f'{dense_window_start_epoch}, then 1; val={dataset["val"].window_stride}')
@@ -354,7 +366,7 @@ def main():
 
         # 获取dataloader
         dataset = {
-            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), window_stride=cfg['data'].get('window_stride')),
+            'val': HPE_Dataset(root_path=cfg['data']['root_path'], sensor_config=cfg['data']['sensor_config'], mode='val', base_source=cfg['data']['base_source'], T=cfg['data']['T'], acc_frame=cfg['data']['acc_frame'], preload_cache=cfg['data']['preload_cache'], enable_action=cfg['data']['enable_action'], radar_config=radar_config, packed_data_root=cfg['data']['packed_data_root'], pointcloud_source=cfg['data'].get('pointcloud_source', 'files'), include_kxyz=cfg['data'].get('include_kxyz', False), include_prone=cfg['data'].get('include_prone', True), filter_unstable_windows=cfg['data'].get('filter_unstable_windows', True), window_stride=cfg['data'].get('window_stride')),
         }
         collate_fn = partial(dataset_collate_fn, max_people=cfg['data']['max_people'])
         dataloader = {

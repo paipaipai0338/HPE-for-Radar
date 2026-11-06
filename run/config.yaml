@@ -29,6 +29,7 @@ data:
     enable_action: false
     # 是否保留俯卧：false 按 GT 骨架剔除含俯卧的完整窗口（含输入历史），train/val 均生效
     include_prone: false
+    filter_unstable_windows: true  # 原始 GT 串人/大跳变窗口剔除，稳定窗口继续保留
     augmentation:
         radar_rotation:
             enabled_train: true

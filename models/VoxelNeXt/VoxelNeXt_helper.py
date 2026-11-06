@@ -430,6 +430,15 @@ class DynamicMeanVoxelizer(nn.Module):
         }
 
 
+class SparseBatchNorm1d(nn.BatchNorm1d):
+    def forward(self, features):
+        # A cropped frame can leave one voxel; use saved statistics without dropping its gradient.
+        if self.training and features.ndim == 2 and features.shape[0] == 1 and self.track_running_stats:
+            return F.batch_norm(features, self.running_mean, self.running_var,
+                                self.weight, self.bias, training=False, eps=self.eps)
+        return super().forward(features)
+
+
 def post_act_block(in_channels, out_channels, kernel_size, indice_key=None, stride=1, padding=0, conv_type="subm", norm_fn=None):
     if conv_type == "subm":
         conv = spconv.SubMConv3d(
@@ -495,7 +504,7 @@ class VoxelResBackBone8xVoxelNeXt(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
+        norm_fn = partial(SparseBatchNorm1d, eps=1e-3, momentum=0.01)
         spconv_kernel_sizes = [int(value) for value in spconv_kernel_sizes]
         channels = [int(value) for value in channels]
         out_channel = int(out_channel)
@@ -562,7 +571,7 @@ class VoxelResBackBone8xVoxelNeXt(nn.Module):
                 out_channel, out_channel, 3, stride=1, padding=1,
                 bias=True, algo=SPCONV_ALGO,
             ),
-            nn.BatchNorm1d(out_channel),
+            SparseBatchNorm1d(out_channel),
             nn.ReLU(True),
         )
         self.num_point_features = out_channel
@@ -652,7 +661,7 @@ class SeparateHead(nn.Module):
                             padding=kernel_size // 2, bias=use_bias,
                             indice_key=cur_name, algo=SPCONV_ALGO,
                         ),
-                        nn.BatchNorm1d(input_channels),
+                        SparseBatchNorm1d(input_channels),
                         nn.ReLU(),
                     )
                 )
@@ -828,7 +837,7 @@ class VoxelNeXtHead(nn.Module):
                     indice_key="head_input_projection",
                     algo=SPCONV_ALGO,
                 ),
-                nn.BatchNorm1d(shared_channels),
+                SparseBatchNorm1d(shared_channels),
                 nn.ReLU(),
             )
 

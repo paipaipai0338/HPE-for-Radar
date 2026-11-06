@@ -40,6 +40,8 @@ tail -n 10 /home/pai/Huawei/supervise/monitor.log
 
 2026-11-02 起，当前待启动的 SetTransformer、VoxelNeXt、ConvNeXtV2、P4Transformer xyzv 由独立的 `dispatch.py` 按此顺序分配到 GPU0 / GPU1，任一卡空闲即可启动下一项；每张卡最多一个本队列任务。启动前取得原共享锁，并每隔 30 秒检查整卡无计算进程、显存 <512 MiB、利用率 <5%，连续三次通过后启动。正在运行的 PointNet 和 FFTGen 继续原训练。队列状态与日志为 `dispatch.status.json` / `dispatch.log`；失败任务不自动重试。监控读取任务状态中的实际 GPU，排队时显示两卡候选。
 
+2026-11-04 修复重试队列使用 `dispatch.py --retry`，状态与日志为 `retry.status.json` / `retry.log`。它读取登记到该队列的任务，依次运行 VoxelNeXt 和 xyzv，与原调度器共用每张 GPU 的锁；当前 ConvNeXtV2 和 FFTGen 继续训练。失败日志与检查点备份于 `backups/retry_20261104/`，重试源码和控制文件存入独立目录。旧 ConvNeXtV2 OOM 标记为 `superseded`（已由后续任务接替），不重复训练。
+
 运行检查：
 
 ```bash

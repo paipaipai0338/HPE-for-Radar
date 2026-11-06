@@ -1,4 +1,5 @@
-"""Run the four pending experiments on whichever GPU becomes idle first."""
+"""Run registered queued experiments on whichever GPU becomes idle first."""
+import argparse
 import csv
 import fcntl
 import hashlib
@@ -14,6 +15,7 @@ from refresh import HERE, ROOT, atomic_write, stamp
 
 GPU_LOCKS = (ROOT / 'codex/model_compare_xyz50/gpu0_wait.lock', ROOT / 'codex/gpu1_wait.lock')
 QUEUE = HERE / 'dispatch.status.json'
+LOCK = HERE / 'dispatch.lock'
 
 
 def state(path, **values):
@@ -71,7 +73,7 @@ def pending_tasks():
     tasks = json.loads((HERE / 'tasks.json').read_text())
     pending = []
     for task in tasks:
-        if task.get('queue_state') != 'supervise/dispatch.status.json':
+        if task.get('queue_state') != str(QUEUE.relative_to(ROOT)):
             continue
         current = json.loads((ROOT / task['state']).read_text())
         if current['status'] in ('complete', 'completed', 'failed'):
@@ -90,7 +92,7 @@ def pending_tasks():
 
 
 def main():
-    with (HERE / 'dispatch.lock').open('a+') as controller:
+    with LOCK.open('a+') as controller:
         fcntl.flock(controller, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             pending = pending_tasks()
@@ -135,4 +137,10 @@ def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--retry', action='store_true', help='Run repaired tasks alongside the existing dispatcher')
+    args = parser.parse_args()
+    if args.retry:
+        QUEUE = HERE / 'retry.status.json'
+        LOCK = HERE / 'retry.lock'
     main()

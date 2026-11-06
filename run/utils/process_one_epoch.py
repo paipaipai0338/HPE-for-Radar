@@ -207,9 +207,18 @@ def jitter_bbox_mask(xyz, bounds, valid_mask, original_mask, config, tracking_ma
 
 @torch.no_grad()
 def prepare_person_pointcloud(samples, cfg_task, cfg_data, device, stage):
-    """训练、验证和导出共用裁剪、中心化、采样与逐点丢弃。"""
+    """每帧当前人裁剪均至少10点才保留人窗口；模型输入仍使用累积点云。"""
     cloud, target = samples[cfg_task['input']], samples[cfg_task['output']]
     points, point_mask = cloud['padded'].to(device), cloud['mask'].to(device)
+    current_mask = cloud.get('current_mask')
+    if current_mask is None:
+        if cfg_data.get('acc_frame', 0):
+            raise ValueError('累积点云缺少 current_mask；请从 Dataset/当前帧元数据重新组批')
+        current_mask = point_mask
+    else:
+        current_mask = current_mask.to(device)
+        if current_mask.dtype != torch.bool or current_mask.shape != point_mask.shape:
+            raise ValueError('current_mask 必须是与点云 mask 同形的布尔张量')
     pose, person_mask, bbox = (target[key].to(device) for key in ('padded', 'mask', 'bbox'))
     bounds = bbox.permute(0, 2, 1, 3)
     xyz = points[:, None, ..., :3]
@@ -223,7 +232,8 @@ def prepare_person_pointcloud(samples, cfg_task, cfg_data, device, stage):
         if tracking_mask is not None:
             tracking_mask = tracking_mask.to(device)
         cropped_mask = jitter_bbox_mask(xyz, bounds, valid_mask, cropped_mask, jitter, tracking_mask)
-    person_mask = person_mask & (cropped_mask.sum(-1).permute(0, 2, 1) >= 10)
+    current_counts = (cropped_mask & current_mask[:, None]).sum(-1).permute(0, 2, 1)
+    person_mask = person_mask & (current_counts >= 10)
     cropped_mask &= person_mask.permute(0, 2, 1)[..., None]
     valid_instance_mask = cropped_mask.any(dim=(2, 3))
     cropped_points = points[:, None].expand(-1, person_mask.shape[2], -1, -1, -1)
@@ -249,6 +259,14 @@ def prepare_person_pointcloud(samples, cfg_task, cfg_data, device, stage):
         retained = sampled_mask.any(dim=(1, 2))
         sampled, sampled_mask = sampled[retained], sampled_mask[retained]
         valid_instance_mask &= frame_mask.any(-1)
+    # 与单组推理一致：任一帧无效就丢弃该人的整个窗口。
+    complete = person_mask.all(dim=1)
+    retained = complete[valid_instance_mask]
+    sampled, sampled_mask = sampled[retained], sampled_mask[retained]
+    valid_instance_mask &= complete
+    person_mask &= complete[:, None]
+    cropped_mask &= complete[:, :, None, None]
+    cropped_points = cropped_points.masked_fill(~cropped_mask[..., None], 0.)
     pose = pose.masked_fill(~person_mask[..., None, None], 0.)
     gt = {'padded': pose, 'mask': person_mask,
           'bbox': get_gt_boxes(pose, person_mask, threshold=0.3).masked_fill(~person_mask[..., None], 0.)}
@@ -257,37 +275,13 @@ def prepare_person_pointcloud(samples, cfg_task, cfg_data, device, stage):
 
 
 def predict_valid_person_frames(model, model_input):
-    """仅前向连续有效帧，保留训练梯度，不跨越无效帧拼接时序。"""
+    """仅推理完整有效的人窗口；预处理负责丢弃不完整窗口。"""
     valid = model_input['mask'].any(-1)
     if not valid.any():
         raise ValueError('没有可推理的有效人帧')
-    full = valid.all(-1)
-    prediction = None
-    regularization = []
-
-    def infer(indices, begin, end):
-        nonlocal prediction
-        inputs = {key: model_input[key][indices, begin:end].contiguous()
-                  for key in ('input', 'mask')}
-        output = model(inputs)
-        pose = output['pose']
-        if 'transform_regularization' in output:
-            regularization.append(output['transform_regularization'] * pose.shape[0] * pose.shape[1])
-        if prediction is None:
-            prediction = pose.new_zeros(*valid.shape, *pose.shape[2:])
-        prediction[indices, begin:end] = pose
-
-    if full.any():
-        infer(full, 0, valid.shape[1])
-    for index in (~full).nonzero().flatten().tolist():
-        flags = torch.cat((valid.new_zeros(1), valid[index], valid.new_zeros(1))).int()
-        changes = (flags[1:] - flags[:-1]).nonzero().flatten().tolist()
-        for begin, end in zip(changes[::2], changes[1::2]):
-            infer(slice(index, index + 1), begin, end)
-    output = {'pose': prediction}
-    if regularization:
-        output['transform_regularization'] = torch.stack(regularization).sum() / valid.sum()
-    return output
+    if not valid.all():
+        raise ValueError('人窗口包含无效帧；必须先丢弃整个窗口，不能切段推理')
+    return model(model_input)
 
 
 def get_autocast_dtype(precision):

@@ -59,6 +59,8 @@ def task_status(state, task, procs, queue=None):
     status = state.get('status')
     if status == 'cancelled':
         return '已中断', None
+    if status == 'superseded':
+        return '已由后续任务接替', None
     if status in ('complete', 'completed', 'failed'):
         return ('已失败' if status == 'failed' else '已完成'), None
     if status == 'queued' and queue is not None:

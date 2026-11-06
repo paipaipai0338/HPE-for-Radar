@@ -68,6 +68,8 @@ def _collate_base(batch, max_points=None, max_people=4):
     B = len(batch)
     collated = {}
     for key in batch[0]:
+        if key.endswith('_current_count'):
+            continue
         T = len(batch[0][key])
         for sample_idx, sample in enumerate(batch):
             if len(sample[key]) != T:
@@ -90,9 +92,19 @@ def _collate_base(batch, max_points=None, max_people=4):
             B, T, max_var, *fixed_dims, dtype=torch.float32
         )
         mask = torch.zeros(B, T, max_var, dtype=torch.bool)
+        count_key = key + '_current_count'
+        has_current = count_key in batch[0]
+        current_mask = torch.zeros_like(mask) if has_current else None
 
         for batch_idx, sample in enumerate(batch):
+            if has_current and len(sample[count_key]) != T:
+                raise ValueError(f'{count_key} 与点云时间长度不一致')
             for time_idx, arr in enumerate(sample[key]):
+                if has_current:
+                    count = sample[count_key][time_idx]
+                    if (isinstance(count, bool) or not isinstance(count, (int, np.integer))
+                            or not 0 <= count <= (len(arr) if arr is not None else 0)):
+                        raise ValueError(f'{count_key} 必须为当前原始点数且不超过累积点数')
                 if arr is None:
                     continue
                 tensor = torch.as_tensor(arr, dtype=torch.float32)
@@ -110,17 +122,25 @@ def _collate_base(batch, max_points=None, max_people=4):
                     )
 
                 original_n = tensor.shape[0]
+                if has_current:
+                    current = torch.arange(original_n) >= original_n - count
                 valid_n = min(original_n, max_var)
                 if original_n > max_var:
                     if random_sample:
                         indices = torch.randperm(original_n)[:max_var]
                         tensor = tensor[indices]
+                        if has_current:
+                            current = current[indices]
                     else:
                         tensor = tensor[:max_var]
                 padded[batch_idx, time_idx, :valid_n] = tensor[:valid_n]
                 mask[batch_idx, time_idx, :valid_n] = True
+                if has_current:
+                    current_mask[batch_idx, time_idx, :valid_n] = current[:valid_n]
 
         collated[key] = {'padded': padded, 'mask': mask}
+        if has_current:
+            collated[key]['current_mask'] = current_mask
 
     return collated
 
@@ -138,6 +158,7 @@ def collate_fn(
         radar_low_pc / radar_high_pc:
             padded: [B, T, max_points, 6]
             mask:   [B, T, max_points]
+            current_mask: 同形布尔张量，标记累积输入中属于当前帧的点
 
         gt / gt_for_high / gt_for_low:
             padded: [B, T, max_people, 17, 3]
@@ -304,6 +325,7 @@ class HPE_Dataset(Dataset):
         include_prone: bool = True,
         tracking_bbox_cache_dir: Optional[Union[str, Path]] = None,
         bad_pc_frames_path: Optional[Union[str, Path]] = DEFAULT_BAD_PC_FRAMES_PATH,
+        filter_unstable_windows: bool = True,
     ):
         super(HPE_Dataset, self).__init__()
         assert mode in ['train', 'val'], 'mode disnmatched'
@@ -314,6 +336,8 @@ class HPE_Dataset(Dataset):
             )
         if not isinstance(include_prone, bool):
             raise TypeError('include_prone 必须为 bool')
+        if not isinstance(filter_unstable_windows, bool):
+            raise TypeError('filter_unstable_windows 必须为 bool')
         self.include_prone = include_prone
         if isinstance(acc_frame, bool) or not isinstance(acc_frame, int) or acc_frame < 0:
             raise ValueError("acc_frame 必须为非负整数")
@@ -510,10 +534,224 @@ class HPE_Dataset(Dataset):
             print(f"跳过损坏样本窗口数: {self.skip_bad_samples}")
             print(f"损坏文件数: {len(self.bad_files)}")
 
+        self.filter_unstable_windows(filter_unstable_windows)
+        self.filter_invalid_gt_windows()
         self.filter_prone_windows(include_prone)
 
         if self.preload_cache:
             self.preload_data_cache()
+
+    @staticmethod
+    def _gt_transition_flags(poses, gt_times, frame_times):
+        """原始槽位检查；flags[i] 表示 i-1 到 i 的异常边，不改人员身份。"""
+        normalized = []
+        for pose in poses:
+            pose = np.asarray(pose, dtype=np.float64)
+            if pose.size == 0:
+                pose = np.empty((0, 17, 3))
+            elif pose.ndim == 2:
+                pose = pose[None]
+            if pose.ndim != 3 or pose.shape[1:] != (17, 3):
+                raise ValueError(f'人员连续性检查要求 GT 为 [N,17,3]，实际为 {pose.shape}')
+            normalized.append(pose)
+        n = len(normalized)
+        if len(gt_times) != n or len(frame_times) != n:
+            raise ValueError('人员连续性检查的 GT 与时间戳数量不一致')
+        flags = {key: np.zeros(n, dtype=bool)
+                 for key in ('identity_change', 'pose_jump', 'invalid_time')}
+        if n < 2:
+            return flags
+        people = max(1, max(map(len, normalized)))
+        padded = np.full((n, people, 17, 3), np.nan)
+        for i, pose in enumerate(normalized):
+            padded[i, :len(pose)] = pose
+        valid = np.isfinite(padded).all(axis=(2, 3))
+        padded[~valid] = np.nan
+        # 删除无效行后，同一压紧位置必须仍对应同一原始人员；尾部增减不串人。
+        ids = np.sort(np.where(valid, np.arange(people), people), axis=1)
+        common = (ids[:-1] < people) & (ids[1:] < people)
+        flags['identity_change'][1:] = (common & (ids[:-1] != ids[1:])).any(axis=1)
+        dt = np.diff(np.asarray(gt_times, dtype=np.int64)) / 1e9
+        invalid_time = (dt <= 0) | (np.diff(np.asarray(frame_times, dtype=np.int64)) <= 0)
+        flags['invalid_time'][1:] = invalid_time
+        roots = padded[:, :, [11, 12]].mean(axis=2)
+        root_step = np.linalg.norm(roots[1:] - roots[:-1], axis=-1)
+        body_step = np.median(np.linalg.norm(padded[1:] - padded[:-1], axis=-1), axis=-1)
+        complete = valid[:-1] & valid[1:] & ~invalid_time[:, None]
+        # shortcut: 几何门限不能识别所有缓慢身份漂移，需可靠 track ID 时升级关联检查。
+        jump = (complete & (root_step > np.maximum(.35, 4 * dt)[:, None])
+                & (body_step > np.maximum(.4, 4 * dt)[:, None]))
+        flags['pose_jump'][1:] = jump.any(axis=1)
+        return flags
+
+    def filter_unstable_windows(self, enabled: bool = True) -> None:
+        """剔除跨人员异常边的完整窗口（含输入历史）；稳定窗口自然恢复。"""
+        if not isinstance(enabled, bool):
+            raise TypeError('filter_unstable_windows 必须为 bool')
+        if getattr(self, '_unstable_filter_applied', False):
+            if not enabled:
+                raise ValueError('已筛掉的不稳定窗口无法恢复，请重建 Dataset 或使用未过滤缓存')
+            return
+        if not enabled or self.T <= 1 or not self.sensor_config.get('gt'):
+            return
+        required = ('sky_start_indices', 'sky_history', 'spectra_history',
+                    'packed_bin_cache', 'packed_bin_cache_pid', 'decoded_bin_cache')
+        if any(not hasattr(self, name) for name in required):
+            raise ValueError('旧 Dataset 缓存缺少连续性检查所需字段，请重建缓存')
+        groups = {f"{entry['date']}/{group}": paths
+                  for entries in self.mode_meta_info.values() for entry in entries
+                  for group, paths in entry['group_data_path'].items()}
+        windows = {}
+        for i, group in enumerate(self.sample_groups):
+            windows.setdefault(group, []).append(i)
+        keep = np.ones(len(self), dtype=bool)
+        reasons = dict(identity_change=0, pose_jump=0, invalid_time=0)
+        excluded_groups = {}
+        examined = 0
+        history = self.sky_history + self.acc_frame if self.sky_history else self.spectra_history
+        print(f'人员连续性筛选 {self.mode}: 检查 {len(windows)} 组原始 GT...', flush=True)
+        for group, indices in windows.items():
+            refs = groups[group]['gt']
+            poses = []
+            existing_packs = set(self.packed_bin_cache)
+            try:
+                for ref in refs:
+                    if isinstance(ref, PackedFrame):
+                        poses.append(self._load_packed_frame(ref, raw_gt=True))
+                    else:
+                        with Path(ref).open('rb') as stream:
+                            poses.append(pickle.load(stream))
+                flags = self._gt_transition_flags(
+                    poses, [self._frame_timestamp_ns(ref) for ref in refs],
+                    [self._frame_timestamp_ns(ref) for ref in groups[group][self.base_source]])
+            finally:
+                for path in set(self.packed_bin_cache) - existing_packs:
+                    self.packed_bin_cache.pop(path)
+            examined += len(refs)
+            prefixes = {key: np.r_[0, np.cumsum(value)] for key, value in flags.items()}
+            for i in indices:
+                start = self.sky_start_indices[i]
+                begin = start if history else max(0, start - self.acc_frame)
+                end = start + history + self.T
+                if refs[end-self.T:end] != self.data_path_list['gt'][i]:
+                    raise ValueError(f'{group}: 连续性检查的 GT 时间索引与窗口不一致，请重建缓存')
+                bad = [key for key, prefix in prefixes.items() if prefix[end] > prefix[begin+1]]
+                if bad:
+                    keep[i] = False
+                    excluded_groups[group] = excluded_groups.get(group, 0) + 1
+                    for key in bad:
+                        reasons[key] += 1
+            del poses, flags
+        retained = np.flatnonzero(keep).tolist()
+        for paths in (self.data_path_list, self.acc_path_list):
+            for sensor in paths:
+                paths[sensor] = [paths[sensor][i] for i in retained]
+        self.sample_groups = [self.sample_groups[i] for i in retained]
+        self.sky_start_indices = [self.sky_start_indices[i] for i in retained]
+        if hasattr(self, 'window_labels'):
+            self.window_labels = [self.window_labels[i] for i in retained]
+        self.unstable_window_stats = dict(windows_before=len(keep), windows_removed=int((~keep).sum()),
+            windows_kept=len(retained), examined_gt_frames=examined,
+            reasons=reasons, excluded_groups=excluded_groups)
+        self._unstable_filter_applied = True
+        print(f'人员连续性筛选 {self.mode}: 排除 {int((~keep).sum())}/{len(keep)} 个窗口，'
+              f'保留 {len(retained)}；原因计数（可重叠）{reasons}', flush=True)
+
+    @staticmethod
+    def _gt_quality_flags(poses):
+        """COCO17、米制原始GT；只拦截明显结构损坏，不用姿态角度判错。"""
+        flags = {key: np.zeros(len(poses), dtype=bool)
+                 for key in ('long_bone', 'collapsed_bones', 'invalid_numeric')}
+        normalized = []
+        for pose in poses:
+            pose = np.asarray(pose, dtype=np.float64)
+            if pose.size == 0:
+                pose = np.empty((0, 17, 3))
+            elif pose.ndim == 2:
+                pose = pose[None]
+            if pose.ndim != 3 or pose.shape[1:] != (17, 3):
+                raise ValueError(f'GT合理性检查要求 [N,17,3]，实际为 {pose.shape}')
+            normalized.append(pose)
+        if not normalized or not any(map(len, normalized)):
+            return flags
+        frame = np.repeat(np.arange(len(poses)), [len(p) for p in normalized])
+        bodies = np.concatenate(normalized)
+        invalid = np.isinf(bodies).any(axis=(1, 2))
+        flags['invalid_numeric'][frame[invalid]] = True
+        # NaN缺人/缺关节沿用逐人整窗无效，不据此删除其他健康人员的样本。
+        bodies, frame = bodies[~invalid], frame[~invalid]
+        edges = np.array([(5, 7), (7, 9), (6, 8), (8, 10),
+                          (11, 13), (13, 15), (12, 14), (14, 16),
+                          (5, 6), (11, 12), (5, 11), (6, 12)])
+        lengths = np.linalg.norm(bodies[:, edges[:, 0]] - bodies[:, edges[:, 1]], axis=-1)
+        limits = np.array([.85] * 8 + [.8, .7, 1., 1.])
+        # shortcut: 宽松绝对门限只筛严重结构错误，整体错位/缓慢串人仍需独立核验。
+        flags['long_bone'][frame[(lengths > limits).any(axis=1)]] = True
+        flags['collapsed_bones'][frame[(lengths[:, :8] < .05).sum(axis=1) >= 4]] = True
+        return flags
+
+    def filter_invalid_gt_windows(self) -> None:
+        """任何人员GT结构异常时，剔除包含该帧（含输入历史）的整个样本窗口。"""
+        if getattr(self, '_gt_quality_filter_applied', False) or not self.sensor_config.get('gt'):
+            return
+        required = ('sky_start_indices', 'sky_history', 'spectra_history',
+                    'packed_bin_cache', 'packed_bin_cache_pid', 'decoded_bin_cache')
+        if any(not hasattr(self, name) for name in required):
+            raise ValueError('旧Dataset缓存缺少GT合理性检查所需字段，请重建缓存')
+        groups = {f"{entry['date']}/{group}": paths['gt']
+                  for entries in self.mode_meta_info.values() for entry in entries
+                  for group, paths in entry['group_data_path'].items()}
+        windows = {}
+        for i, group in enumerate(self.sample_groups):
+            windows.setdefault(group, []).append(i)
+        keep = np.ones(len(self), dtype=bool)
+        reasons = dict(long_bone=0, collapsed_bones=0, invalid_numeric=0)
+        bad_frames = dict.fromkeys(reasons, 0)
+        excluded_groups = {}
+        history = self.sky_history + self.acc_frame if self.sky_history else self.spectra_history
+        print(f'GT合理性筛选 {self.mode}: 检查 {len(windows)} 组...')
+        for group, indices in windows.items():
+            refs, poses = groups[group], []
+            existing_packs = set(self.packed_bin_cache)
+            try:
+                for ref in refs:
+                    if isinstance(ref, PackedFrame):
+                        poses.append(self._load_packed_frame(ref, raw_gt=True))
+                    else:
+                        with Path(ref).open('rb') as stream:
+                            poses.append(pickle.load(stream))
+                flags = self._gt_quality_flags(poses)
+            finally:
+                for path in set(self.packed_bin_cache) - existing_packs:
+                    self.packed_bin_cache.pop(path)
+            prefixes = {key: np.r_[0, np.cumsum(value)] for key, value in flags.items()}
+            for key, value in flags.items():
+                bad_frames[key] += int(value.sum())
+            for i in indices:
+                start = self.sky_start_indices[i]
+                begin = start if history else max(0, start - self.acc_frame)
+                end = start + history + self.T
+                if refs[end-self.T:end] != self.data_path_list['gt'][i]:
+                    raise ValueError(f'{group}: GT合理性检查时间索引不一致，请重建Dataset缓存')
+                bad = [key for key, prefix in prefixes.items() if prefix[end] > prefix[begin]]
+                if bad:
+                    keep[i] = False
+                    excluded_groups[group] = excluded_groups.get(group, 0) + 1
+                    for key in bad:
+                        reasons[key] += 1
+            del poses, flags
+        retained = np.flatnonzero(keep).tolist()
+        for paths in (self.data_path_list, self.acc_path_list):
+            for sensor in paths:
+                paths[sensor] = [paths[sensor][i] for i in retained]
+        self.sample_groups = [self.sample_groups[i] for i in retained]
+        self.sky_start_indices = [self.sky_start_indices[i] for i in retained]
+        if hasattr(self, 'window_labels'):
+            self.window_labels = [self.window_labels[i] for i in retained]
+        self.gt_quality_window_stats = dict(windows_before=len(keep), windows_removed=int((~keep).sum()),
+            windows_kept=len(retained), reasons=reasons, bad_frames=bad_frames, groups=excluded_groups)
+        self._gt_quality_filter_applied = True
+        print(f'GT合理性筛选 {self.mode}: 排除 {int((~keep).sum())}/{len(keep)} 个窗口；原因 {reasons}')
 
     @staticmethod
     def _prone_people(poses_low: np.ndarray) -> np.ndarray:
@@ -599,6 +837,7 @@ class HPE_Dataset(Dataset):
         return int(seconds)*10**9 + int(nanos)
 
     def _sky_pointcloud_sequence(self, cubes, start_index):
+        """返回累积点云及累积前逐帧点数，供当前人帧有效性检查。"""
         from preprocess.radarpreprocess_skyrelay import (
             AlgCfg, StructParam, SignalProcessConfig, StatsInfo, range_cube_to_point_cloud,
             fft1dMeanCalc, validate_range_cube,
@@ -620,7 +859,8 @@ class HPE_Dataset(Dataset):
         points = [range_cube_to_point_cloud(cube, alg_cfg=config, stats_info=state,
                   range_resolution=range_res, velocity_resolution=velocity_res)
                   for cube in cubes[self.sky_history:]]
-        return self._accumulate_pointcloud_sequence(points, self.acc_frame, self.acc_frame)
+        return (self._accumulate_pointcloud_sequence(points, self.acc_frame, self.acc_frame),
+                [len(frame) for frame in points[self.acc_frame:]])
 
     @staticmethod
     def _load_bad_frames(
@@ -940,7 +1180,10 @@ class HPE_Dataset(Dataset):
                                 and next(pc_dir.glob('*.npy'), None) is None):
                             print(f'{group_dir} 没有 FFTGen 点云，跳过')
                             continue
-                        aligned_frames = reuse_bin_alignment(group_dir, sensor_paths, config, PackedFrame)
+                        aligned_frames = reuse_bin_alignment(
+                            group_dir, sensor_paths, config, PackedFrame,
+                            bin_dir=self._sensor_path(group_dir, 'dpct高位机/Bin', 'frames.binpack'),
+                        )
                         if aligned_frames is None:
                             raise ValueError(
                                 f'{group_dir}: FFTGen 要求有效的 BIN→GT 缓存及完全一致的时间戳；'
@@ -1322,6 +1565,17 @@ class HPE_Dataset(Dataset):
                 return packed_path
         return self.root_path / relative_path
 
+    def _sensor_path(self, group_dir: Path, relative_dir: str, pack_name: Optional[str]) -> Path:
+        if self.packed_data_root is not None:
+            packed_dir = self.packed_data_root / group_dir.relative_to(self.root_path) / relative_dir
+            if pack_name is not None:
+                if (self._packed_path_exists(packed_dir / pack_name)
+                        and self._packed_path_exists(packed_dir / 'frames_index.npz')):
+                    return packed_dir
+            elif self._packed_path_exists(packed_dir, directory=True):
+                return packed_dir
+        return group_dir / relative_dir
+
     def _build_sensor_paths(self, group_dir: Path) -> Dict[str, Optional[Path]]:
         """按组、按传感器选择完整打包文件；缺失时使用原始目录。"""
         sensor_paths = {}
@@ -1337,17 +1591,7 @@ class HPE_Dataset(Dataset):
             if not self.sensor_config.get(sensor_name):
                 sensor_paths[sensor_name] = None
                 continue
-            directory = group_dir / relative_dir
-            if self.packed_data_root is not None:
-                packed_dir = (self.packed_data_root
-                              / group_dir.relative_to(self.root_path) / relative_dir)
-                if pack_name is not None:
-                    if (self._packed_path_exists(packed_dir / pack_name)
-                            and self._packed_path_exists(packed_dir / 'frames_index.npz')):
-                        directory = packed_dir
-                elif self._packed_path_exists(packed_dir, directory=True):
-                    directory = packed_dir
-            sensor_paths[sensor_name] = directory
+            sensor_paths[sensor_name] = self._sensor_path(group_dir, relative_dir, pack_name)
         return sensor_paths
 
     def _copy_cached_data(self, data: Any) -> Any:
@@ -2120,9 +2364,12 @@ class HPE_Dataset(Dataset):
                     begin = self.sky_start_indices[idx]
                     samples['bin_frame_index'] = list(range(begin, begin+len(data)))
                 if self.sky_history and sensor_name == self.base_source:
-                    samples['radar_high_pc'] = self._sky_pointcloud_sequence(data, self.sky_start_indices[idx])
+                    samples['radar_high_pc'], samples['radar_high_pc_current_count'] = (
+                        self._sky_pointcloud_sequence(data, self.sky_start_indices[idx]))
                     guard_points = samples['radar_high_pc'][-1]
                     continue
+                if sensor_name in {'radar_high_pc', 'radar_low_pc'}:
+                    samples[sensor_name + '_current_count'] = [len(frame) for frame in data]
                 if sensor_name == 'radar_high_pc':
                     guard_points = data[-1]
                 if sensor_name in self.acc_path_list and self.acc_frame:
